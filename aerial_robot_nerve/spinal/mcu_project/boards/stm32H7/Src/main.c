@@ -260,13 +260,17 @@ int main(void)
     estimator_.init(&imu_, &baro_, &gps_, &nh_);
   }
 
+  FlashMemory::read(); //IMU calib data (including IMU in neurons)
+
+  DirectServo* servoptr = nullptr;
+
+  if(servo_connect) servoptr = &servo_;
+
 #if DJI_CAN_SERVO
   dji_servo_.init(&hfdcan1, &canMsgMailHandle, &nh_, LED1_GPIO_Port, LED1_Pin);
 #endif
 
   controller_.init(&htim1, &htim4, &estimator_, NULL, servoptr, &battery_status_, &nh_, &flightControlMutexHandle);
-
-  FlashMemory::read(); //IMU calib data (including IMU in neurons)
 
 #if NERVE_COMM        
   bool nerve_connect = Spine::init(&hfdcan1, &nh_, &estimator_, &controller_, LED1_GPIO_Port, LED1_Pin);
