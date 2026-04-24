@@ -67,16 +67,16 @@ if __name__=="__main__":
                         if key == 'w':
                             # running = True
                             for i in range(2):
-                                pub.publish(ServoControlCmd(index=[0], angles=[current_pos_0 + wave_large]))
+                                pub.publish(ServoControlCmd(index=[0], cmd=[current_pos_0 + wave_large]))
                                 rospy.sleep(0.5)
-                                pub.publish(ServoControlCmd(index=[0], angles=[current_pos_0 - wave_large]))
+                                pub.publish(ServoControlCmd(index=[0], cmd=[current_pos_0 - wave_large]))
                                 rospy.sleep(0.5)  # Sleep for 1 second between iterations
-                            pub.publish(ServoControlCmd(index=[0], angles=[current_pos_0]))
+                            pub.publish(ServoControlCmd(index=[0], cmd=[current_pos_0]))
                             msg = "step forward"
                             # running = False
 
                         if key == 's':
-                            pub.publish(ServoControlCmd(index=[0, 1, 2, 3], angles=[pos_init, pos_init, pos_init, pos_init]))
+                            pub.publish(ServoControlCmd(index=[0, 1, 2, 3], cmd=[pos_init, pos_init, pos_init, pos_init]))
                             current_pos_0 = pos_init
                             current_pos_1 = pos_init
                             current_pos_2 = pos_init
@@ -86,34 +86,34 @@ if __name__=="__main__":
                         if key == 'a':
                             # running = True
                             for i in range(2):
-                                pub.publish(ServoControlCmd(index=[0], angles=[current_pos_0 - 1024]))
+                                pub.publish(ServoControlCmd(index=[0], cmd=[current_pos_0 - 1024]))
                                 rospy.sleep(0.4)
-                                pub.publish(ServoControlCmd(index=[0], angles=[current_pos_0]))
+                                pub.publish(ServoControlCmd(index=[0], cmd=[current_pos_0]))
                                 rospy.sleep(0.4)
-                            pub.publish(ServoControlCmd(index=[0], angles=[current_pos_0]))
+                            pub.publish(ServoControlCmd(index=[0], cmd=[current_pos_0]))
                             msg = "step turn left"
                             # running = False
 
                         if key == 'd':
                             for i in range(2):
-                                pub.publish(ServoControlCmd(index=[0], angles=[current_pos_0 + 1024]))
+                                pub.publish(ServoControlCmd(index=[0], cmd=[current_pos_0 + 1024]))
                                 rospy.sleep(0.4)
-                                pub.publish(ServoControlCmd(index=[0], angles=[current_pos_0]))
+                                pub.publish(ServoControlCmd(index=[0], cmd=[current_pos_0]))
                                 rospy.sleep(0.4)
-                            pub.publish(ServoControlCmd(index=[0], angles=[current_pos_0]))
+                            pub.publish(ServoControlCmd(index=[0], cmd=[current_pos_0]))
                             msg = "step turn right"
 
                         if key == 'f':
                             current_pos_0 -= 10240
                             running = True
-                            pub.publish(ServoControlCmd(index=[0], angles=[current_pos_0]))
+                            pub.publish(ServoControlCmd(index=[0], cmd=[current_pos_0]))
                             rospy.sleep(0.3)
                             msg = "continue forward 3 rounds"
 
                         if key == 'r':
                             current_pos_0 += 200
                             # running = True
-                            pub.publish(ServoControlCmd(index=[0], angles=[current_pos_0]))
+                            pub.publish(ServoControlCmd(index=[0], cmd=[current_pos_0]))
                             rospy.sleep(0.05)
                             msg = "continue forward"
 
@@ -122,7 +122,7 @@ if __name__=="__main__":
                                 continue
                             current_pos_2 += 200
                             print(current_pos_2)
-                            pub.publish(ServoControlCmd(index=[2], angles=[current_pos_2]))
+                            pub.publish(ServoControlCmd(index=[2], cmd=[current_pos_2]))
                             rospy.sleep(0.3)
                             msg = "tail up"
 
@@ -130,7 +130,7 @@ if __name__=="__main__":
                             if current_pos_2 <= 1024:
                                 continue
                             current_pos_2 -= 200
-                            pub.publish(ServoControlCmd(index=[2], angles=[current_pos_2]))
+                            pub.publish(ServoControlCmd(index=[2], cmd=[current_pos_2]))
                             rospy.sleep(0.3)
                             msg = "tail down"
 

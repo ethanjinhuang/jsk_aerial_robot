@@ -147,7 +147,7 @@ Interface::Interface(): servo_state_pub_("servo/extended_states", &servo_states_
                         servo_pid_gain_sub_("servo/set_pid_gain", &Interface::servoPIDGainCallback, this)
 {
   /* variables */
-  init_cnt_ = 10; // for catch the CAN messages from servo, 100 messages.
+  init_cnt_ = 1; // for catch the CAN messages from servo, 100 messages.
   servo_states_msg_.servos_length = 0;
 
   /* timer */
@@ -176,8 +176,8 @@ void Interface::sendData()
 {
   bool cmd1_flag = false;
   bool cmd2_flag = false;
-  uint8_t cmd1[8]; // 1~4
-  uint8_t cmd2[8]; // 5~8
+  uint8_t cmd1[8] = {0}; // 1~4
+  uint8_t cmd2[8] = {0}; // 5~8
 
   for (std::map<int,Servo>::iterator it = servo_list_.begin(); it != servo_list_.end(); it++)
     {
@@ -235,7 +235,7 @@ void Interface::update(void)
           {
             spinal::ServoExtendedState servo;
 
-            servo.index = it->first;
+            servo.index = it->first - 1;
             servo.angle = it->second.getAngle();
             servo.velocity = it->second.getFilteredVelocity();
             servo.current = it->second.getCurrent();
@@ -282,7 +282,7 @@ void Interface::servoControlCallback(const spinal::ServoExtendedCmds& msg)
 {
   for (uint32_t i = 0; i < msg.servos_length; i++)
     {
-      int id = msg.servos[i].index;
+      int id = msg.servos[i].index + 1;
       uint8_t mode = msg.servos[i].mode;
       float cmd = msg.servos[i].cmd;
 
@@ -298,7 +298,7 @@ void Interface::servoControlCallback(const spinal::ServoExtendedCmds& msg)
 
 void Interface::servoPIDGainCallback(const spinal::ServoPIDGain& msg)
 {
-  std::map<int,Servo>::iterator it = servo_list_.find(msg.index);
+  std::map<int,Servo>::iterator it = servo_list_.find(msg.index + 1);
   if (it != servo_list_.end())
     {
       it->second.setPidGain(msg.mode, msg.p_gain, msg.i_gain, msg.d_gain);

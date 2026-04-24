@@ -19,7 +19,6 @@ num_iterations=$1
 for ((i=1; i<=$num_iterations; i++))
 do
     echo "Iteration $i:"
-    rostopic pub -1 /servo/target_states spinal/ServoControlCmd "{index: [0], angles: [1024]}"
-    rostopic pub -1 /servo/target_states spinal/ServoControlCmd "{index: [0], angles: [-1024]}"
+    rostopic pub -1 /servo/target_states spinal/ServoControlCmd "{index: [0], cmd: [1024]}"
+    rostopic pub -1 /servo/target_states spinal/ServoControlCmd "{index: [0], cmd: [-1024]}"
 done
-
