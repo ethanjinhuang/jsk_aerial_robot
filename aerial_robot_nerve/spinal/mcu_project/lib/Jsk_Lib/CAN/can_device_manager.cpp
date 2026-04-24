@@ -95,6 +95,7 @@ namespace CANDeviceManager
     uint8_t slave_id = CAN::getSlaveId(msg.rx_header);
     uint8_t device_id = CAN::getDeviceId(msg.rx_header);
     uint8_t message_id = CAN::getMessageId(msg.rx_header);
+    uint32_t dlc = CAN::getDlc(msg.rx_header);
 
     int communication_id = CANDeviceManager::makeCommunicationId(device_id, slave_id);
     if (device_id == CAN::DEVICEID_INITIALIZER) { //special
