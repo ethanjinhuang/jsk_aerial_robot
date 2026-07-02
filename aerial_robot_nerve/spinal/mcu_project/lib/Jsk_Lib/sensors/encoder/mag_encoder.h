@@ -24,7 +24,7 @@ public:
 
 
   void init(I2C_HandleTypeDef* hi2c);
-  void update(void);
+  void update(uint32_t timeout = 100);
 
   uint16_t getRawValue(void) const { return raw_encoder_value_;}
   int16_t getValue(void) const { return value_;}

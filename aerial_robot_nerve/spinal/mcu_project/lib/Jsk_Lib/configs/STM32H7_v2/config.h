@@ -93,6 +93,8 @@
 
 //2.4 CAN based Actuator
 #define DJI_CAN_SERVO 1
+#define DJI_CAN_SERVO_EXTERNAL_ENCODER 1
+#define DJI_CAN_SERVO_EXTERNAL_ENCODER_ID 1
 
 
 #endif //__CONFIG_H

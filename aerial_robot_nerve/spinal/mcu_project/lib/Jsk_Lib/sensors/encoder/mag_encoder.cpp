@@ -22,15 +22,15 @@ void MagEncoder::init(I2C_HandleTypeDef* hi2c)
   connection_ = false;
 }
 
-void MagEncoder::update(void)
+void MagEncoder::update(uint32_t timeout)
 {
   uint8_t val[1];
   val[0] = AS5600_REG_RAW_ANGLE;
-  int i2c_status = HAL_I2C_Master_Transmit(hi2c_, AS5600_I2C_ADDRESS, val, 1, 100);
+  int i2c_status = HAL_I2C_Master_Transmit(hi2c_, AS5600_I2C_ADDRESS, val, 1, timeout);
   if(i2c_status == HAL_OK)
     {
       uint8_t adc[2];
-      HAL_I2C_Master_Receive(hi2c_, AS5600_I2C_ADDRESS , adc, 2, 100);
+      HAL_I2C_Master_Receive(hi2c_, AS5600_I2C_ADDRESS , adc, 2, timeout);
       raw_encoder_value_ = (uint16_t)(adc[0] << 8 | adc[1]);
       int16_t value = (int16_t)raw_encoder_value_ + offset_;
       if(value >= RESOLUTION) value_ = value - RESOLUTION;

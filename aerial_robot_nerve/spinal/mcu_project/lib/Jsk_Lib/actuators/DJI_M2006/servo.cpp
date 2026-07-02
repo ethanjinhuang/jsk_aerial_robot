@@ -23,6 +23,14 @@ Servo::Servo()
   output_vel_ = 0;
   curr_ = 0;
 
+  external_encoder_connected_ = false;
+  external_encoder_initialized_ = false;
+  external_encoder_rotations_ = 0;
+  external_encoder_last_counts_ = MagEncoder::RESOLUTION;
+  external_encoder_last_update_time_ = 0;
+  external_output_pos_ = 0;
+  external_output_vel_ = 0;
+
   filter_vel_ = 0;
   filter_vel_p_ = 0;
 
@@ -75,6 +83,62 @@ void Servo::update(uint16_t counts, int16_t rpm, int16_t m_curr)
   filter_vel_ = (filter_vel_p_/GYRO_LPF_FACTOR);
 }
 
+void Servo::updateExternalEncoder(uint16_t counts, uint32_t now_ms)
+{
+  if (!external_encoder_initialized_) {
+    external_encoder_last_counts_ = counts;
+    external_encoder_last_update_time_ = now_ms;
+    external_encoder_initialized_ = true;
+  }
+
+  int32_t delta = counts - external_encoder_last_counts_;
+  if (delta > MagEncoder::RESOLUTION / 2) {
+    external_encoder_rotations_ -= 1;
+  } else if (delta < -MagEncoder::RESOLUTION / 2) {
+    external_encoder_rotations_ += 1;
+  }
+
+  int32_t external_counts = external_encoder_rotations_ * MagEncoder::RESOLUTION + counts;
+  uint32_t dt_ms = now_ms - external_encoder_last_update_time_;
+  float next_external_output_pos = external_counts / kExternalEncoderCountsPerRad;
+
+  if (dt_ms > 0) {
+    external_output_vel_ = (next_external_output_pos - external_output_pos_) * 1000.0f / dt_ms;
+  }
+  external_output_pos_ = next_external_output_pos;
+
+  external_encoder_last_counts_ = counts;
+  external_encoder_last_update_time_ = now_ms;
+  external_encoder_connected_ = true;
+}
+
+void Servo::setExternalEncoderConnected(bool connected)
+{
+  external_encoder_connected_ = connected;
+  if (!connected) {
+    external_encoder_initialized_ = false;
+    external_encoder_last_counts_ = MagEncoder::RESOLUTION;
+    external_encoder_last_update_time_ = 0;
+    external_encoder_rotations_ = 0;
+    external_output_vel_ = 0;
+  }
+}
+
+float Servo::getFeedbackAngle() const
+{
+  return external_encoder_connected_ ? external_output_pos_ : output_pos_;
+}
+
+float Servo::getFeedbackVelocity() const
+{
+  return external_encoder_connected_ ? external_output_vel_ : output_vel_;
+}
+
+float Servo::getFeedbackCounts() const
+{
+  return getFeedbackAngle() * kExternalEncoderCountsPerRad;
+}
+
 void Servo::control()
 {
   switch (control_mode_)
@@ -115,12 +179,12 @@ void Servo::calcPosPid(void)
 {
   goal_pos_ = goal_value_;
 
-  float err = goal_pos_ - output_pos_;
+  float err = goal_pos_ - getFeedbackAngle();
   float p_term = p_k_p_ * err;
   p_term = clamp(p_term, MAX_CURRENT);
   p_i_term_ += p_k_i_ * err * SERVO_CTRL_INTERVAL;
   p_i_term_ = clamp(p_i_term_, MAX_CURRENT);
-  float d_term = p_k_d_ * (-output_vel_);
+  float d_term = p_k_d_ * (-getFeedbackVelocity());
   d_term = clamp(d_term, MAX_CURRENT);
 
   goal_curr_ = p_term + p_i_term_ + d_term;
@@ -154,9 +218,21 @@ Interface::Interface(): servo_state_pub_("servo/extended_states", &servo_states_
   last_connected_time_ = 0;
   servo_last_pub_time_ = 0;
   servo_last_ctrl_time_ = 0;
+  external_encoder_i2c_ = nullptr;
+  external_encoder_enabled_ = false;
+#ifdef DJI_CAN_SERVO_EXTERNAL_ENCODER_ID
+  external_encoder_servo_id_ = DJI_CAN_SERVO_EXTERNAL_ENCODER_ID;
+#else
+  external_encoder_servo_id_ = 1;
+#endif
 }
 
 void Interface::init(CAN_GeranlHandleTypeDef* hcan, osMailQId* handle, ros::NodeHandle* nh, GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin)
+{
+  init(hcan, handle, nh, GPIOx, GPIO_Pin, nullptr);
+}
+
+void Interface::init(CAN_GeranlHandleTypeDef* hcan, osMailQId* handle, ros::NodeHandle* nh, GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin, I2C_HandleTypeDef* external_encoder_i2c)
 {
   /* CAN */
   CANDeviceManager::init(hcan, GPIOx, GPIO_Pin);
@@ -168,6 +244,14 @@ void Interface::init(CAN_GeranlHandleTypeDef* hcan, osMailQId* handle, ros::Node
   nh_->advertise(servo_state_pub_);
   nh_->subscribe(servo_cmd_sub_);
   nh_->subscribe(servo_pid_gain_sub_);
+
+  external_encoder_i2c_ = external_encoder_i2c;
+#if DJI_CAN_SERVO_EXTERNAL_ENCODER
+  external_encoder_enabled_ = external_encoder_i2c_ != nullptr;
+  if (external_encoder_enabled_) {
+    external_encoder_handler_.init(external_encoder_i2c_);
+  }
+#endif
 
   CANDeviceManager::CAN_START();
 }
@@ -211,6 +295,18 @@ void Interface::update(void)
   CANDeviceManager::tick(1);
   uint32_t now_time = HAL_GetTick();
 
+  if (external_encoder_enabled_) {
+    std::map<int,Servo>::iterator it = servo_list_.find(external_encoder_servo_id_);
+    if (it != servo_list_.end()) {
+      external_encoder_handler_.update(2);
+      if (external_encoder_handler_.connected()) {
+        it->second.updateExternalEncoder(external_encoder_handler_.getRawValue(), now_time);
+      } else {
+        it->second.setExternalEncoderConnected(false);
+      }
+    }
+  }
+
   /* control */
   if(now_time - servo_last_ctrl_time_ >= SERVO_CTRL_INTERVAL)
     {
@@ -236,8 +332,8 @@ void Interface::update(void)
             spinal::ServoExtendedState servo;
 
             servo.index = it->first - 1;
-            servo.angle = it->second.getAngle();
-            servo.velocity = it->second.getFilteredVelocity();
+            servo.angle = it->second.getFeedbackCounts();
+            servo.velocity = it->second.getFeedbackVelocity();
             servo.current = it->second.getCurrent();
 
             servo_states_msg_.servos[i] = servo;

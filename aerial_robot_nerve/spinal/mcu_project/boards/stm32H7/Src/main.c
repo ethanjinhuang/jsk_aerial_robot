@@ -267,7 +267,7 @@ int main(void)
   if(servo_connect) servoptr = &servo_;
 
 #if DJI_CAN_SERVO
-  dji_servo_.init(&hfdcan1, &canMsgMailHandle, &nh_, LED1_GPIO_Port, LED1_Pin);
+  dji_servo_.init(&hfdcan1, &canMsgMailHandle, &nh_, LED1_GPIO_Port, LED1_Pin, &hi2c1);
 #endif
 
   controller_.init(&htim1, &htim4, &estimator_, NULL, servoptr, &battery_status_, &nh_, &flightControlMutexHandle);

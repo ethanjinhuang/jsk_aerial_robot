@@ -15,7 +15,16 @@
 #include <spinal/ServoExtendedCmds.h>
 #include <spinal/ServoPIDGain.h>
 
+#include "sensors/encoder/mag_encoder.h"
 #include "math/AP_Math.h"
+
+#ifndef DJI_CAN_SERVO_EXTERNAL_ENCODER
+#define DJI_CAN_SERVO_EXTERNAL_ENCODER 0
+#endif
+
+#ifndef DJI_CAN_SERVO_EXTERNAL_ENCODER_ID
+#define DJI_CAN_SERVO_EXTERNAL_ENCODER_ID 1
+#endif
 
 /* RTOS */
 #include "cmsis_os.h"
@@ -44,6 +53,9 @@ namespace DJI_M2006
 
     float getAngle() {return output_pos_; }
     float getVelocity() {return output_vel_; }
+    float getFeedbackAngle() const;
+    float getFeedbackVelocity() const;
+    float getFeedbackCounts() const;
     float getFilteredVelocity() {return filter_vel_; }
     float getCurrent() {return curr_; }
 
@@ -53,6 +65,8 @@ namespace DJI_M2006
     void setPidGain(uint8_t mode, float p_gian, float i_gain, float d_gain);
 
     void update(uint16_t counts, int16_t rpm, int16_t m_curr);
+    void updateExternalEncoder(uint16_t counts, uint32_t now_ms);
+    void setExternalEncoderConnected(bool connected);
     void control(void);
 
     static constexpr uint8_t GYRO_LPF_FACTOR = 20;
@@ -61,6 +75,7 @@ namespace DJI_M2006
     static constexpr float kCountsPerRad = kCountsPerRev * kReduction / (2 * M_PI);
     static constexpr float kRPMPerRadS = kReduction * 60 / (2.0F * M_PI);
     static constexpr float kMilliAmpPerAmp = 1000.0F;
+    static constexpr float kExternalEncoderCountsPerRad = MagEncoder::RESOLUTION / (2 * M_PI);
 
     static constexpr float kResistance = 0.100;
     static constexpr float kVoltageConstant = 100.0;
@@ -83,6 +98,14 @@ namespace DJI_M2006
     float output_pos_;
     float output_vel_;
     float curr_;
+
+    bool external_encoder_connected_;
+    uint8_t external_encoder_initialized_;
+    int32_t external_encoder_rotations_;
+    int32_t external_encoder_last_counts_;
+    uint32_t external_encoder_last_update_time_;
+    float external_output_pos_;
+    float external_output_vel_;
 
     float filter_vel_;
     float filter_vel_p_;
@@ -115,6 +138,7 @@ namespace DJI_M2006
     ~Interface(){}
 
     void init(CAN_GeranlHandleTypeDef* hcan, osMailQId* handle, ros::NodeHandle* nh, GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin);
+    void init(CAN_GeranlHandleTypeDef* hcan, osMailQId* handle, ros::NodeHandle* nh, GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin, I2C_HandleTypeDef* external_encoder_i2c);
 
     void servoControlCallback(const spinal::ServoExtendedCmds& msg);
     void servoPIDGainCallback(const spinal::ServoPIDGain& msg);
@@ -133,6 +157,10 @@ namespace DJI_M2006
     ros::Subscriber<spinal::ServoExtendedCmds, Interface> servo_cmd_sub_;
     ros::Subscriber<spinal::ServoPIDGain, Interface> servo_pid_gain_sub_;
     spinal::ServoExtendedStates servo_states_msg_;
+    MagEncoder external_encoder_handler_;
+    I2C_HandleTypeDef* external_encoder_i2c_;
+    bool external_encoder_enabled_;
+    int external_encoder_servo_id_;
 
 
     uint32_t last_connected_time_;
