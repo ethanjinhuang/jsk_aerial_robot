@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="config" default="$(find robotic_fish_io)/config/io.yaml"/>
+  <arg name="enable_adc" default="true"/>
+  <arg name="enable_dac" default="true"/>
+
+  <node if="$(arg enable_adc)"
+        pkg="robotic_fish_io"
+        type="adc_node.py"
+        name="adc"
+        output="screen">
+    <rosparam command="load" file="$(arg config)"/>
+  </node>
+
+  <node if="$(arg enable_dac)"
+        pkg="robotic_fish_io"
+        type="dac_node.py"
+        name="dac"
+        output="screen">
+    <rosparam command="load" file="$(arg config)"/>
+  </node>
+</launch>

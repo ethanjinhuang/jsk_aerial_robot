@@ -1,0 +1,6 @@
+uint8 channel
+float32 voltage
+---
+bool success
+float32 applied_voltage
+string message

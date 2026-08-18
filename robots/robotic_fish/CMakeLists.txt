@@ -13,6 +13,7 @@ catkin_package(
 )
 
 catkin_install_python(PROGRAMS
+        scripts/advance_teleop.py
         scripts/spring_teleop.py
         scripts/loop_send_servo_cmd.py
         scripts/servo_keyboard_cmd.py

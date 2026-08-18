@@ -1,0 +1,27 @@
+adc:
+  bus: 0
+  address: 0x48
+  channels: [0, 1, 2]
+  data_rate: 128
+  channel_rate: 20.0
+  conversion_timeout: 0.1
+  ready_poll_interval: 0.001
+  reconnect_interval: 1.0
+  frame_id: ads1115
+  publish_array: true
+  sample_topic: /robotic_fish/adc/sample
+  samples_topic: /robotic_fish/adc/samples
+
+dac:
+  port: /dev/robotic_fish_dac
+  baud: 19200
+  channel: 1
+  timeout: 0.1
+  verify_echo: true
+  safe_voltage: 0.0
+  zero_on_shutdown: true
+  command_timeout: 0.0
+  reconnect_interval: 1.0
+  command_topic: /robotic_fish/dac/command
+  state_topic: /robotic_fish/dac/state
+  set_voltage_service: /robotic_fish/dac/set_voltage
