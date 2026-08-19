@@ -5,10 +5,38 @@ ROS 1 hardware interface for the robotic fish ADS1115 ADC and serial DAC.
 ## ADC timing
 
 The ADS1115 multiplexes its input channels and converts them sequentially. The
-node therefore publishes every completed conversion immediately on
-`/robotic_fish/adc/sample`. Each `AdcSample` contains its own conversion start,
-conversion end, and midpoint sample timestamp. The optional
-`/robotic_fish/adc/samples` batch retains those per-sample timestamps.
+node records a separate conversion start, conversion end, and midpoint timestamp
+for every `AdcSample`. Samples are published after the three-channel calibration
+decision, but their timestamps still describe the individual hardware
+conversions accurately. The optional `/robotic_fish/adc/samples` batch retains
+the same per-sample timestamps.
+
+Each sample contains both `voltage` (the direct ADS1115 conversion) and
+`calibrated_voltage`. Calibration is loaded from the JSON file selected under
+`adc.calibration.file` in `config/io.yaml`. The packaged default is the validated
+three-channel independent transfer table
+`adc_independent_transfer_20260818_183014_calbri01_raw.json`.
+
+ADC0, ADC1, and ADC2 each use their own raw ADC voltage to query a piecewise
+linear curve. Calibration has no runtime dependency on the DAC voltage. If any
+channel is outside its observed input range (including the configured endpoint
+tolerance), the complete three-channel group falls back to raw voltages and
+`calibration_applied` is false. The node never extrapolates or mixes calibrated
+and raw values within a group.
+
+Select a packaged calibration file relative to the package `config` directory:
+
+```yaml
+adc:
+  calibration:
+    enabled: true
+    required: true
+    file: calibration/adc_independent_transfer_20260818_183014_calbri01_raw.json
+```
+
+An absolute path is also accepted. With `required: true`, a missing, malformed,
+DAC-dependent, or otherwise incompatible calibration file prevents the ADC node
+from starting instead of silently using an invalid calibration.
 
 Default ADC configuration:
 

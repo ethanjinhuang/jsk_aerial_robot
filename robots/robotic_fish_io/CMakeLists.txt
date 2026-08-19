@@ -42,4 +42,5 @@ install(DIRECTORY config launch
 
 if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_drivers.py)
+  catkin_add_nosetests(test/test_calibration.py)
 endif()

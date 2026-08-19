@@ -11,6 +11,10 @@ adc:
   publish_array: true
   sample_topic: /robotic_fish/adc/sample
   samples_topic: /robotic_fish/adc/samples
+  calibration:
+    enabled: true
+    required: true
+    file: calibration/adc_independent_transfer_20260818_183014_calbri01_raw.json
 
 dac:
   port: /dev/robotic_fish_dac
