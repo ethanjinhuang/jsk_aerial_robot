@@ -6,6 +6,7 @@ find_package(catkin REQUIRED COMPONENTS
   message_generation
   rospy
   std_msgs
+  std_srvs
 )
 
 catkin_python_setup()
@@ -27,10 +28,11 @@ generate_messages(
 )
 
 catkin_package(
-  CATKIN_DEPENDS diagnostic_msgs message_runtime rospy std_msgs
+  CATKIN_DEPENDS diagnostic_msgs message_runtime rospy std_msgs std_srvs
 )
 
 catkin_install_python(PROGRAMS
+  scripts/agc_node.py
   scripts/adc_node.py
   scripts/dac_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -43,4 +45,5 @@ install(DIRECTORY config launch
 if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_drivers.py)
   catkin_add_nosetests(test/test_calibration.py)
+  catkin_add_nosetests(test/test_agc.py)
 endif()

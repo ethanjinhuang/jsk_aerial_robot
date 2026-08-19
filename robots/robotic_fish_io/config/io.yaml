@@ -29,3 +29,20 @@ dac:
   command_topic: /robotic_fish/dac/command
   state_topic: /robotic_fish/dac/state
   set_voltage_service: /robotic_fish/dac/set_voltage
+
+agc:
+  enabled: true
+  target_min_v: 2.5
+  target_max_v: 3.0
+  step_v: 0.01
+  interval_s: 0.5
+  consecutive_samples: 3
+  dac_min_v: 0.0
+  dac_max_v: 5.0
+  start_voltage: 0.0
+  dac_channel: 1
+  service_timeout: 1.0
+  adc_samples_topic: /robotic_fish/adc/samples
+  dac_state_topic: /robotic_fish/dac/state
+  set_voltage_service: /robotic_fish/dac/set_voltage
+  enable_service: /robotic_fish/agc/enable

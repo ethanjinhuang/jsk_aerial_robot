@@ -1,0 +1,2 @@
+# CH340 DAC adapter on the dedicated VIM4 USB hub port 1-1.2.
+SUBSYSTEM=="tty", KERNELS=="1-1.2", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", MODE="0660", GROUP="dialout", SYMLINK+="robotic_fish_dac"
