@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="enabled" default="true"/>
+  <arg name="bag_prefix" default="$(env HOME)/sonic_"/>
+
+  <node if="$(arg enabled)"
+        pkg="rosbag"
+        type="record"
+        name="sonic_bag_recorder"
+        output="screen"
+        args="-o $(arg bag_prefix)
+              /robotic_fish/adc/samples
+              /robotic_fish/dac/command
+              /robotic_fish/dac/state
+              /diagnostics
+              /joy
+              /imu
+              /servo/target_states
+              /servo/states"/>
+</launch>

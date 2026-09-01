@@ -2,6 +2,13 @@
 <launch>
 
   <arg name="dev" default="vim4" doc="choose between [pc, vim4]"/>
+  <arg name="enable_sensor_io" default="false"/>
+  <arg name="enable_adc" default="true"/>
+  <arg name="enable_dac" default="true"/>
+  <arg name="enable_agc" default="false"/>
+  <arg name="sensor_io_config" default="$(find robotic_fish_io)/config/io.yaml"/>
+  <arg name="record_bag" default="true"/>
+  <arg name="bag_prefix" default="$(env HOME)/sonic_"/>
 
   <include file="$(find spinal)/launch/bridge.launch" if = "$(eval arg('dev') == 'pc')" >
     <arg name="dev" value="$(arg dev)" />
@@ -21,4 +28,17 @@
     <param name="dev" value="/dev/input/js0"/>
     <param name="coalesce_interval" value="0.025"/>
   </node>
+
+  <include if="$(arg enable_sensor_io)"
+           file="$(find robotic_fish_io)/launch/sensor_io.launch">
+    <arg name="config" value="$(arg sensor_io_config)"/>
+    <arg name="enable_adc" value="$(arg enable_adc)"/>
+    <arg name="enable_dac" value="$(arg enable_dac)"/>
+    <arg name="enable_agc" value="$(arg enable_agc)"/>
+  </include>
+
+  <include file="$(find robotic_fish)/launch/record.launch">
+    <arg name="enabled" value="$(arg record_bag)"/>
+    <arg name="bag_prefix" value="$(arg bag_prefix)"/>
+  </include>
 </launch>

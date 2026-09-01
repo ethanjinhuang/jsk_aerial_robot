@@ -63,6 +63,7 @@
   <exec_depend>spinal</exec_depend>
   <exec_depend>joy</exec_depend>
   <exec_depend>robotic_fish_io</exec_depend>
+  <exec_depend>rosbag</exec_depend>
 
 
   <!-- The export tag contains other, unspecified, tags -->

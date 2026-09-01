@@ -188,6 +188,36 @@ roslaunch robotic_fish spring_teleop.launch dev:=pc
 roslaunch robotic_fish advance_teleop.launch dev:=pc
 ```
 
+使用 sonic 总体程序并同时启动 ADC/DAC：
+
+```bash
+roslaunch robotic_fish sonic_teleop.launch \
+  dev:=vim4 \
+  enable_sensor_io:=true
+```
+
+`sonic_teleop.launch` 默认同时启动 rosbag，文件保存在用户主目录，名称类似 `~/sonic_2026-09-01-18-30-00.bag`。录制内容包括：
+
+- ADC 三通道批数据（原始电压、校准电压、校准标识和时间戳）
+- DAC 命令与状态、节点诊断
+- 手柄输入、IMU、舵机目标命令与状态反馈
+
+改变保存目录或文件名前缀时，目标目录需要预先创建：
+
+```bash
+mkdir -p ~/bags
+roslaunch robotic_fish sonic_teleop.launch \
+  dev:=vim4 \
+  enable_sensor_io:=true \
+  bag_prefix:=$HOME/bags/sonic_
+```
+
+如本次运行不需要录制，可使用 `record_bag:=false`。停止整个 launch 时，rosbag 会同步结束并正常关闭文件。录制后可检查内容：
+
+```bash
+rosbag info ~/sonic_*.bag
+```
+
 ## 6. 手柄控制
 
 控制逻辑使用 `sensor_msgs/Joy` 的数组索引，而不是统一的按键名称。下表描述代码中的默认索引；实际物理按键请通过 `rostopic echo /joy` 确认。

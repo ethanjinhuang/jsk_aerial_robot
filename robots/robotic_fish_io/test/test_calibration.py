@@ -17,7 +17,7 @@ CONFIG_PATH = (
     PACKAGE_ROOT
     / "config"
     / "calibration"
-    / "adc_independent_transfer_20260818_183014_calbri01_raw.json"
+    / "adc_independent_transfer_20260901_171408_calbri05_raw.json"
 )
 
 
@@ -29,9 +29,9 @@ class CalibrationTests(unittest.TestCase):
     def test_packaged_curves_are_complete_and_dac_independent(self):
         self.assertEqual(
             self.calibration.calibration_id,
-            "adc_independent_transfer_20260818_183014_calbri01_raw",
+            "adc_independent_transfer_20260901_171408_calbri05_raw",
         )
-        self.assertEqual([len(curve) for curve in self.calibration.curves], [131] * 3)
+        self.assertEqual([len(curve) for curve in self.calibration.curves], [121] * 3)
         self.assertFalse(
             self.calibration.document["processing"]["runtime_dac_dependency"]
         )
@@ -39,7 +39,7 @@ class CalibrationTests(unittest.TestCase):
             self.assertTrue(all(b > a for a, b in zip(raw_nodes, raw_nodes[1:])))
 
     def test_exact_nodes_and_piecewise_linear_interpolation(self):
-        for index in (0, 1, 65, 130):
+        for index in (0, 1, 60, 120):
             raw = [
                 self.calibration.curves[channel][index]["raw_voltage_v"]
                 for channel in range(3)
