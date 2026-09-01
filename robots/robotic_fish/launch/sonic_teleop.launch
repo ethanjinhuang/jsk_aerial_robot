@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<launch>
+
+  <arg name="dev" default="vim4" doc="choose between [pc, vim4]"/>
+
+  <include file="$(find spinal)/launch/bridge.launch" if = "$(eval arg('dev') == 'pc')" >
+    <arg name="dev" value="$(arg dev)" />
+  </include>
+
+  <node pkg="robotic_fish" type="sonic_teleop.py" name="sonic_teleop_node" output="screen">
+    <param name="joy_dead_zone" value="0.1"/>
+    <param name="servo_center" value="2048.0"/>
+    <param name="servo_range" value="1024.0"/>
+    <param name="auto_frequency" value="1.5"/>
+    <param name="auto_default_amplitude" value="512.0"/>
+    <param name="auto_amplitude_rate" value="64.0"/>
+  </node>
+
+  <node pkg="joy" type="joy_node" name="joy_node" output="screen" >
+
+    <param name="dev" value="/dev/input/js0"/>
+    <param name="coalesce_interval" value="0.025"/>
+  </node>
+</launch>
