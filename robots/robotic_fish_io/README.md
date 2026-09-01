@@ -15,7 +15,7 @@ Each sample contains both `voltage` (the direct ADS1115 conversion) and
 `calibrated_voltage`. Calibration is loaded from the JSON file selected under
 `adc.calibration.file` in `config/io.yaml`. The packaged default is the validated
 three-channel independent transfer table
-`adc_independent_transfer_20260818_183014_calbri01_raw.json`.
+`adc_independent_transfer_20260901_171408_calbri05_raw.json`.
 
 ADC0, ADC1, and ADC2 each use their own raw ADC voltage to query a piecewise
 linear curve. Calibration has no runtime dependency on the DAC voltage. If any
@@ -31,7 +31,7 @@ adc:
   calibration:
     enabled: true
     required: true
-    file: calibration/adc_independent_transfer_20260818_183014_calbri01_raw.json
+    file: calibration/adc_independent_transfer_20260901_171408_calbri05_raw.json
 ```
 
 An absolute path is also accepted. With `required: true`, a missing, malformed,

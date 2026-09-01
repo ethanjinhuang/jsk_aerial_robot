@@ -14,7 +14,7 @@ adc:
   calibration:
     enabled: true
     required: true
-    file: calibration/adc_independent_transfer_20260818_183014_calbri01_raw.json
+    file: calibration/adc_independent_transfer_20260901_171408_calbri05_raw.json
 
 dac:
   port: /dev/robotic_fish_dac
