@@ -2,11 +2,13 @@
 """Publish timestamped ADS1115 conversions with optional transfer calibration."""
 
 from pathlib import Path
+import math
 import time
 
 import rospkg
 import rospy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from std_msgs.msg import Float32
 
 from robotic_fish_io.adc_calibration import AdcCalibration
 from robotic_fish_io import adc_driver
@@ -54,6 +56,9 @@ class AdcNode:
         samples_topic = rospy.get_param(
             "~adc/samples_topic", "/robotic_fish/adc/samples"
         )
+        gain_control_topic = rospy.get_param(
+            "~adc/gain_control_topic", "/robotic_fish/dac/state"
+        )
 
         self._validate_parameters()
         self.calibration = None
@@ -69,6 +74,15 @@ class AdcNode:
         self.diagnostic_pub = rospy.Publisher(
             "/diagnostics", DiagnosticArray, queue_size=10
         )
+        # Replacing this tuple is atomic in CPython, so sampling always observes
+        # a consistent validity/value pair from the subscriber callback.
+        self.gain_control_state = (False, 0.0)
+        self.gain_control_sub = rospy.Subscriber(
+            gain_control_topic,
+            Float32,
+            self._gain_control_callback,
+            queue_size=10,
+        )
         self.bus = None
         self.sample_sequence = 0
         self.error_count = 0
@@ -77,6 +91,15 @@ class AdcNode:
         self.last_sample_stamp = rospy.Time(0)
         self.last_conversion_ms = 0.0
         self.last_diagnostic_ns = 0
+
+    def _gain_control_callback(self, msg):
+        voltage = float(msg.data)
+        if not math.isfinite(voltage):
+            rospy.logwarn_throttle(
+                5.0, "Ignoring non-finite DAC gain-control voltage"
+            )
+            return
+        self.gain_control_state = (True, voltage)
 
     def _validate_parameters(self):
         adc_driver.validate_address(self.address)
@@ -189,6 +212,7 @@ class AdcNode:
     def _sample_channel(self, channel):
         anchor_ros = rospy.Time.now()
         anchor_ns = time.monotonic_ns()
+        gain_control_valid, gain_control_voltage = self.gain_control_state
         reading = adc_driver.read_timed_channel(
             self.bus,
             channel,
@@ -215,6 +239,8 @@ class AdcNode:
         msg.channel = reading.channel
         msg.raw = reading.raw
         msg.voltage = reading.voltage
+        msg.gain_control_voltage = gain_control_voltage
+        msg.gain_control_voltage_valid = gain_control_valid
         msg.conversion_start = start
         msg.conversion_end = end
         self.sample_sequence += 1
@@ -259,6 +285,12 @@ class AdcNode:
                 "" if self.calibration is None else self.calibration.calibration_id,
             ),
             KeyValue("calibration_status", self.calibration_status),
+            KeyValue(
+                "gain_control_voltage_v",
+                "unknown"
+                if not self.gain_control_state[0]
+                else "{:.2f}".format(self.gain_control_state[1]),
+            ),
         ]
         array = DiagnosticArray()
         array.header.stamp = rospy.Time.now()

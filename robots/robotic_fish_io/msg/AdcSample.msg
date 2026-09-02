@@ -7,5 +7,8 @@ float64 calibrated_voltage
 float64 calibration_gain
 bool calibration_applied
 string calibration_id
+# Last confirmed DAC gain-control voltage when this conversion started.
+float64 gain_control_voltage
+bool gain_control_voltage_valid
 time conversion_start
 time conversion_end
