@@ -3,7 +3,15 @@
   <arg name="config" default="$(find robotic_fish_io)/config/io.yaml"/>
   <arg name="enable_adc" default="true"/>
   <arg name="enable_dac" default="true"/>
+  <arg name="enable_gain_control" default="true"/>
+  <!-- Deprecated compatibility alias. true selects closed_loop. -->
   <arg name="enable_agc" default="false"/>
+  <arg name="gain_mode" default="off"/>
+  <arg name="fixed_gain_voltage" default="0.0"/>
+  <arg name="agc_target_min_v" default="2.5"/>
+  <arg name="agc_target_max_v" default="3.0"/>
+  <arg name="agc_step_v" default="0.01"/>
+  <arg name="adc_safety_limit_v" default="3.50"/>
 
   <node if="$(arg enable_adc)"
         pkg="robotic_fish_io"
@@ -21,11 +29,18 @@
     <rosparam command="load" file="$(arg config)"/>
   </node>
 
-  <node if="$(arg enable_agc)"
+  <node if="$(eval arg('enable_adc') and arg('enable_dac') and arg('enable_gain_control'))"
         pkg="robotic_fish_io"
         type="agc_node.py"
-        name="agc"
+        name="gain_control"
         output="screen">
     <rosparam command="load" file="$(arg config)"/>
+    <param name="agc/enabled" value="$(arg enable_agc)"/>
+    <param name="gain_control/mode" type="str" value="$(arg gain_mode)"/>
+    <param name="gain_control/fixed_voltage" value="$(arg fixed_gain_voltage)"/>
+    <param name="gain_control/target_min_v" value="$(arg agc_target_min_v)"/>
+    <param name="gain_control/target_max_v" value="$(arg agc_target_max_v)"/>
+    <param name="gain_control/step_v" value="$(arg agc_step_v)"/>
+    <param name="gain_control/adc_safety_limit_v" value="$(arg adc_safety_limit_v)"/>
   </node>
 </launch>

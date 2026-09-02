@@ -1,0 +1,20 @@
+# Observable state for fixed/closed-loop LNA gain control and ADC protection.
+std_msgs/Header header
+string mode
+string state
+string reason
+float64 current_dac_voltage
+float64 commanded_dac_voltage
+float64 fixed_target_voltage
+float64 adc_max_raw_voltage
+float64 target_min_voltage
+float64 target_max_voltage
+float64 adc_safety_limit_voltage
+float64 adc_safety_recovery_voltage
+bool safety_active
+bool adc_valid
+bool dac_state_valid
+uint32 low_sample_count
+uint32 high_sample_count
+uint32 adjustment_count
+uint32 error_count

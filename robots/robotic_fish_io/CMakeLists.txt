@@ -15,6 +15,7 @@ add_message_files(
   FILES
   AdcSample.msg
   AdcSampleArray.msg
+  GainControlState.msg
 )
 
 add_service_files(

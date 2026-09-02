@@ -11,6 +11,7 @@ adc:
   publish_array: true
   sample_topic: /robotic_fish/adc/sample
   samples_topic: /robotic_fish/adc/samples
+  gain_control_topic: /robotic_fish/dac/state
   calibration:
     enabled: true
     required: true
@@ -30,8 +31,9 @@ dac:
   state_topic: /robotic_fish/dac/state
   set_voltage_service: /robotic_fish/dac/set_voltage
 
-agc:
-  enabled: true
+gain_control:
+  mode: "off"
+  fixed_voltage: 0.0
   target_min_v: 2.5
   target_max_v: 3.0
   step_v: 0.01
@@ -39,10 +41,21 @@ agc:
   consecutive_samples: 3
   dac_min_v: 0.0
   dac_max_v: 5.0
+  max_normal_step_v: 0.10
   start_voltage: 0.0
+  fixed_ramp_step_v: 0.05
+  fixed_ramp_interval_s: 0.10
+  adc_safety_limit_v: 3.50
+  adc_safety_recovery_v: 3.30
+  safety_step_v: 0.10
+  safety_interval_s: 0.10
+  recovery_settle_s: 0.20
+  adc_timeout: 1.0
   dac_channel: 1
   service_timeout: 1.0
   adc_samples_topic: /robotic_fish/adc/samples
   dac_state_topic: /robotic_fish/dac/state
   set_voltage_service: /robotic_fish/dac/set_voltage
   enable_service: /robotic_fish/agc/enable
+  reset_safety_service: /robotic_fish/gain_control/reset_safety
+  state_topic: /robotic_fish/gain_control/state
