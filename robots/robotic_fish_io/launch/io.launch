@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="dev" default="pc" doc="choose between [pc, vim4]"/>
+  <arg name="spinal_mode" default="serial"/>
+  <arg name="config" default="$(find robotic_fish_io)/config/io.yaml"/>
+  <arg name="enable_adc" default="true"/>
+  <arg name="enable_dac" default="true"/>
+  <arg name="enable_agc" default="false"/>
+
+  <include file="$(find spinal)/launch/bridge.launch">
+    <arg name="dev" value="$(arg dev)" />
+    <arg name="mode" value="$(arg spinal_mode)" />
+  </include>
+
+  <include file="$(find robotic_fish_io)/launch/sensor_io.launch">
+    <arg name="config" value="$(arg config)"/>
+    <arg name="enable_adc" value="$(arg enable_adc)"/>
+    <arg name="enable_dac" value="$(arg enable_dac)"/>
+    <arg name="enable_agc" value="$(arg enable_agc)"/>
+  </include>
+</launch>
