@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <launch>
   <arg name="enabled" default="true"/>
-  <arg name="bag_prefix" default="$(env HOME)/sonic_"/>
+  <arg name="bag_prefix" default="$(env HOME)/sonic"/>
 
   <node if="$(arg enabled)"
         pkg="rosbag"
@@ -12,6 +12,7 @@
               /robotic_fish/adc/samples
               /robotic_fish/dac/command
               /robotic_fish/dac/state
+              /robotic_fish/gain_control/state
               /diagnostics
               /joy
               /imu
