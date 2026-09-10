@@ -174,13 +174,12 @@ The ADS1115 multiplexes and converts the three channels sequentially. A complete
 
 ### 4.2 Timestamps
 
-Every `AdcSample` has its own:
-
-- `conversion_start`: start of that channel's conversion;
-- `conversion_end`: completion of that channel's conversion;
-- `header.stamp`: midpoint of the conversion window.
-
-Although three samples are published together in an `AdcSampleArray`, they retain their individual hardware timing. The three channels must not be interpreted as simultaneous conversions.
+Each `AdcSample.timestamp` records when the host first finishes reading that
+conversion result, before calibration and publication. It is mapped from the
+monotonic read-completion clock onto ROS time. It is not a hardware sampling
+instant. Start/end clocks remain internal for timeout and duration diagnostics.
+The three channels are sequential and retain separate timestamps. The outer
+`AdcSampleArray.header.stamp` remains the batch packaging time.
 
 ### 4.3 Calibration file
 
@@ -205,29 +204,37 @@ A relative path is resolved against this package's `config/` directory. An absol
 ADC0, ADC1, and ADC2 each use their own piecewise-linear transfer curve. The calibration does not use DAC voltage as an input and never extrapolates beyond its observed range. If any channel in a group is outside the calibration range, the entire group falls back to raw voltages:
 
 ```text
-calibration_applied = false
-calibrated_voltage = voltage
+status_cali = false
+volt_cali = volt_raw
 ```
 
 This prevents calibrated and uncalibrated values from being mixed within one three-channel group.
 
 ### 4.4 `AdcSample` fields
 
-| Field | Meaning |
-| --- | --- |
-| `channel` | ADC channel number |
-| `raw` | Signed ADS1115 conversion count |
-| `voltage` | Voltage directly converted from the ADS1115 count |
-| `calibrated_voltage` | Transfer-curve result; equal to `voltage` when calibration is inactive |
-| `calibration_gain` | Calibration ratio at the current interpolation point |
-| `calibration_applied` | Whether calibration was applied to the complete three-channel group |
-| `calibration_id` | Identifier of the active calibration |
-| `gain_control_voltage` | Latest confirmed DAC control voltage when this conversion started |
-| `gain_control_voltage_valid` | Whether a valid `/robotic_fish/dac/state` has been received |
-| `conversion_start` | Conversion start time |
-| `conversion_end` | Conversion completion time |
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `serial_num` | uint32 | Cross-channel sequence within this node run; restarts at zero and wraps at 2^32 |
+| `timestamp` | time | First host read-completion time of this conversion result |
+| `device` | string | Source identifier, default `ads1115` |
+| `channel_id` | uint8 | ADC channel number |
+| `adc_code` | int32 | Signed ADS1115 conversion count |
+| `volt_raw` | float64 | Uncalibrated voltage in V |
+| `volt_cali` | float64 | Calibrated voltage in V; falls back to `volt_raw` |
+| `diff_cali` | float64 | `volt_cali - volt_raw` in V; NaN when calibration is inactive |
+| `status_cali` | bool | Calibration successfully applied to this complete group |
+| `cali_id` | string | Applied calibration identifier; empty on fallback |
+| `dac_volt` | float64 | Last confirmed DAC voltage in V captured at conversion start; NaN if invalid |
+| `status_dac_feedback` | bool | Captured DAC state is valid; no independent analog measurement or freshness timeout |
 
-`gain_control_voltage` is the actual DAC voltage applied to the analog gain-control input. It is not an LNA gain ratio. A separate voltage-to-gain calibration is required before physical gain can be reported.
+`dac_volt` is a control voltage, not an LNA gain ratio. DAC metadata is captured
+at conversion start, while `timestamp` is recorded at result-read completion.
+
+This schema replaces the old sample Header, conversion_start/conversion_end,
+and old voltage/calibration field names. Nested samples in AdcSampleArray use
+this same schema; its outer Header and samples array are unchanged. Rebuild and
+source the workspace for all publishers/subscribers. Old bags retain their old
+message definitions and require an explicit adapter for replay to new nodes.
 
 ## 5. DAC control
 
@@ -270,7 +277,7 @@ All gain-control decisions use the maximum raw voltage in a complete ADC group:
 adc_max_raw_voltage = max(ADC0.voltage, ADC1.voltage, ADC2.voltage)
 ```
 
-The controller deliberately ignores `calibrated_voltage`, so clipping protection does not depend on calibration validity or calibration-file contents.
+The controller deliberately ignores `volt_cali`, so clipping protection does not depend on calibration validity or calibration-file contents.
 
 ### 6.1 `off` mode
 
@@ -486,7 +493,7 @@ Gain control uses a service to command the DAC, and ROS service requests are not
 ```text
 /robotic_fish/dac/state
 /robotic_fish/gain_control/state
-/robotic_fish/adc/samples[*].gain_control_voltage
+/robotic_fish/adc/samples[*].dac_volt
 ```
 
 `/robotic_fish/dac/command` contains only commands sent through the command topic and may have no messages when all voltage changes come from the gain-control service.
@@ -556,7 +563,7 @@ sudo udevadm trigger --action=add --subsystem-match=tty
 
 Confirm that the CH340 is connected to the physical port expected by the udev rule and that the user belongs to `dialout`.
 
-### 11.3 `calibration_applied: false`
+### 11.3 `status_cali: false`
 
 Common causes are:
 

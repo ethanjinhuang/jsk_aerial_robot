@@ -162,28 +162,28 @@ class AdcNode:
 
     def _apply_calibration(self, samples):
         for sample in samples:
-            sample.calibrated_voltage = sample.voltage
-            sample.calibration_gain = 1.0
-            sample.calibration_applied = False
-            sample.calibration_id = ""
+            sample.volt_cali = sample.volt_raw
+            sample.diff_cali = float("nan")
+            sample.status_cali = False
+            sample.cali_id = ""
 
         if not self.calibration_enabled or self.calibration is None:
             self.last_calibration_applied = False
             return
 
         try:
-            ordered_voltages = [sample.voltage for sample in samples]
-            calibrated, gains = self.calibration.apply(ordered_voltages)
+            ordered_voltages = [sample.volt_raw for sample in samples]
+            calibrated, _gains = self.calibration.apply(ordered_voltages)
         except ValueError as exc:
             self.calibration_status = str(exc)
             self.last_calibration_applied = False
             return
 
-        for sample, calibrated_voltage, gain in zip(samples, calibrated, gains):
-            sample.calibrated_voltage = calibrated_voltage
-            sample.calibration_gain = gain
-            sample.calibration_applied = True
-            sample.calibration_id = self.calibration.calibration_id
+        for sample, calibrated_voltage in zip(samples, calibrated):
+            sample.volt_cali = calibrated_voltage
+            sample.diff_cali = calibrated_voltage - sample.volt_raw
+            sample.status_cali = True
+            sample.cali_id = self.calibration.calibration_id
         self.calibration_status = "active"
         self.last_calibration_applied = True
 
@@ -223,29 +223,21 @@ class AdcNode:
             poll_interval=self.poll_interval,
         )
 
-        start = self._ros_time_from_anchor(
-            anchor_ros, anchor_ns, reading.started_ns
-        )
-        end = self._ros_time_from_anchor(
+        timestamp = self._ros_time_from_anchor(
             anchor_ros, anchor_ns, reading.completed_ns
-        )
-        midpoint = start + rospy.Duration.from_sec(
-            (reading.completed_ns - reading.started_ns) / 2e9
         )
 
         msg = AdcSample()
-        msg.header.seq = self.sample_sequence
-        msg.header.stamp = midpoint
-        msg.header.frame_id = self.frame_id
-        msg.channel = reading.channel
-        msg.raw = reading.raw
-        msg.voltage = reading.voltage
-        msg.gain_control_voltage = gain_control_voltage
-        msg.gain_control_voltage_valid = gain_control_valid
-        msg.conversion_start = start
-        msg.conversion_end = end
-        self.sample_sequence += 1
-        self.last_sample_stamp = midpoint
+        msg.serial_num = self.sample_sequence
+        msg.timestamp = timestamp
+        msg.device = self.frame_id
+        msg.channel_id = reading.channel
+        msg.adc_code = reading.raw
+        msg.volt_raw = reading.voltage
+        msg.dac_volt = gain_control_voltage if gain_control_valid else float("nan")
+        msg.status_dac_feedback = gain_control_valid
+        self.sample_sequence = (self.sample_sequence + 1) % (1 << 32)
+        self.last_sample_stamp = timestamp
         self.last_conversion_ms = (
             reading.completed_ns - reading.started_ns
         ) / 1e6

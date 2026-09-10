@@ -153,11 +153,11 @@ class GainControlNode:
     def _ordered_raw_voltages(msg):
         by_channel = {}
         for sample in msg.samples:
-            channel = int(sample.channel)
+            channel = int(sample.channel_id)
             if channel in by_channel:
                 raise ValueError("ADC batch contains a duplicate channel")
-            by_channel[channel] = (MAX_VOLTAGE_V if sample.raw == MAX_RAW
-                                   else float(sample.voltage))
+            by_channel[channel] = (MAX_VOLTAGE_V if sample.adc_code == MAX_RAW
+                                   else float(sample.volt_raw))
         if set(by_channel) != {0, 1, 2}:
             raise ValueError("gain control requires one ADC0, ADC1, and ADC2 sample")
         return [by_channel[channel] for channel in range(3)]
@@ -233,8 +233,8 @@ class GainControlNode:
         except ValueError as exc:
             self._record_error(exc)
             # A malformed batch must not hide an independently observed overrange.
-            observed = [MAX_VOLTAGE_V if s.raw == MAX_RAW else float(s.voltage)
-                        for s in msg.samples if s.channel in (0, 1, 2)]
+            observed = [MAX_VOLTAGE_V if s.adc_code == MAX_RAW else float(s.volt_raw)
+                        for s in msg.samples if s.channel_id in (0, 1, 2)]
             high = [v for v in observed if math.isfinite(v) and v >= self.controller.safety_limit_v]
             raw_voltages = [max(high) if high else float("nan"), float("nan"), float("nan")]
 
@@ -247,18 +247,18 @@ class GainControlNode:
                         msg.header.stamp > rospy.Time.now())
                 ros_now = rospy.Time.now()
                 for sample in msg.samples:
-                    if (sample.header.stamp <= self.last_sample_stamp or
-                            sample.header.stamp > ros_now or
-                            (ros_now - sample.header.stamp).to_sec() > self.adc_timeout):
+                    if (sample.timestamp <= self.last_sample_stamp or
+                            sample.timestamp > ros_now or
+                            (ros_now - sample.timestamp).to_sec() > self.adc_timeout):
                         recovery_batch_valid = False
                 recovery_batch_valid = recovery_batch_valid and all(
                     math.isfinite(v) and v >= 0 for v in raw_voltages)
                 if self.current_dac_voltage is not None and (
                         self.controller.window_control or self.controller.fixed_auto_recovery):
                     recovery_batch_valid = recovery_batch_valid and all(
-                        sample.gain_control_voltage_valid and
-                        math.isfinite(sample.gain_control_voltage) and
-                        abs(sample.gain_control_voltage - self.current_dac_voltage) < 1e-5
+                        sample.status_dac_feedback and
+                        math.isfinite(sample.dac_volt) and
+                        abs(sample.dac_volt - self.current_dac_voltage) < 1e-5
                         for sample in msg.samples)
                 if not recovery_batch_valid:
                     self.controller.reset_counts()

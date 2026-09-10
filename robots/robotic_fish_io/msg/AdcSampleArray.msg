@@ -1,3 +1,3 @@
-# A convenience batch. The nested samples retain their individual timestamps.
+# A convenience batch. The nested samples retain their individual result-read timestamps.
 std_msgs/Header header
 robotic_fish_io/AdcSample[] samples
