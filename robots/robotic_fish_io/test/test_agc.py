@@ -102,6 +102,26 @@ class AgcControllerTests(unittest.TestCase):
 
 
 class GainControllerTests(unittest.TestCase):
+    def test_default_four_volt_safety_boundary_on_each_channel(self):
+        for channel in range(3):
+            with self.subTest(channel=channel):
+                controller = GainController(mode="off")
+                self.assertEqual(controller.safety_limit_v, 4.0)
+                self.assertEqual(controller.safety_recovery_v, 3.3)
+                self.assertFalse(controller.fixed_auto_recovery)
+                sample = [0.1] * 3
+                sample[channel] = 3.999875
+                self.assertIsNone(controller.observe(sample, 1.0, 1.0))
+                self.assertFalse(controller.safety_active)
+                sample[channel] = 4.0
+                self.assertEqual(controller.observe(sample, 1.0, 1.01), 0.9)
+                self.assertTrue(controller.safety_active)
+
+    def test_saturation_triggers_default_safety(self):
+        controller = GainController(mode="off")
+        self.assertEqual(controller.observe([4.095875, .1, .1], 1., 0.), .9)
+        self.assertTrue(controller.safety_active)
+
     def make_gain_controller(self, **overrides):
         parameters = {
             "mode": "fixed",

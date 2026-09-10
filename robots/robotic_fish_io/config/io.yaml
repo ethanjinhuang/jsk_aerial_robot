@@ -45,11 +45,25 @@ gain_control:
   start_voltage: 0.0
   fixed_ramp_step_v: 0.05
   fixed_ramp_interval_s: 0.10
-  adc_safety_limit_v: 3.50
+  adc_safety_limit_v: 4.00
   adc_safety_recovery_v: 3.30
   safety_step_v: 0.10
   safety_interval_s: 0.10
   recovery_settle_s: 0.20
+  # Opt-in: validate these provisional values on the actual acoustic setup first.
+  fixed_auto_recovery: false
+  # Explicit opt-in; high fraction must be chosen before enabling.
+  window_control: false
+  window_s: 2.0
+  window_mean_min_v: 2.0
+  window_peak_upper_v: 3.0
+  window_high_fraction: null
+  window_cooldown_s: 5.0
+  fixed_recovery_wait_s: 2.0
+  fixed_recovery_step_v: 0.01
+  fixed_recovery_interval_s: 0.5
+  fixed_recovery_max_adc_v: 1.0
+  recovery_sample_timeout_s: 0.2
   adc_timeout: 1.0
   dac_channel: 1
   service_timeout: 1.0

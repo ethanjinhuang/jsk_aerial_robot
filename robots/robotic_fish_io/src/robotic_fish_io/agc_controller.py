@@ -3,6 +3,7 @@
 import math
 
 from robotic_fish_io import dac_driver
+from robotic_fish_io.adc_limits import MAX_VOLTAGE_V
 
 
 class GainController:
@@ -21,7 +22,7 @@ class GainController:
         consecutive_samples=3,
         dac_min_v=0.0,
         dac_max_v=5.0,
-        safety_limit_v=3.50,
+        safety_limit_v=4.00,
         safety_recovery_v=3.30,
         safety_step_v=0.10,
         safety_interval_s=0.10,
@@ -29,6 +30,18 @@ class GainController:
         fixed_ramp_interval_s=0.10,
         recovery_settle_s=0.20,
         max_normal_step_v=0.10,
+        fixed_auto_recovery=False,
+        fixed_recovery_wait_s=2.0,
+        fixed_recovery_step_v=0.01,
+        fixed_recovery_interval_s=0.5,
+        fixed_recovery_max_adc_v=1.0,
+        recovery_sample_timeout_s=0.2,
+        window_control=False,
+        window_s=2.0,
+        window_mean_min_v=2.0,
+        window_peak_upper_v=3.0,
+        window_high_fraction=None,
+        window_cooldown_s=5.0,
     ):
         self.mode = str(mode).strip().lower()
         if self.mode not in self.MODES:
@@ -77,9 +90,9 @@ class GainController:
         self.safety_recovery_v = self._finite(
             safety_recovery_v, "safety_recovery_v"
         )
-        if not 0.0 <= self.safety_recovery_v < self.safety_limit_v <= 4.096:
+        if not 0.0 <= self.safety_recovery_v < self.safety_limit_v <= MAX_VOLTAGE_V:
             raise ValueError(
-                "ADC safety thresholds must satisfy 0 <= recovery < limit <= 4.096 V"
+                "ADC safety thresholds must satisfy 0 <= recovery < limit <= 4.095875 V"
             )
         if self.target_max_v >= self.safety_limit_v:
             raise ValueError("ADC target maximum must be below the safety limit")
@@ -94,6 +107,24 @@ class GainController:
             raise ValueError("consecutive_samples must be between 1 and 1000")
         self.consecutive_samples = consecutive
 
+        if not isinstance(fixed_auto_recovery, bool):
+            raise ValueError("fixed_auto_recovery must be boolean")
+        self.fixed_auto_recovery = fixed_auto_recovery
+        self.fixed_recovery_wait_s = self._interval(fixed_recovery_wait_s, "fixed_recovery_wait_s")
+        self.fixed_recovery_interval_s = self._interval(fixed_recovery_interval_s, "fixed_recovery_interval_s")
+        self.recovery_sample_timeout_s = self._interval(recovery_sample_timeout_s, "recovery_sample_timeout_s")
+        self.fixed_recovery_step_v = self._positive_dac_step(fixed_recovery_step_v, "fixed_recovery_step_v")
+        self.fixed_recovery_max_adc_v = self._finite(fixed_recovery_max_adc_v, "fixed_recovery_max_adc_v")
+        if not 0 < self.fixed_recovery_max_adc_v < self.safety_recovery_v:
+            raise ValueError("fixed recovery ADC limit must be positive and below safety recovery")
+        if self.fixed_recovery_step_v > self.max_normal_step_v:
+            raise ValueError("fixed recovery step exceeds max_normal_step_v")
+        if self.fixed_recovery_step_v / self.fixed_recovery_interval_s >= self.safety_step_v / self.safety_interval_s:
+            raise ValueError("fixed recovery must be slower than safety reduction")
+        self.recovery_since_s = None
+        self.recovery_last_sample_s = None
+        self.recovery_last_step_s = float("-inf")
+
         self.below_count = 0
         self.above_count = 0
         self.last_adjustment_s = float("-inf")
@@ -103,6 +134,25 @@ class GainController:
         self.safety_active = False
         self.fixed_limited = False
         self.settle_until_s = float("-inf")
+        if not isinstance(window_control, bool):
+            raise ValueError("window_control must be boolean")
+        self.window_control = window_control
+        self.window_s = self._interval(window_s, "window_s")
+        self.window_cooldown_s = self._interval(window_cooldown_s, "window_cooldown_s")
+        self.window_mean_min_v = self._finite(window_mean_min_v, "window_mean_min_v")
+        self.window_peak_upper_v = self._finite(window_peak_upper_v, "window_peak_upper_v")
+        if not 0 <= self.window_mean_min_v < self.window_peak_upper_v < self.safety_limit_v:
+            raise ValueError("window limits must satisfy 0 <= mean < peak < safety")
+        self.window_high_fraction = None
+        if window_high_fraction is not None:
+            self.window_high_fraction = self._finite(window_high_fraction, "window_high_fraction")
+            if not 0 <= self.window_high_fraction < 1:
+                raise ValueError("window_high_fraction must be in [0, 1)")
+        if window_control and self.window_high_fraction is None:
+            raise ValueError("Explicit window_high_fraction required to enable window control")
+        self.window_samples = []
+        self.window_dac = None
+        self.window_last_over_s = None
 
     @staticmethod
     def _finite(value, name):
@@ -146,6 +196,79 @@ class GainController:
     def reset_counts(self):
         self.below_count = 0
         self.above_count = 0
+        self.reset_recovery()
+
+    def reset_recovery(self):
+        """Require a fresh continuous stable interval after errors or mode changes."""
+        self.recovery_since_s = None
+        self.recovery_last_sample_s = None
+        self.window_samples = []
+        self.window_dac = None
+
+    def _window_decision(self, values, current, now):
+        if self.window_last_over_s is None:
+            self.window_last_over_s = now
+        history = self.window_samples
+        if (self.window_dac is None or abs(current - self.window_dac) > 1e-5 or
+                (history and (now <= history[-1][0] or
+                 now - history[-1][0] > self.recovery_sample_timeout_s))):
+            history.clear()
+        self.window_dac = current
+        history.append((now, values[1], values[2]))
+        while len(history) > 1 and history[1][0] <= now - self.window_s:
+            history.pop(0)
+        self.last_action = "window_waiting"
+        if now - history[0][0] < self.window_s:
+            return None
+        mean = max(sum(row[ch] for row in history) / len(history) for ch in (1, 2))
+        high_fraction = sum(max(row[1:]) > self.window_peak_upper_v for row in history) / len(history)
+        peak = max(max(row[1:]) for row in history)
+        if high_fraction > self.window_high_fraction:
+            direction = -1
+        elif peak > self.window_peak_upper_v:
+            self.last_action = "window_peak_hold"
+            return None
+        elif mean < self.window_mean_min_v and now - self.window_last_over_s >= self.window_cooldown_s:
+            direction = 1
+        else:
+            self.last_action = "window_holding"
+            return None
+        if now - self.last_adjustment_s < self.interval_s:
+            return None
+        target = self._target(current + direction * self.step_v)
+        self.reset_counts()
+        self.last_adjustment_s = now
+        self.last_action = "window_increase" if direction > 0 else "window_decrease"
+        return target if target != current else None
+
+    def _fixed_recovery(self, maximum, current, now):
+        if not self.fixed_auto_recovery:
+            self.last_action = "fixed_limited"
+            return None
+        if current >= self.fixed_target_v - 0.005:
+            self.reset_recovery()
+            self.last_action = "fixed_recovery_holding"
+            return None
+        previous = self.recovery_last_sample_s
+        if previous is None or now <= previous or now - previous > self.recovery_sample_timeout_s:
+            self.recovery_since_s = None
+        self.recovery_last_sample_s = now
+        if maximum > self.fixed_recovery_max_adc_v:
+            self.recovery_since_s = None
+            self.last_action = "fixed_recovery_holding"
+            return None
+        if self.recovery_since_s is None:
+            self.recovery_since_s = now
+        if now - self.recovery_since_s < self.fixed_recovery_wait_s:
+            self.last_action = "fixed_recovery_waiting"
+            return None
+        if now - self.recovery_last_step_s < self.fixed_recovery_interval_s:
+            self.last_action = "fixed_recovery_waiting"
+            return None
+        self.recovery_last_step_s = now
+        self.reset_recovery()
+        self.last_action = "fixed_recovering"
+        return self._target(min(self.fixed_target_v, current + self.fixed_recovery_step_v))
 
     def reset_safety(self):
         """Clear the fixed-mode safety latch; an active overrange remains active."""
@@ -167,6 +290,7 @@ class GainController:
 
     def _safety_decision(self, maximum, current, now):
         if maximum >= self.safety_limit_v:
+            self.window_last_over_s = now
             if not self.safety_active:
                 self.last_safety_adjustment_s = float("-inf")
             self.safety_active = True
@@ -202,23 +326,40 @@ class GainController:
             self.fixed_limited = True
         return True, target
 
-    def observe(self, raw_voltages, current_dac_v, now_s):
+    def observe(self, raw_voltages, current_dac_v, now_s, data_valid=True):
+        try:
+            return self._observe(raw_voltages, current_dac_v, now_s, data_valid)
+        except (ValueError, TypeError, OverflowError):
+            self.reset_counts()
+            raise
+
+    def _observe(self, raw_voltages, current_dac_v, now_s, data_valid=True):
         """Return the next DAC voltage, or ``None`` when no change is due."""
         if not isinstance(raw_voltages, (list, tuple)) or len(raw_voltages) != 3:
             self.reset_counts()
             raise ValueError("gain control requires ADC0, ADC1, and ADC2")
-        values = [
-            self._finite(value, "ADC{} voltage".format(channel))
-            for channel, value in enumerate(raw_voltages)
-        ]
+        values = []
+        for value in raw_voltages:
+            try:
+                values.append(self._finite(value, "ADC voltage"))
+            except ValueError:
+                values.append(float("nan"))
         current = self._finite(current_dac_v, "current DAC voltage")
         now = self._finite(now_s, "monotonic time")
         if not self.dac_min_v <= current <= self.dac_max_v:
             self.reset_counts()
             raise ValueError("Current DAC voltage is outside configured limits")
-
-        maximum = max(values)
+        valid_values = [v for v in values if math.isfinite(v) and v >= 0]
+        maximum = max(valid_values, default=float("nan"))
         self.current_max_raw_v = maximum
+        if maximum >= self.safety_limit_v:
+            return self._safety_decision(maximum, current, now)[1]
+        if len(valid_values) != 3 or not data_valid:
+            self.reset_counts()
+            self.last_action = "invalid_adc"
+            if len(valid_values) != 3:
+                raise ValueError("ADC voltages must be finite and nonnegative")
+            return None
         handled, target = self._safety_decision(maximum, current, now)
         if handled:
             return target
@@ -229,10 +370,9 @@ class GainController:
             return None
 
         if self.mode == "fixed":
-            self.reset_counts()
+            self.below_count = self.above_count = 0
             if self.fixed_limited:
-                self.last_action = "fixed_limited"
-                return None
+                return self._fixed_recovery(maximum, current, now)
             difference = self.fixed_target_v - current
             if abs(difference) < 0.005:
                 self.last_action = "fixed_holding"
@@ -252,6 +392,8 @@ class GainController:
             self.reset_counts()
             self.last_action = "settling"
             return None
+        if self.window_control:
+            return self._window_decision(values, current, now)
         if maximum < self.target_min_v:
             self.below_count += 1
             self.above_count = 0

@@ -11,6 +11,7 @@ from std_msgs.msg import Float32
 from std_srvs.srv import SetBool, SetBoolResponse, Trigger, TriggerResponse
 
 from robotic_fish_io import dac_driver
+from robotic_fish_io.adc_limits import MAX_RAW, MAX_VOLTAGE_V
 from robotic_fish_io.agc_controller import GainController
 from robotic_fish_io.msg import AdcSampleArray, GainControlState
 from robotic_fish_io.srv import SetDacVoltage
@@ -58,7 +59,7 @@ class GainControlNode:
             consecutive_samples=self._param("consecutive_samples", 3),
             dac_min_v=self._param("dac_min_v", 0.0),
             dac_max_v=self._param("dac_max_v", 5.0),
-            safety_limit_v=self._param("adc_safety_limit_v", 3.50),
+            safety_limit_v=self._param("adc_safety_limit_v", 4.00),
             safety_recovery_v=self._param("adc_safety_recovery_v", 3.30),
             safety_step_v=self._param("safety_step_v", 0.10),
             safety_interval_s=self._param("safety_interval_s", 0.10),
@@ -66,6 +67,18 @@ class GainControlNode:
             fixed_ramp_interval_s=self._param("fixed_ramp_interval_s", 0.10),
             recovery_settle_s=self._param("recovery_settle_s", 0.20),
             max_normal_step_v=self._param("max_normal_step_v", 0.10),
+            fixed_auto_recovery=self._param("fixed_auto_recovery", False),
+            fixed_recovery_wait_s=self._param("fixed_recovery_wait_s", 2.0),
+            fixed_recovery_step_v=self._param("fixed_recovery_step_v", 0.01),
+            fixed_recovery_interval_s=self._param("fixed_recovery_interval_s", 0.5),
+            fixed_recovery_max_adc_v=self._param("fixed_recovery_max_adc_v", 1.0),
+            recovery_sample_timeout_s=self._param("recovery_sample_timeout_s", 0.2),
+            window_control=self._param("window_control", False),
+            window_s=self._param("window_s", 2.0),
+            window_mean_min_v=self._param("window_mean_min_v", 2.0),
+            window_peak_upper_v=self._param("window_peak_upper_v", 3.0),
+            window_high_fraction=self._param("window_high_fraction", None),
+            window_cooldown_s=self._param("window_cooldown_s", 5.0),
         )
         dac_driver.validate_channel(self.dac_channel)
         if not math.isfinite(self.service_timeout) or self.service_timeout <= 0.0:
@@ -81,6 +94,7 @@ class GainControlNode:
         self.commanded_dac_voltage = None
         self.last_adc_monotonic_s = None
         self.last_sample_stamp = rospy.Time(0)
+        self.latest_batch_valid = False
         self.adjustments = 0
         self.error_count = 0
         self.last_error = ""
@@ -108,6 +122,8 @@ class GainControlNode:
             rospy.Duration(1.0), self._diagnostic_callback
         )
         rospy.loginfo("Gain control started in '%s' mode", self.mode)
+        rospy.loginfo("Raw ADC protection: trigger %.6f V, release %.6f V",
+                      self.controller.safety_limit_v, self.controller.safety_recovery_v)
 
     @staticmethod
     def _legacy_param(name, default):
@@ -140,7 +156,8 @@ class GainControlNode:
             channel = int(sample.channel)
             if channel in by_channel:
                 raise ValueError("ADC batch contains a duplicate channel")
-            by_channel[channel] = float(sample.voltage)
+            by_channel[channel] = (MAX_VOLTAGE_V if sample.raw == MAX_RAW
+                                   else float(sample.voltage))
         if set(by_channel) != {0, 1, 2}:
             raise ValueError("gain control requires one ADC0, ADC1, and ADC2 sample")
         return [by_channel[channel] for channel in range(3)]
@@ -148,12 +165,19 @@ class GainControlNode:
     def _dac_state_callback(self, msg):
         voltage = float(msg.data)
         if not math.isfinite(voltage):
+            with self.lock:
+                self.controller.reset_counts()
+                self.current_dac_voltage = None
             rospy.logwarn_throttle(5.0, "Ignoring non-finite DAC state")
             return
         if not self.controller.dac_min_v <= voltage <= self.controller.dac_max_v:
+            with self.lock:
+                self.current_dac_voltage = None
             self._record_error("DAC state is outside configured limits")
             return
         with self.lock:
+            if self.current_dac_voltage is None or abs(voltage - self.current_dac_voltage) > 1e-5:
+                self.controller.reset_recovery()
             self.current_dac_voltage = voltage
 
     def _enable_callback(self, request):
@@ -208,19 +232,50 @@ class GainControlNode:
             raw_voltages = self._ordered_raw_voltages(msg)
         except ValueError as exc:
             self._record_error(exc)
-            self._publish_state()
-            return
+            # A malformed batch must not hide an independently observed overrange.
+            observed = [MAX_VOLTAGE_V if s.raw == MAX_RAW else float(s.voltage)
+                        for s in msg.samples if s.channel in (0, 1, 2)]
+            high = [v for v in observed if math.isfinite(v) and v >= self.controller.safety_limit_v]
+            raw_voltages = [max(high) if high else float("nan"), float("nan"), float("nan")]
 
-        now = time.monotonic()
         with self.command_lock:
+            now = time.monotonic()
             with self.lock:
-                self.last_sample_stamp = msg.header.stamp
-                self.last_adc_monotonic_s = now
+                # Stale/repeated batches cannot accumulate recovery dwell time.
+                recovery_batch_valid = not (msg.header.stamp <= self.last_sample_stamp or
+                        (rospy.Time.now() - msg.header.stamp).to_sec() > self.adc_timeout or
+                        msg.header.stamp > rospy.Time.now())
+                ros_now = rospy.Time.now()
+                for sample in msg.samples:
+                    if (sample.header.stamp <= self.last_sample_stamp or
+                            sample.header.stamp > ros_now or
+                            (ros_now - sample.header.stamp).to_sec() > self.adc_timeout):
+                        recovery_batch_valid = False
+                recovery_batch_valid = recovery_batch_valid and all(
+                    math.isfinite(v) and v >= 0 for v in raw_voltages)
+                if self.current_dac_voltage is not None and (
+                        self.controller.window_control or self.controller.fixed_auto_recovery):
+                    recovery_batch_valid = recovery_batch_valid and all(
+                        sample.gain_control_voltage_valid and
+                        math.isfinite(sample.gain_control_voltage) and
+                        abs(sample.gain_control_voltage - self.current_dac_voltage) < 1e-5
+                        for sample in msg.samples)
+                if not recovery_batch_valid:
+                    self.controller.reset_counts()
+                    self.last_error = "Invalid or stale ADC batch; normal control blocked"
+                else:
+                    self.last_sample_stamp = msg.header.stamp
+                    self.last_adc_monotonic_s = now
+                self.latest_batch_valid = recovery_batch_valid
                 current = self.current_dac_voltage
                 mode = self.controller.mode
 
             if current is None:
-                maximum = max(raw_voltages)
+                maximum = max((v for v in raw_voltages if math.isfinite(v)), default=float("nan"))
+                if not recovery_batch_valid and not maximum >= self.controller.safety_limit_v:
+                    self._record_error("Invalid or stale ADC; initialization blocked")
+                    self._publish_state()
+                    return
                 # Off mode normally observes external DAC commands without taking
                 # ownership. An ADC overrange is the exception: command the known
                 # safe DAC minimum even when no prior DAC state was received.
@@ -251,12 +306,15 @@ class GainControlNode:
                         self.controller.last_action = "adc_overrange_at_dac_min"
                     else:
                         self.controller.last_action = "initialized_dac"
-                    self.last_error = ""
+                    if recovery_batch_valid:
+                        self.last_error = ""
                 self._publish_state()
                 return
 
             try:
-                target = self.controller.observe(raw_voltages, current, now)
+                with self.lock:
+                    target = self.controller.observe(raw_voltages, current, now,
+                                                     data_valid=recovery_batch_valid)
             except ValueError as exc:
                 self._record_error(exc)
                 self._publish_state()
@@ -273,7 +331,8 @@ class GainControlNode:
                     self.current_dac_voltage = applied
                     self.commanded_dac_voltage = target
                     self.adjustments += 1
-                    self.last_error = ""
+                    if recovery_batch_valid:
+                        self.last_error = ""
                 rospy.loginfo(
                     "Gain control %s: DAC %.2f V, raw ADC max %.6f V",
                     self.controller.last_action,
@@ -282,12 +341,13 @@ class GainControlNode:
                 )
             else:
                 with self.lock:
-                    self.last_error = ""
+                    if recovery_batch_valid:
+                        self.last_error = ""
             self._publish_state()
 
     def _adc_is_valid(self):
         return (
-            self.last_adc_monotonic_s is not None
+            self.latest_batch_valid and self.last_adc_monotonic_s is not None
             and time.monotonic() - self.last_adc_monotonic_s <= self.adc_timeout
         )
 

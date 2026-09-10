@@ -1,5 +1,53 @@
 # robotic_fish_io
 
+## Safety and lateral-window update (2026-09-08)
+
+- Both launch entry points now default to a **4.00 V raw-ADC protection trigger**;
+  release remains 3.30 V. Explicit launch arguments override YAML for the parameters
+  forwarded by `sensor_io.launch`. The startup log prints the effective thresholds.
+- Any finite nonnegative channel at/above the trigger still causes protection when
+  another channel is invalid or missing. Raw code 32767 is treated as saturation,
+  even if the accompanying voltage is inconsistent. Thresholds above 4.095875 V
+  are rejected. Saturation means the true peak is unknown, not exactly 4.095875 V.
+- Stale, repeated, future, or invalid batches cannot increase gain or release
+  protection. Nested sample timestamps are checked too; diagnostic validity only
+  reports accepted fresh batches. Such batches may still trigger protective reduction.
+- DAC service requests must address the configured common-gain output channel.
+  All three ADC channels share this gain. Failed serial commands publish an invalid
+  (NaN) DAC state; consumers clear their stored validity instead of retaining it.
+
+### Optional ADC1/ADC2 window control
+
+This is a separate **closed_loop-only opt-in**, not a change to fixed-mode behavior.
+The shipped `window_control: false` and `fixed_auto_recovery: false` remain unchanged.
+To enable later, select `gain_mode:=closed_loop`, set `window_control: true`, and
+explicitly choose `window_high_fraction` in YAML; `null` is deliberately rejected
+when enabling. No allowable fraction has yet been established by bench validation.
+
+| Parameter under `gain_control` | Default | Definition |
+| --- | --- | --- |
+| `window_s` | 2.0 s | Continuous same-DAC observation window |
+| `window_mean_min_v` | 2.0 V | Lower target for max(mean ADC1, mean ADC2) |
+| `window_peak_upper_v` | 3.0 V | Lateral peak regulation boundary, not safety trigger |
+| `window_high_fraction` | null | Allowed fraction of groups with either ADC1 or ADC2 > boundary; explicitly required |
+| `window_cooldown_s` | 5.0 s | Minimum elapsed time since observed overrange/start of window monitoring before increases |
+
+Decision order: three-channel fast safety first; then, for a complete window,
+decrease if the high-group fraction exceeds the configured allowance; otherwise
+hold if any lateral peak exceeds 3 V; otherwise increase if the stronger lateral
+mean is below 2 V and cooldown has elapsed. ADC0 does not set the normal target,
+but still triggers safety. Normal steps use `step_v` and `interval_s`.
+
+Each adjustment, invalid sample, gap over `recovery_sample_timeout_s`, or DAC
+change requires a fresh window. Nested DAC metadata must match the current DAC
+for window control/automatic recovery. Means and fractions are sample-weighted;
+one sample at/before the window's left edge is retained for full time coverage.
+Both startup values and peak allowances require real acoustic bench validation.
+No software rule guarantees absence of transient saturation.
+
+Tests include isolated node-method doubles; these are not a substitute for catkin
+build, ROS transport integration, I2C/serial fault injection, or hardware tests.
+
 `robotic_fish_io` is the ROS 1 hardware-interface package for the robotic fish acoustic acquisition system. It provides:
 
 - timestamped acquisition of ADC0, ADC1, and ADC2 through an ADS1115;
@@ -104,7 +152,7 @@ Use `sensor_io.launch` when spinal is not needed. Otherwise, an unavailable embe
 | `agc_target_min_v` | `2.5` | Lower raw-ADC target in closed-loop mode |
 | `agc_target_max_v` | `3.0` | Upper raw-ADC target in closed-loop mode |
 | `agc_step_v` | `0.01` | Normal closed-loop DAC adjustment step |
-| `adc_safety_limit_v` | `3.50` | Raw-ADC software safety threshold |
+| `adc_safety_limit_v` | `4.00` | Raw-ADC software safety threshold |
 | `enable_agc` | `false` | Deprecated compatibility argument; `true` selects closed-loop mode |
 
 New launch commands should use `gain_mode`. Do not combine `enable_agc:=true` with fixed mode.
@@ -275,19 +323,23 @@ Default thresholds:
 
 | Parameter | Default |
 | --- | ---: |
-| Trigger threshold `adc_safety_limit_v` | `3.50 V` |
+| Trigger threshold `adc_safety_limit_v` | `4.00 V` |
 | Recovery threshold `adc_safety_recovery_v` | `3.30 V` |
 | Safety reduction step `safety_step_v` | `0.10 V` |
 | Safety adjustment interval `safety_interval_s` | `0.10 s` |
 
-When any raw ADC channel reaches or exceeds 3.50 V:
+This is a software trigger, not a hardware clamp. The current ADS1115 range is
+4.096 V, leaving only 96 mV headroom; a transient can still saturate before the
+gain is reduced. The protection release threshold remains 3.30 V.
+
+When any raw ADC channel reaches or exceeds 4.00 V:
 
 1. normal consecutive-sample counting and the normal AGC interval are bypassed;
 2. the DAC is reduced by 0.10 V every 0.10 seconds;
 3. reduction continues until the maximum raw ADC voltage is at or below 3.30 V;
 4. every command remains clamped to the 0–5 V DAC range.
 
-After an overrange in fixed mode, the controller enters `fixed_limited` and does not automatically ramp back to the original fixed target. Reset the latch only after the cause of the overrange has been checked:
+By default, after an overrange in fixed mode, the controller enters `fixed_limited` and does not automatically ramp back to the original fixed target. Reset the latch only after the cause of the overrange has been checked:
 
 ```bash
 rosservice call /robotic_fish/gain_control/reset_safety
@@ -520,6 +572,47 @@ No complete ADC sample group has arrived within `adc_timeout`. The controller wi
 
 ### 11.5 `fixed_limited`
 
+#### Optional slow automatic recovery (fixed mode only)
+
+Set `gain_control/fixed_auto_recovery: true` in the YAML loaded by the gain-control
+node, then restart that node. Parameters are read at startup, not dynamically.
+The shipped default remains `false`; changing the code alone does not enable
+automatic recovery or modify the physical DAC.
+
+Initial, **not hardware-validated** settings:
+
+| Parameter under `gain_control` | Default | Meaning |
+| --- | --- | --- |
+| `fixed_recovery_wait_s` | 2.0 | Continuous qualifying input before recovery |
+| `fixed_recovery_max_adc_v` | 1.0 | Maximum of all three raw ADC voltages must stay at or below this value |
+| `fixed_recovery_step_v` | 0.01 | DAC increase per recovery step, V |
+| `fixed_recovery_interval_s` | 0.5 | Minimum interval between increases, s |
+| `recovery_sample_timeout_s` | 0.2 | Maximum gap between qualifying observations, s |
+
+Safety reduction retains priority and the 4.00/3.30 V trigger/release
+thresholds. After safety releases, stable here means **continuous valid input
+below the recovery ADC ceiling**, not a variance or acoustic-source detector.
+Recovery increases no higher than the configured fixed target (itself bounded
+by the DAC limits). Above the recovery ADC ceiling it holds and restarts the
+dwell period; it does not force the ADC toward the closed-loop target range.
+Reaching the fixed target does not clear the recovery latch or switch back to
+fast normal ramping. Another overrange immediately restarts safety reduction.
+Invalid ADC, errors, interrupted samples, or a mode change reset the dwell period.
+Every recovery step and observed DAC change also resets the dwell period, so the
+next increase needs a new full qualifying interval, not just the 0.5 s rate limit.
+Repeated/stale/future-stamped ROS batches cannot accumulate recovery time.
+
+States: `fixed_recovery_waiting` (dwell/step interval), `fixed_recovering`
+(requesting a slow increase), `fixed_recovery_holding` (signal ceiling or fixed
+target reached). These use the existing state string; the message schema is unchanged.
+
+There is **no sound-source-on or fish-handling sensor gate** in this implementation.
+Low input with the source off may also qualify. Leave recovery disabled during
+handling/source-off operation, and validate the gain ceiling and recovery
+settings in a controlled bench setup before enabling it on the robot. Manual
+`reset_safety` still clears the latch and restores the original normal ramp;
+it is different from slow automatic recovery.
+
 Fixed mode previously triggered ADC safety protection. After confirming that the signal is safe, reset the latch:
 
 ```bash
@@ -556,7 +649,7 @@ The current tests cover:
 - independent three-channel calibration and whole-group fallback;
 - fixed-voltage ramping;
 - closed-loop counters, step size, interval, and DAC bounds;
-- 3.50/3.30 V safety triggering and recovery;
+- 4.00/3.30 V default safety triggering and recovery, plus explicit legacy-threshold tests;
 - fixed-mode safety latching;
 - overrange behavior at the minimum DAC voltage.
 

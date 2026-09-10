@@ -95,6 +95,7 @@ class AdcNode:
     def _gain_control_callback(self, msg):
         voltage = float(msg.data)
         if not math.isfinite(voltage):
+            self.gain_control_state = (False, 0.0)
             rospy.logwarn_throttle(
                 5.0, "Ignoring non-finite DAC gain-control voltage"
             )

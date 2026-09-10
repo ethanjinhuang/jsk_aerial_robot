@@ -109,8 +109,10 @@ class DacNode:
     def _apply_voltage_locked(self, voltage, channel, mark_command=True):
         normalized = dac_driver.normalize_voltage(voltage)
         dac_driver.validate_channel(channel)
-        self._open_locked()
+        if channel != self.default_channel:
+            raise ValueError("Only the configured common-gain DAC channel is allowed")
         try:
+            self._open_locked()
             applied, _, _ = dac_driver.set_voltage(
                 self.dac,
                 normalized,
@@ -118,6 +120,8 @@ class DacNode:
                 verify_echo=self.verify_echo,
             )
         except (OSError, serial.SerialException):
+            self.applied_voltage = None
+            self.state_pub.publish(Float32(data=float("nan")))
             self._close_locked()
             raise
 

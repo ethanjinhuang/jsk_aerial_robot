@@ -5,6 +5,7 @@ import math
 import time
 
 from smbus2 import SMBus
+from robotic_fish_io.adc_limits import FULL_SCALE_V, LSB_V
 
 
 DEFAULT_BUS = 0
@@ -34,8 +35,6 @@ DATA_RATE_BITS = {
     475: 0b110,
     860: 0b111,
 }
-FULL_SCALE_V = 4.096
-LSB_V = FULL_SCALE_V / 32768.0
 
 AdcReading = namedtuple(
     "AdcReading", ("channel", "raw", "voltage", "started_ns", "completed_ns")
