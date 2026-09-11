@@ -8,7 +8,8 @@ import time
 import rospkg
 import rospy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from std_msgs.msg import Float32
+from robotic_fish_io.msg import DacState
+from robotic_fish_io.runtime_config import ConfigRecorder
 
 from robotic_fish_io.adc_calibration import AdcCalibration
 from robotic_fish_io import adc_driver
@@ -79,7 +80,7 @@ class AdcNode:
         self.gain_control_state = (False, 0.0)
         self.gain_control_sub = rospy.Subscriber(
             gain_control_topic,
-            Float32,
+            DacState,
             self._gain_control_callback,
             queue_size=10,
         )
@@ -91,10 +92,17 @@ class AdcNode:
         self.last_sample_stamp = rospy.Time(0)
         self.last_conversion_ms = 0.0
         self.last_diagnostic_ns = 0
+        self.config_recorder = ConfigRecorder("adc")
+        self.config_recorder.publish({name: getattr(self, name) for name in (
+            "bus_number", "address", "channels", "data_rate", "channel_rate", "timeout",
+            "poll_interval", "reconnect_interval", "frame_id", "publish_array",
+            "calibration_enabled", "calibration_required", "calibration_file")},
+            calibration=None if self.calibration is None else self.calibration.document,
+            topics=dict(sample=sample_topic, samples=samples_topic, dac_state=gain_control_topic))
 
     def _gain_control_callback(self, msg):
-        voltage = float(msg.data)
-        if not math.isfinite(voltage):
+        voltage = float(msg.dac_volt)
+        if not msg.status_dac_feedback or not math.isfinite(voltage):
             self.gain_control_state = (False, 0.0)
             rospy.logwarn_throttle(
                 5.0, "Ignoring non-finite DAC gain-control voltage"
@@ -337,8 +345,6 @@ class AdcNode:
 
             if self.publish_array:
                 batch = AdcSampleArray()
-                batch.header.stamp = rospy.Time.now()
-                batch.header.frame_id = self.frame_id
                 batch.samples = samples
                 self.samples_pub.publish(batch)
             self._publish_diagnostic()

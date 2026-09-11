@@ -27,7 +27,6 @@ dac:
   zero_on_shutdown: true
   command_timeout: 0.0
   reconnect_interval: 1.0
-  command_topic: /robotic_fish/dac/command
   state_topic: /robotic_fish/dac/state
   set_voltage_service: /robotic_fish/dac/set_voltage
 

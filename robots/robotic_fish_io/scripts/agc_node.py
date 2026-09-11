@@ -7,7 +7,8 @@ import time
 
 import rospy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from std_msgs.msg import Float32
+from robotic_fish_io.msg import DacState
+from robotic_fish_io.runtime_config import ConfigRecorder
 from std_srvs.srv import SetBool, SetBoolResponse, Trigger, TriggerResponse
 
 from robotic_fish_io import dac_driver
@@ -93,12 +94,15 @@ class GainControlNode:
         self.current_dac_voltage = None
         self.commanded_dac_voltage = None
         self.last_adc_monotonic_s = None
-        self.last_sample_stamp = rospy.Time(0)
+        self.last_sample_stamps = {}
+        self.last_state_key = None
         self.latest_batch_valid = False
         self.adjustments = 0
         self.error_count = 0
         self.last_error = ""
 
+        self.config_recorder = ConfigRecorder("gain_control")
+        self._publish_config()
         self.dac_client = rospy.ServiceProxy(self.dac_service_name, SetDacVoltage)
         self.state_pub = rospy.Publisher(
             self.state_topic, GainControlState, queue_size=10, latch=True
@@ -110,7 +114,7 @@ class GainControlNode:
             self.adc_topic, AdcSampleArray, self._adc_callback, queue_size=10
         )
         self.dac_state_sub = rospy.Subscriber(
-            self.dac_state_topic, Float32, self._dac_state_callback, queue_size=10
+            self.dac_state_topic, DacState, self._dac_state_callback, queue_size=10
         )
         self.enable_service = rospy.Service(
             self.enable_service_name, SetBool, self._enable_callback
@@ -121,6 +125,7 @@ class GainControlNode:
         self.diagnostic_timer = rospy.Timer(
             rospy.Duration(1.0), self._diagnostic_callback
         )
+        self._publish_state()
         rospy.loginfo("Gain control started in '%s' mode", self.mode)
         rospy.loginfo("Raw ADC protection: trigger %.6f V, release %.6f V",
                       self.controller.safety_limit_v, self.controller.safety_recovery_v)
@@ -163,22 +168,25 @@ class GainControlNode:
         return [by_channel[channel] for channel in range(3)]
 
     def _dac_state_callback(self, msg):
-        voltage = float(msg.data)
-        if not math.isfinite(voltage):
+        voltage = float(msg.dac_volt)
+        if not msg.status_dac_feedback or not math.isfinite(voltage):
             with self.lock:
                 self.controller.reset_counts()
                 self.current_dac_voltage = None
             rospy.logwarn_throttle(5.0, "Ignoring non-finite DAC state")
+            self._publish_state()
             return
         if not self.controller.dac_min_v <= voltage <= self.controller.dac_max_v:
             with self.lock:
                 self.current_dac_voltage = None
             self._record_error("DAC state is outside configured limits")
+            self._publish_state()
             return
         with self.lock:
             if self.current_dac_voltage is None or abs(voltage - self.current_dac_voltage) > 1e-5:
                 self.controller.reset_recovery()
             self.current_dac_voltage = voltage
+        self._publish_state()
 
     def _enable_callback(self, request):
         # Backward-compatible service: enabling selects closed-loop mode.
@@ -186,6 +194,7 @@ class GainControlNode:
             self.controller.set_mode("closed_loop" if request.data else "off")
             self.mode = self.controller.mode
             self.last_error = ""
+        self._publish_config()
         self._publish_state()
         return SetBoolResponse(True, "gain mode is {}".format(self.mode))
 
@@ -242,12 +251,10 @@ class GainControlNode:
             now = time.monotonic()
             with self.lock:
                 # Stale/repeated batches cannot accumulate recovery dwell time.
-                recovery_batch_valid = not (msg.header.stamp <= self.last_sample_stamp or
-                        (rospy.Time.now() - msg.header.stamp).to_sec() > self.adc_timeout or
-                        msg.header.stamp > rospy.Time.now())
+                recovery_batch_valid = True
                 ros_now = rospy.Time.now()
                 for sample in msg.samples:
-                    if (sample.timestamp <= self.last_sample_stamp or
+                    if (sample.timestamp <= self.last_sample_stamps.get(sample.channel_id, rospy.Time(0)) or
                             sample.timestamp > ros_now or
                             (ros_now - sample.timestamp).to_sec() > self.adc_timeout):
                         recovery_batch_valid = False
@@ -264,7 +271,7 @@ class GainControlNode:
                     self.controller.reset_counts()
                     self.last_error = "Invalid or stale ADC batch; normal control blocked"
                 else:
-                    self.last_sample_stamp = msg.header.stamp
+                    self.last_sample_stamps = {sample.channel_id: sample.timestamp for sample in msg.samples}
                     self.last_adc_monotonic_s = now
                 self.latest_batch_valid = recovery_batch_valid
                 current = self.current_dac_voltage
@@ -351,42 +358,50 @@ class GainControlNode:
             and time.monotonic() - self.last_adc_monotonic_s <= self.adc_timeout
         )
 
+    def _publish_config(self):
+        # Constructor attributes are the normalized, effective controller settings.
+        import inspect
+        settings = {name: getattr(self.controller, name) for name in
+                    inspect.signature(GainController.__init__).parameters if name != "self"}
+        settings.update(start_voltage=self.start_voltage, dac_channel=self.dac_channel,
+                        service_timeout=self.service_timeout, adc_timeout=self.adc_timeout,
+                        adc_topic=self.adc_topic, dac_state_topic=self.dac_state_topic,
+                        dac_service=self.dac_service_name)
+        self.config_recorder.publish(settings)
+
     def _state_message(self):
         msg = GainControlState()
-        msg.header.stamp = rospy.Time.now()
+        msg.timestamp = rospy.Time.now()
         msg.mode = self.controller.mode
-        msg.state = "adc_stale" if not self._adc_is_valid() else self.controller.last_action
-        msg.reason = self.last_error
-        msg.current_dac_voltage = (
-            float("nan") if self.current_dac_voltage is None else self.current_dac_voltage
-        )
-        msg.commanded_dac_voltage = (
-            float("nan")
-            if self.commanded_dac_voltage is None
-            else self.commanded_dac_voltage
-        )
-        msg.fixed_target_voltage = self.controller.fixed_target_v
-        msg.adc_max_raw_voltage = (
-            float("nan")
-            if self.controller.current_max_raw_v is None
-            else self.controller.current_max_raw_v
-        )
-        msg.target_min_voltage = self.controller.target_min_v
-        msg.target_max_voltage = self.controller.target_max_v
-        msg.adc_safety_limit_voltage = self.controller.safety_limit_v
-        msg.adc_safety_recovery_voltage = self.controller.safety_recovery_v
-        msg.safety_active = self.controller.safety_active
-        msg.adc_valid = self._adc_is_valid()
-        msg.dac_state_valid = self.current_dac_voltage is not None
-        msg.low_sample_count = self.controller.below_count
-        msg.high_sample_count = self.controller.above_count
-        msg.adjustment_count = self.adjustments
-        msg.error_count = self.error_count
+        # Priority: active protection > invalid/stale input > DAC unknown > error > action.
+        details = []
+        if not self._adc_is_valid():
+            details.append("ADC invalid or stale")
+        if self.current_dac_voltage is None:
+            details.append("DAC state unknown")
+        if self.last_error:
+            details.append(self.last_error)
+        if self.controller.safety_active:
+            msg.state = ("adc_overrange_at_dac_min" if self.controller.last_action ==
+                         "adc_overrange_at_dac_min" else "safety_active")
+        elif not self._adc_is_valid():
+            msg.state = "adc_stale"
+        elif self.current_dac_voltage is None:
+            msg.state = "waiting_for_dac_state"
+        elif self.last_error:
+            msg.state = "error"
+        else:
+            msg.state = self.controller.last_action
+        msg.log = "; ".join(details)
         return msg
 
     def _publish_state(self):
         with self.lock:
-            self.state_pub.publish(self._state_message())
+            msg = self._state_message()
+            key = (msg.mode, msg.state, msg.log)
+            if key != self.last_state_key:
+                self.state_pub.publish(msg)
+                self.last_state_key = key
 
     def _diagnostic_callback(self, _event):
         with self.lock:
@@ -394,31 +409,23 @@ class GainControlNode:
             status = DiagnosticStatus()
             status.name = "robotic_fish_io/gain_control"
             status.hardware_id = "adc-max-to-dac"
-            if self.last_error or msg.state == "adc_overrange_at_dac_min":
-                status.level = DiagnosticStatus.ERROR
-                status.message = self.last_error or msg.state
-            elif msg.safety_active or not msg.adc_valid or not msg.dac_state_valid:
-                status.level = DiagnosticStatus.WARN
-                status.message = msg.state
-            else:
-                status.level = DiagnosticStatus.OK
-                status.message = msg.state
-            status.values = [
-                KeyValue("mode", msg.mode),
-                KeyValue("state", msg.state),
-                KeyValue("adc_valid", str(msg.adc_valid)),
-                KeyValue("adc_max_raw_v", str(msg.adc_max_raw_voltage)),
-                KeyValue("dac_state_valid", str(msg.dac_state_valid)),
-                KeyValue("dac_voltage_v", str(msg.current_dac_voltage)),
-                KeyValue("safety_active", str(msg.safety_active)),
-                KeyValue("adjustments", str(msg.adjustment_count)),
-                KeyValue("errors", str(msg.error_count)),
-            ]
+            status.level = (DiagnosticStatus.ERROR if self.last_error or
+                msg.state == "adc_overrange_at_dac_min" else DiagnosticStatus.WARN if
+                self.controller.safety_active or not self._adc_is_valid() or
+                self.current_dac_voltage is None else DiagnosticStatus.OK)
+            status.message = msg.log or msg.state
+            status.values = [KeyValue(key, str(value)) for key, value in dict(
+                mode=msg.mode, state=msg.state, status_adc=self._adc_is_valid(),
+                adc_volt_raw_max=self.controller.current_max_raw_v,
+                status_dac_feedback=self.current_dac_voltage is not None,
+                dac_volt=self.current_dac_voltage, status_safety=self.controller.safety_active,
+                count_low=self.controller.below_count, count_high=self.controller.above_count,
+                count_adjustment=self.adjustments, count_error=self.error_count).items()]
             array = DiagnosticArray()
-            array.header.stamp = msg.header.stamp
+            array.header.stamp = msg.timestamp
             array.status = [status]
             self.diagnostic_pub.publish(array)
-            self.state_pub.publish(msg)
+            self._publish_state()
 
 
 # Preserve the old class name for code importing the ROS node directly.

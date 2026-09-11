@@ -1,3 +1,2 @@
-# A convenience batch. The nested samples retain their individual result-read timestamps.
-std_msgs/Header header
+# One sequential acquisition cycle; timing lives in each sample.
 robotic_fish_io/AdcSample[] samples

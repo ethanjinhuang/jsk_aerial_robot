@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Expose safe serial DAC control through a ROS service and command topic."""
+"""Expose safe serial DAC control through a ROS service and execution-result topic."""
 
 import threading
 import time
@@ -7,7 +7,8 @@ import time
 import rospy
 import serial
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from std_msgs.msg import Float32
+from robotic_fish_io.msg import DacState
+from robotic_fish_io.runtime_config import ConfigRecorder
 
 from robotic_fish_io import dac_driver
 from robotic_fish_io.srv import SetDacVoltage, SetDacVoltageResponse
@@ -34,9 +35,6 @@ class DacNode:
         self.reconnect_interval = float(
             rospy.get_param("~dac/reconnect_interval", 1.0)
         )
-        command_topic = rospy.get_param(
-            "~dac/command_topic", "/robotic_fish/dac/command"
-        )
         state_topic = rospy.get_param(
             "~dac/state_topic", "/robotic_fish/dac/state"
         )
@@ -60,13 +58,10 @@ class DacNode:
         self.last_error = "not connected"
 
         self.state_pub = rospy.Publisher(
-            state_topic, Float32, queue_size=10, latch=True
+            state_topic, DacState, queue_size=10, latch=True
         )
         self.diagnostic_pub = rospy.Publisher(
             "/diagnostics", DiagnosticArray, queue_size=10
-        )
-        self.command_sub = rospy.Subscriber(
-            command_topic, Float32, self._command_callback, queue_size=10
         )
         self.service = rospy.Service(
             service_name, SetDacVoltage, self._set_voltage_service
@@ -78,6 +73,11 @@ class DacNode:
             rospy.Duration(1.0), self._diagnostic_callback
         )
         rospy.on_shutdown(self._shutdown)
+        self.config_recorder = ConfigRecorder("dac")
+        self.config_recorder.publish({name: (float(getattr(self, name)) if name == "safe_voltage"
+            else getattr(self, name)) for name in ("port", "baud", "default_channel", "timeout",
+            "verify_echo", "safe_voltage", "zero_on_shutdown", "command_timeout", "reconnect_interval")},
+            topics=dict(state=state_topic, service=service_name))
 
         with self.lock:
             try:
@@ -107,21 +107,17 @@ class DacNode:
             self.dac = None
 
     def _apply_voltage_locked(self, voltage, channel, mark_command=True):
-        normalized = dac_driver.normalize_voltage(voltage)
-        dac_driver.validate_channel(channel)
-        if channel != self.default_channel:
-            raise ValueError("Only the configured common-gain DAC channel is allowed")
         try:
+            normalized = dac_driver.normalize_voltage(voltage)
+            dac_driver.validate_channel(channel)
+            if channel != self.default_channel:
+                raise ValueError("Only the configured common-gain DAC channel is allowed")
             self._open_locked()
             applied, _, _ = dac_driver.set_voltage(
-                self.dac,
-                normalized,
-                channel=channel,
-                verify_echo=self.verify_echo,
-            )
-        except (OSError, serial.SerialException):
+                self.dac, normalized, channel=channel, verify_echo=self.verify_echo)
+        except (ValueError, OSError, serial.SerialException) as exc:
             self.applied_voltage = None
-            self.state_pub.publish(Float32(data=float("nan")))
+            self._publish_result(voltage, float("nan"), False, str(exc))
             self._close_locked()
             raise
 
@@ -130,8 +126,17 @@ class DacNode:
         if mark_command:
             self.last_command_ns = time.monotonic_ns()
             self.watchdog_fired = False
-        self.state_pub.publish(Float32(data=self.applied_voltage))
+        self._publish_result(voltage, self.applied_voltage, True, "")
         return self.applied_voltage
+
+    def _publish_result(self, target, applied, valid, log):
+        msg = DacState()
+        msg.timestamp = rospy.Time.now()
+        msg.dac_volt_target = float(target)
+        msg.dac_volt = applied
+        msg.status_dac_feedback = valid
+        msg.log = log
+        self.state_pub.publish(msg)
 
     def _set_voltage(self, voltage, channel):
         with self.lock:
@@ -142,16 +147,13 @@ class DacNode:
                 self.error_count += 1
                 self.last_error = str(exc)
                 rospy.logerr_throttle(2.0, "DAC command failed: %s", exc)
-                return False, 0.0, str(exc)
+                return False, float("nan"), str(exc)
 
     def _set_voltage_service(self, request):
         success, applied, message = self._set_voltage(
             request.voltage, request.channel
         )
         return SetDacVoltageResponse(success, applied, message)
-
-    def _command_callback(self, msg):
-        self._set_voltage(msg.data, self.default_channel)
 
     def _watchdog_callback(self, _event):
         if self.command_timeout <= 0 or self.last_command_ns == 0:

@@ -43,7 +43,7 @@ class NodeSafetyTests(unittest.TestCase):
         n.controller = GainController(mode=mode, fixed_target_v=2., consecutive_samples=1)
         n.lock = threading.RLock()
         n.command_lock = threading.Lock()
-        n.last_sample_stamp = Stamp(0)
+        n.last_sample_stamps = {}
         n.last_adc_monotonic_s = None
         n.latest_batch_valid = False
         n.adc_timeout = 1.
@@ -59,7 +59,7 @@ class NodeSafetyTests(unittest.TestCase):
         return n
 
     def message(self, stamp=99.9, values=(.1, .1, .1)):
-        return SimpleNamespace(header=SimpleNamespace(stamp=Stamp(stamp)), samples=[
+        return SimpleNamespace(samples=[
             SimpleNamespace(channel_id=i, adc_code=int(v*8000) if math.isfinite(v) else 0,
                             volt_raw=v, timestamp=Stamp(stamp-.01),
                             dac_volt=1., status_dac_feedback=True)
@@ -87,7 +87,7 @@ class NodeSafetyTests(unittest.TestCase):
 
     def test_repeated_and_future_rejected(self):
         n = self.make_node()
-        n.last_sample_stamp = Stamp(99.9)
+        n.last_sample_stamps = {i: Stamp(99.9) for i in range(3)}
         for stamp in (99.9, 101.):
             n._adc_callback(self.message(stamp=stamp))
         self.assertEqual(n.calls, [])
@@ -115,13 +115,16 @@ class NodeSafetyTests(unittest.TestCase):
 
     def test_nonfinite_dac_invalidates_state(self):
         n = self.make_node()
-        n._dac_state_callback(SimpleNamespace(data=float('nan')))
+        n._dac_state_callback(SimpleNamespace(dac_volt=float('nan'), status_dac_feedback=False))
         self.assertIsNone(n.current_dac_voltage)
 
     def test_other_dac_channel_rejected_before_io(self):
         cls = node_class('dac_node.py', 'DacNode')
         n = cls.__new__(cls)
         n.default_channel = 1
+        n._publish_result = lambda *args: None
+        n._close_locked = lambda: None
+        n._apply_voltage_locked.__globals__["serial"] = __import__("serial")
         with self.assertRaises(ValueError):
             n._apply_voltage_locked(1., 2)
 
@@ -190,6 +193,121 @@ class AdcSchemaTests(unittest.TestCase):
         samples[1].volt_raw = 1.
         n._apply_calibration(samples)
         self.assertTrue(all(sample.status_cali for sample in samples))
+
+
+class CompactRecordingTests(unittest.TestCase):
+    make_node = NodeSafetyTests.make_node
+    message = NodeSafetyTests.message
+
+    def test_per_channel_clock_accepts_next_cycle_without_outer_header(self):
+        n = self.make_node('off')
+        first = self.message(stamp=99.7)
+        first.samples[0].timestamp = Stamp(99.5)
+        n._adc_callback(first)
+        second = self.message(stamp=99.9)
+        second.samples[0].timestamp = Stamp(99.6)
+        n._adc_callback(second)
+        self.assertTrue(n._adc_is_valid())
+        self.assertEqual(n.last_sample_stamps[0], Stamp(99.6))
+        n._adc_callback(second)
+        self.assertFalse(n._adc_is_valid())
+
+    def test_gain_state_deduplicates_and_reports_staleness_and_safety(self):
+        n = self.make_node('off')
+        del n._publish_state
+        n._state_message.__globals__['GainControlState'] = type('State', (), {
+            '__slots__': ('timestamp', 'mode', 'state', 'log')})
+        published = []
+        n.state_pub = SimpleNamespace(publish=published.append)
+        n.last_state_key = None
+        n._publish_state()
+        n._publish_state()
+        self.assertEqual(len(published), 1)
+        n._adc_callback(self.message())
+        self.assertEqual(published[-1].state, 'off')
+        n.last_adc_monotonic_s = time.monotonic() - 2
+        n._publish_state()
+        self.assertEqual(published[-1].state, 'adc_stale')
+        n.controller.safety_active = True
+        n._publish_state()
+        self.assertEqual(published[-1].state, 'safety_active')
+        self.assertIn('ADC invalid or stale', published[-1].log)
+
+    def test_config_contains_normalized_effective_controller_settings(self):
+        n = self.make_node()
+        n._publish_config.__globals__['GainController'] = GainController
+        for key, value in dict(start_voltage=0., dac_channel=1, service_timeout=1.,
+            adc_topic='/adc', dac_state_topic='/dac', dac_service_name='/set').items():
+            setattr(n, key, value)
+        records = []
+        n.config_recorder = SimpleNamespace(publish=records.append)
+        n._publish_config()
+        self.assertEqual(records[0]['safety_limit_v'], 4.)
+        self.assertIn('window_high_fraction', records[0])
+        self.assertIn('fixed_recovery_wait_s', records[0])
+        n.controller.set_mode('off')
+        n._publish_config()
+        self.assertEqual(records[-1]['mode'], 'off')
+
+    def test_dac_success_failure_and_rejection_each_publish_one_result(self):
+        from test_drivers import FakeDac
+        cls = node_class('dac_node.py', 'DacNode')
+        n = cls.__new__(cls)
+        ns = cls._apply_voltage_locked.__globals__
+        ns['serial'] = __import__('serial')
+        ns['DacState'] = type('Result', (), {'__slots__': (
+            'timestamp', 'dac_volt_target', 'dac_volt', 'status_dac_feedback', 'log')})
+        n.default_channel = 1
+        n.verify_echo = True
+        n.dac = FakeDac()
+        n._open_locked = lambda: None
+        n._close_locked = lambda: None
+        records = []
+        n.state_pub = SimpleNamespace(publish=records.append)
+        n._apply_voltage_locked(.85, 1)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[-1].dac_volt_target, .85)
+        self.assertEqual(records[-1].dac_volt, .85)
+        self.assertTrue(records[-1].status_dac_feedback)
+        n.dac = FakeDac(echo=b'wrong')
+        with self.assertRaises(OSError):
+            n._apply_voltage_locked(.9, 1)
+        self.assertEqual(len(records), 2)
+        self.assertFalse(records[-1].status_dac_feedback)
+        self.assertTrue(math.isnan(records[-1].dac_volt))
+        with self.assertRaises(ValueError):
+            n._apply_voltage_locked(.9, 2)
+        self.assertEqual(len(records), 3)
+        self.assertIn('common-gain', records[-1].log)
+
+    def test_adc_rejects_false_feedback_even_with_finite_voltage(self):
+        n, _ = AdcSchemaTests().make_node()
+        n.gain_control_state = (True, .8)
+        n._gain_control_callback(SimpleNamespace(dac_volt=.9, status_dac_feedback=False))
+        self.assertFalse(n.gain_control_state[0])
+
+    def test_config_recorder_is_latched_and_only_publishes_changes(self):
+        import json
+        tree = ast.parse((ROOT/'src/robotic_fish_io/runtime_config.py').read_text())
+        publishers = []
+        class Publisher:
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+                self.messages = []
+                publishers.append(self)
+            def publish(self, msg):
+                self.messages.append(msg)
+        ns = dict(json=json, rospy=SimpleNamespace(Publisher=Publisher, Time=Stamp),
+                  RuntimeConfig=SimpleNamespace)
+        exec(compile(ast.Module(body=[n for n in tree.body if isinstance(n, ast.ClassDef)],
+             type_ignores=[]), 'runtime_config.py', 'exec'), ns)
+        recorder = ns['ConfigRecorder']('gain_control')
+        recorder.publish({'mode': 'off'})
+        recorder.publish({'mode': 'off'})
+        recorder.publish({'mode': 'fixed'})
+        self.assertTrue(publishers[0].kwargs['latch'])
+        self.assertEqual(len(publishers[0].messages), 2)
+        self.assertEqual(json.loads(publishers[0].messages[-1].config_json)['settings']['mode'], 'fixed')
 
 
 if __name__ == '__main__':

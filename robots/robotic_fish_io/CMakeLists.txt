@@ -15,6 +15,8 @@ add_message_files(
   FILES
   AdcSample.msg
   AdcSampleArray.msg
+  DacState.msg
+  RuntimeConfig.msg
   GainControlState.msg
 )
 
