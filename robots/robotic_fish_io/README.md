@@ -59,6 +59,54 @@ build, ROS transport integration, I2C/serial fault injection, or hardware tests.
 
 This package is responsible only for sensor IO and gain control. Robotic-fish motion control belongs to `robotic_fish`, and communication with the embedded controller belongs to `spinal`.
 
+## Compact recording interfaces
+
+AdcSample retains its approved 12 fields. AdcSampleArray contains only
+`AdcSample[] samples`. Freshness and ordering are checked independently per
+channel timestamp; incomplete/invalid groups cannot advance the accepted clocks.
+Observed overrange still takes priority over invalid or stale companion data.
+
+DacState fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| timestamp | time | Operation completion/failure time |
+| dac_volt_target | float64 | Requested voltage, V |
+| dac_volt | float64 | Confirmed applied voltage, V; NaN on failure |
+| status_dac_feedback | bool | Software execution confirmation, not analog measurement |
+| log | string | Failure explanation; empty on success |
+
+The DAC publishes one result for each service, watchdog, or shutdown setting
+attempt, including rejected requests and serial failures. The last result is
+latched; no result is invented merely because the serial port opened. A rejected
+request conservatively invalidates the cached DAC state. The existing service
+request fields (`channel`, `voltage`) and response fields (`success`,
+`applied_voltage`, `message`) remain unchanged; failed responses use NaN voltage.
+
+GainControlState contains only `time timestamp`, `string mode`, `string state`,
+and `string log`. It publishes at startup and when mode/state/log changes.
+Priority is active protection, invalid/stale ADC, unknown DAC, error, then normal
+action. While protection is active the state is `safety_active` (or
+`adc_overrange_at_dac_min`); log retains simultaneous input/DAC/error problems.
+The diagnostic timer observes stale transitions but does not repeat identical
+state messages. Counters and measurement summaries remain in /diagnostics.
+
+RuntimeConfig contains `time timestamp`, `string device`, `string config_json`.
+ADC, DAC, and gain_control each publish their own latched snapshot on
+/robotic_fish/gain_control/config, so a late subscriber receives one latest
+snapshot from each live publisher. JSON holds effective typed settings (not the
+unresolved YAML), including device/channel configuration, the loaded ADC
+calibration document, all normalized controller thresholds, steps, timing,
+window/recovery settings, and mode. ADC/DAC snapshots exist even when gain
+control is disabled. Mode service changes republish the gain snapshot; plain
+rosparam edits do not reconfigure running nodes and do not change the snapshot.
+There is no dynamic parameter-update API beyond the existing mode service.
+
+This changes the ROS definitions for AdcSampleArray, GainControlState and the DAC
+state topic. Rebuild and source all consumers; old bags need schema adapters.
+Default recording keeps samples, DAC results, gain state, and config alongside
+existing motion topics. Diagnostics are opt-in for recording only.
+
 ## 1. System relationship
 
 ```text
@@ -179,7 +227,7 @@ conversion result, before calibration and publication. It is mapped from the
 monotonic read-completion clock onto ROS time. It is not a hardware sampling
 instant. Start/end clocks remain internal for timeout and duration diagnostics.
 The three channels are sequential and retain separate timestamps. The outer
-`AdcSampleArray.header.stamp` remains the batch packaging time.
+`AdcSampleArray` contains only `samples`; there is no outer timestamp, sequence, or device.
 
 ### 4.3 Calibration file
 
@@ -232,7 +280,7 @@ at conversion start, while `timestamp` is recorded at result-read completion.
 
 This schema replaces the old sample Header, conversion_start/conversion_end,
 and old voltage/calibration field names. Nested samples in AdcSampleArray use
-this same schema; its outer Header and samples array are unchanged. Rebuild and
+this same schema; its outer Header is removed and the samples array is retained. Rebuild and
 source the workspace for all publishers/subscribers. Old bags retain their old
 message definitions and require an explicit adapter for replay to new nodes.
 
@@ -265,7 +313,7 @@ success: True
 applied_voltage: 0.0
 ```
 
-A `std_msgs/Float32` command can also be published to `/robotic_fish/dac/command`. Do not use another DAC command source while fixed or closed-loop control is active, because the sources would overwrite one another.
+All DAC requests now use the set_voltage service; the command topic has been removed. Avoid competing manual and automatic service requests.
 
 Non-numeric values, NaN, Inf, voltages below 0 V, and voltages above 5 V are rejected. On a normal shutdown, `zero_on_shutdown: true` makes the node attempt to apply `safe_voltage`, which defaults to 0 V.
 
@@ -274,7 +322,7 @@ Non-numeric values, NaN, Inf, voltages below 0 V, and voltages above 5 V are rej
 All gain-control decisions use the maximum raw voltage in a complete ADC group:
 
 ```text
-adc_max_raw_voltage = max(ADC0.voltage, ADC1.voltage, ADC2.voltage)
+adc_max_raw_voltage = max(ADC0.volt_raw, ADC1.volt_raw, ADC2.volt_raw)
 ```
 
 The controller deliberately ignores `volt_cali`, so clipping protection does not depend on calibration validity or calibration-file contents.
@@ -390,12 +438,12 @@ Advanced settings are under `gain_control` in `config/io.yaml`:
 | --- | --- | --- | --- |
 | `/robotic_fish/adc/sample` | `robotic_fish_io/AdcSample` | Published by `/adc` | One channel conversion |
 | `/robotic_fish/adc/samples` | `robotic_fish_io/AdcSampleArray` | Published by `/adc` | Complete three-channel group |
-| `/robotic_fish/dac/command` | `std_msgs/Float32` | Subscribed by `/dac` | External DAC voltage command |
-| `/robotic_fish/dac/state` | `std_msgs/Float32` | Published by `/dac` | Confirmed applied DAC voltage |
-| `/robotic_fish/gain_control/state` | `robotic_fish_io/GainControlState` | Published by `/gain_control` | Mode, action, ADC/DAC, and safety state |
+| `/robotic_fish/dac/state` | `robotic_fish_io/DacState` | Published by `/dac` | One completed or failed setting operation |
+| `/robotic_fish/gain_control/state` | `robotic_fish_io/GainControlState` | Published by `/gain_control` | Mode, state and log; published only when changed |
+| `/robotic_fish/gain_control/config` | `robotic_fish_io/RuntimeConfig` | Published by each IO node | Latched effective settings, identified by device |
 | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | Published by all three nodes | Connection, sampling, calibration, control, and error status |
 
-`/robotic_fish/gain_control/state` is latched, so a new subscriber immediately receives the latest state. Unknown numeric values are represented by NaN and must be interpreted together with `adc_valid` and `dac_state_valid`.
+`/robotic_fish/gain_control/state` is latched, so a new subscriber immediately receives the latest state. Its fields are `timestamp`, `mode`, `state`, and `log`. Identical states are not republished; a diagnostic timer still detects stale ADC input without incoming samples.
 
 ### 7.2 Services
 
@@ -451,10 +499,9 @@ roslaunch robotic_fish record.launch
 
 ```text
 /robotic_fish/adc/samples
-/robotic_fish/dac/command
 /robotic_fish/dac/state
 /robotic_fish/gain_control/state
-/diagnostics
+/robotic_fish/gain_control/config
 /joy
 /imu
 /servo/target_states
@@ -496,7 +543,7 @@ Gain control uses a service to command the DAC, and ROS service requests are not
 /robotic_fish/adc/samples[*].dac_volt
 ```
 
-`/robotic_fish/dac/command` contains only commands sent through the command topic and may have no messages when all voltage changes come from the gain-control service.
+DAC service requests are represented by execution-result messages, including the requested target and failed attempts. To also record diagnostics, use `roslaunch robotic_fish record.launch record_diagnostics:=true`. Diagnostics remain available live regardless of this recording option.
 
 ## 10. Stable DAC device name
 
@@ -575,7 +622,7 @@ Inspect `calibration_status` and `calibration_id` in `/diagnostics`.
 
 ### 11.4 `adc_stale`
 
-No complete ADC sample group has arrived within `adc_timeout`. The controller will not increase DAC voltage in this state. Check the ADC node, I2C device, and `/robotic_fish/adc/samples` frequency.
+No accepted complete ADC sample group has arrived within `adc_timeout`. The controller will not increase DAC voltage in this state. Check the ADC node, I2C device, and `/robotic_fish/adc/samples` frequency.
 
 ### 11.5 `fixed_limited`
 
