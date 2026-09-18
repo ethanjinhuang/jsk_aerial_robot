@@ -8,7 +8,6 @@
   <arg name="enable_agc" default="false"/>
   <arg name="gain_mode" default="off"/>
   <arg name="manual_gain_voltage" default="0.0"/>
-  <arg name="fixed_gain_voltage" default="0.0"/>
   <arg name="agc_target_min_v" default="2.5"/>
   <arg name="agc_target_max_v" default="3.0"/>
   <arg name="agc_step_v" default="0.01"/>
@@ -39,7 +38,6 @@
     <param name="agc/enabled" value="$(arg enable_agc)"/>
     <param name="gain_control/mode" type="str" value="$(arg gain_mode)"/>
     <param name="gain_control/manual_voltage" value="$(arg manual_gain_voltage)"/>
-    <param name="gain_control/fixed_voltage" value="$(arg fixed_gain_voltage)"/>
     <param name="gain_control/target_min_v" value="$(arg agc_target_min_v)"/>
     <param name="gain_control/target_max_v" value="$(arg agc_target_max_v)"/>
     <param name="gain_control/step_v" value="$(arg agc_step_v)"/>

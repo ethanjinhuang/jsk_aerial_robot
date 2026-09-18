@@ -36,7 +36,6 @@ gain_control:
   joy_topic: /joy
   manual_voltage: 0.0
   manual_step_v: 0.01
-  fixed_voltage: 0.0
   target_min_v: 2.5
   target_max_v: 3.0
   step_v: 0.01
@@ -46,15 +45,13 @@ gain_control:
   dac_max_v: 5.0
   max_normal_step_v: 0.10
   start_voltage: 0.0
-  fixed_ramp_step_v: 0.05
-  fixed_ramp_interval_s: 0.10
+  manual_ramp_step_v: 0.05
+  manual_ramp_interval_s: 0.10
   adc_safety_limit_v: 4.00
   adc_safety_recovery_v: 3.30
   safety_step_v: 0.10
   safety_interval_s: 0.10
   recovery_settle_s: 0.20
-  # Opt-in: validate these provisional values on the actual acoustic setup first.
-  fixed_auto_recovery: false
   # Explicit opt-in; high fraction must be chosen before enabling.
   window_control: false
   window_s: 2.0
@@ -62,10 +59,6 @@ gain_control:
   window_peak_upper_v: 3.0
   # window_high_fraction: null
   window_cooldown_s: 5.0
-  fixed_recovery_wait_s: 2.0
-  fixed_recovery_step_v: 0.01
-  fixed_recovery_interval_s: 0.5
-  fixed_recovery_max_adc_v: 1.0
   recovery_sample_timeout_s: 0.2
   adc_timeout: 1.0
   dac_channel: 1

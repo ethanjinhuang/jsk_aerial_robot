@@ -38,10 +38,10 @@ def node_class(filename, name):
 
 
 class NodeSafetyTests(unittest.TestCase):
-    def make_node(self, mode='fixed'):
+    def make_node(self, mode='manual'):
         n = node_class('agc_node.py', 'GainControlNode').__new__(
             node_class('agc_node.py', 'GainControlNode'))
-        n.controller = GainController(mode=mode, fixed_target_v=2., consecutive_samples=1)
+        n.controller = GainController(mode=mode, manual_target_v=2., consecutive_samples=1)
         n.manual_input = ManualGainInput()
         n.joy_topic = "/joy"
         n.lock = threading.RLock()
@@ -68,8 +68,8 @@ class NodeSafetyTests(unittest.TestCase):
                             dac_volt=1., status_dac_feedback=True)
             for i, v in enumerate(values)])
 
-    def test_stale_fixed_and_closed_loop(self):
-        for mode in ('fixed', 'closed_loop'):
+    def test_stale_manual_and_closed_loop(self):
+        for mode in ('manual', 'closed_loop'):
             n = self.make_node(mode)
             n._adc_callback(self.message(stamp=1.))
             self.assertEqual(n.calls, [])
@@ -247,7 +247,9 @@ class CompactRecordingTests(unittest.TestCase):
         n._publish_config()
         self.assertEqual(records[0]['safety_limit_v'], 4.)
         self.assertIn('window_high_fraction', records[0])
-        self.assertIn('fixed_recovery_wait_s', records[0])
+        self.assertIn('manual_target_v', records[0])
+        self.assertIn('manual_ramp_step_v', records[0])
+        self.assertFalse(any(key.startswith('fixed_') for key in records[0]))
         n.controller.set_mode('off')
         n._publish_config()
         self.assertEqual(records[-1]['mode'], 'off')
@@ -307,10 +309,10 @@ class CompactRecordingTests(unittest.TestCase):
         recorder = ns['ConfigRecorder']('gain_control')
         recorder.publish({'mode': 'off'})
         recorder.publish({'mode': 'off'})
-        recorder.publish({'mode': 'fixed'})
+        recorder.publish({'mode': 'manual'})
         self.assertTrue(publishers[0].kwargs['latch'])
         self.assertEqual(len(publishers[0].messages), 2)
-        self.assertEqual(json.loads(publishers[0].messages[-1].config_json)['settings']['mode'], 'fixed')
+        self.assertEqual(json.loads(publishers[0].messages[-1].config_json)['settings']['mode'], 'manual')
 
 
 if __name__ == '__main__':

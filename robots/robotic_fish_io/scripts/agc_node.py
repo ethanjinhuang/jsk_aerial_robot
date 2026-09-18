@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed/closed-loop LNA gain control with raw-ADC overrange protection."""
+"""Manual/closed-loop LNA gain control with raw-ADC overrange protection."""
 
 import math
 import threading
@@ -54,7 +54,7 @@ class GainControlNode:
 
         self.controller = GainController(
             mode=self.mode,
-            fixed_target_v=self._param("manual_voltage" if self.mode == "manual" else "fixed_voltage", 0.0),
+            manual_target_v=self._param("manual_voltage", 0.0),
             target_min_v=self._param("target_min_v", 2.5),
             target_max_v=self._param("target_max_v", 3.0),
             step_v=self._param("step_v", 0.01),
@@ -66,15 +66,10 @@ class GainControlNode:
             safety_recovery_v=self._param("adc_safety_recovery_v", 3.30),
             safety_step_v=self._param("safety_step_v", 0.10),
             safety_interval_s=self._param("safety_interval_s", 0.10),
-            fixed_ramp_step_v=self._param("fixed_ramp_step_v", 0.05),
-            fixed_ramp_interval_s=self._param("fixed_ramp_interval_s", 0.10),
+            manual_ramp_step_v=self._param("manual_ramp_step_v", 0.05),
+            manual_ramp_interval_s=self._param("manual_ramp_interval_s", 0.10),
             recovery_settle_s=self._param("recovery_settle_s", 0.20),
             max_normal_step_v=self._param("max_normal_step_v", 0.10),
-            fixed_auto_recovery=self._param("fixed_auto_recovery", False),
-            fixed_recovery_wait_s=self._param("fixed_recovery_wait_s", 2.0),
-            fixed_recovery_step_v=self._param("fixed_recovery_step_v", 0.01),
-            fixed_recovery_interval_s=self._param("fixed_recovery_interval_s", 0.5),
-            fixed_recovery_max_adc_v=self._param("fixed_recovery_max_adc_v", 1.0),
             recovery_sample_timeout_s=self._param("recovery_sample_timeout_s", 0.2),
             window_control=self._param("window_control", False),
             window_s=self._param("window_s", 2.0),
@@ -191,7 +186,7 @@ class GainControlNode:
             return
         with self.lock:
             if self.current_dac_voltage is None or abs(voltage - self.current_dac_voltage) > 1e-5:
-                self.controller.reset_recovery()
+                self.controller.reset_window()
             self.current_dac_voltage = voltage
         self._publish_state()
 
@@ -210,7 +205,7 @@ class GainControlNode:
                 self.manual_input.adjust_step(horizontal)
                 rospy.loginfo("Manual gain %s: step=%.2f V, target=%.2f V, DAC=%s",
                               "LEFT" if horizontal > 0 else "RIGHT",
-                              self.manual_input.step_v, self.controller.fixed_target_v,
+                              self.manual_input.step_v, self.controller.manual_target_v,
                               self.current_dac_voltage)
             if vertical:
                 key = "UP" if vertical > 0 else "DOWN"
@@ -220,16 +215,16 @@ class GainControlNode:
                                   key, self.controller.safety_active, self._adc_is_valid(),
                                   self.current_dac_voltage, self.last_error)
                 else:
-                    base = (self.current_dac_voltage if self.controller.fixed_limited
-                            else self.controller.fixed_target_v)
-                    self.controller.fixed_target_v = self.controller._target(
+                    base = (self.current_dac_voltage if self.controller.manual_limited
+                            else self.controller.manual_target_v)
+                    self.controller.manual_target_v = self.controller._target(
                         base + vertical * self.manual_input.step_v)
-                    self.controller.fixed_limited = False
+                    self.controller.manual_limited = False
                     self.controller.reset_counts()
                     self.controller.last_action = "manual_target_changed"
                     rospy.loginfo("Manual gain %s: step=%.2f V, target=%.2f V, DAC=%.2f V",
                                   key, self.manual_input.step_v,
-                                  self.controller.fixed_target_v, self.current_dac_voltage)
+                                  self.controller.manual_target_v, self.current_dac_voltage)
             if horizontal or vertical:
                 self._publish_config()
                 self._publish_state()
@@ -306,9 +301,7 @@ class GainControlNode:
                         recovery_batch_valid = False
                 recovery_batch_valid = recovery_batch_valid and all(
                     math.isfinite(v) and v >= 0 for v in raw_voltages)
-                if self.current_dac_voltage is not None and (
-                        self.controller.window_control or
-                        (self.controller.mode == "fixed" and self.controller.fixed_auto_recovery)):
+                if self.current_dac_voltage is not None and self.controller.window_control:
                     recovery_batch_valid = recovery_batch_valid and all(
                         sample.status_dac_feedback and
                         math.isfinite(sample.dac_volt) and

@@ -1,4 +1,4 @@
-"""Pure fixed/closed-loop gain-control decisions shared by ROS and tests."""
+"""Pure manual/closed-loop gain-control decisions shared by ROS and tests."""
 
 import math
 
@@ -9,12 +9,12 @@ from robotic_fish_io.adc_limits import MAX_VOLTAGE_V
 class GainController:
     """Control a DAC from the maximum of three uncalibrated ADC voltages."""
 
-    MODES = ("off", "manual", "fixed", "closed_loop")
+    MODES = ("off", "manual", "closed_loop")
 
     def __init__(
         self,
         mode="off",
-        fixed_target_v=0.0,
+        manual_target_v=0.0,
         target_min_v=2.5,
         target_max_v=3.0,
         step_v=0.01,
@@ -26,15 +26,10 @@ class GainController:
         safety_recovery_v=3.30,
         safety_step_v=0.10,
         safety_interval_s=0.10,
-        fixed_ramp_step_v=0.05,
-        fixed_ramp_interval_s=0.10,
+        manual_ramp_step_v=0.05,
+        manual_ramp_interval_s=0.10,
         recovery_settle_s=0.20,
         max_normal_step_v=0.10,
-        fixed_auto_recovery=False,
-        fixed_recovery_wait_s=2.0,
-        fixed_recovery_step_v=0.01,
-        fixed_recovery_interval_s=0.5,
-        fixed_recovery_max_adc_v=1.0,
         recovery_sample_timeout_s=0.2,
         window_control=False,
         window_s=2.0,
@@ -52,7 +47,7 @@ class GainController:
         if not self.dac_min_v < self.dac_max_v:
             raise ValueError("DAC minimum must be below maximum")
 
-        self.fixed_target_v = self._bounded_dac(fixed_target_v, "fixed_target_v")
+        self.manual_target_v = self._bounded_dac(manual_target_v, "manual_target_v")
         self.target_min_v = self._finite(target_min_v, "target_min_v")
         self.target_max_v = self._finite(target_max_v, "target_max_v")
         if not 0.0 <= self.target_min_v < self.target_max_v <= 4.096:
@@ -62,20 +57,20 @@ class GainController:
             max_normal_step_v, "max_normal_step_v"
         )
         self.step_v = self._positive_dac_step(step_v, "step_v")
-        self.fixed_ramp_step_v = self._positive_dac_step(
-            fixed_ramp_step_v, "fixed_ramp_step_v"
+        self.manual_ramp_step_v = self._positive_dac_step(
+            manual_ramp_step_v, "manual_ramp_step_v"
         )
         if self.step_v > self.max_normal_step_v:
             raise ValueError("AGC step_v exceeds max_normal_step_v")
-        if self.fixed_ramp_step_v > self.max_normal_step_v:
-            raise ValueError("fixed_ramp_step_v exceeds max_normal_step_v")
+        if self.manual_ramp_step_v > self.max_normal_step_v:
+            raise ValueError("manual_ramp_step_v exceeds max_normal_step_v")
 
         self.safety_step_v = self._positive_dac_step(
             safety_step_v, "safety_step_v"
         )
         self.interval_s = self._interval(interval_s, "interval_s")
-        self.fixed_ramp_interval_s = self._interval(
-            fixed_ramp_interval_s, "fixed_ramp_interval_s"
+        self.manual_ramp_interval_s = self._interval(
+            manual_ramp_interval_s, "manual_ramp_interval_s"
         )
         self.safety_interval_s = self._interval(
             safety_interval_s, "safety_interval_s"
@@ -107,23 +102,7 @@ class GainController:
             raise ValueError("consecutive_samples must be between 1 and 1000")
         self.consecutive_samples = consecutive
 
-        if not isinstance(fixed_auto_recovery, bool):
-            raise ValueError("fixed_auto_recovery must be boolean")
-        self.fixed_auto_recovery = fixed_auto_recovery
-        self.fixed_recovery_wait_s = self._interval(fixed_recovery_wait_s, "fixed_recovery_wait_s")
-        self.fixed_recovery_interval_s = self._interval(fixed_recovery_interval_s, "fixed_recovery_interval_s")
         self.recovery_sample_timeout_s = self._interval(recovery_sample_timeout_s, "recovery_sample_timeout_s")
-        self.fixed_recovery_step_v = self._positive_dac_step(fixed_recovery_step_v, "fixed_recovery_step_v")
-        self.fixed_recovery_max_adc_v = self._finite(fixed_recovery_max_adc_v, "fixed_recovery_max_adc_v")
-        if not 0 < self.fixed_recovery_max_adc_v < self.safety_recovery_v:
-            raise ValueError("fixed recovery ADC limit must be positive and below safety recovery")
-        if self.fixed_recovery_step_v > self.max_normal_step_v:
-            raise ValueError("fixed recovery step exceeds max_normal_step_v")
-        if self.fixed_recovery_step_v / self.fixed_recovery_interval_s >= self.safety_step_v / self.safety_interval_s:
-            raise ValueError("fixed recovery must be slower than safety reduction")
-        self.recovery_since_s = None
-        self.recovery_last_sample_s = None
-        self.recovery_last_step_s = float("-inf")
 
         self.below_count = 0
         self.above_count = 0
@@ -132,7 +111,7 @@ class GainController:
         self.current_max_raw_v = None
         self.last_action = "waiting"
         self.safety_active = False
-        self.fixed_limited = False
+        self.manual_limited = False
         self.settle_until_s = float("-inf")
         if not isinstance(window_control, bool):
             raise ValueError("window_control must be boolean")
@@ -196,12 +175,10 @@ class GainController:
     def reset_counts(self):
         self.below_count = 0
         self.above_count = 0
-        self.reset_recovery()
+        self.reset_window()
 
-    def reset_recovery(self):
-        """Require a fresh continuous stable interval after errors or mode changes."""
-        self.recovery_since_s = None
-        self.recovery_last_sample_s = None
+    def reset_window(self):
+        """Require a fresh observation window after errors or mode changes."""
         self.window_samples = []
         self.window_dac = None
 
@@ -241,38 +218,9 @@ class GainController:
         self.last_action = "window_increase" if direction > 0 else "window_decrease"
         return target if target != current else None
 
-    def _fixed_recovery(self, maximum, current, now):
-        if not self.fixed_auto_recovery:
-            self.last_action = "fixed_limited"
-            return None
-        if current >= self.fixed_target_v - 0.005:
-            self.reset_recovery()
-            self.last_action = "fixed_recovery_holding"
-            return None
-        previous = self.recovery_last_sample_s
-        if previous is None or now <= previous or now - previous > self.recovery_sample_timeout_s:
-            self.recovery_since_s = None
-        self.recovery_last_sample_s = now
-        if maximum > self.fixed_recovery_max_adc_v:
-            self.recovery_since_s = None
-            self.last_action = "fixed_recovery_holding"
-            return None
-        if self.recovery_since_s is None:
-            self.recovery_since_s = now
-        if now - self.recovery_since_s < self.fixed_recovery_wait_s:
-            self.last_action = "fixed_recovery_waiting"
-            return None
-        if now - self.recovery_last_step_s < self.fixed_recovery_interval_s:
-            self.last_action = "fixed_recovery_waiting"
-            return None
-        self.recovery_last_step_s = now
-        self.reset_recovery()
-        self.last_action = "fixed_recovering"
-        return self._target(min(self.fixed_target_v, current + self.fixed_recovery_step_v))
-
     def reset_safety(self):
-        """Clear the fixed-mode safety latch; an active overrange remains active."""
-        self.fixed_limited = False
+        """Clear the manual-mode safety latch; an active overrange remains active."""
+        self.manual_limited = False
         self.reset_counts()
         self.last_action = "safety_active" if self.safety_active else "reset"
 
@@ -291,7 +239,7 @@ class GainController:
     def _safety_decision(self, maximum, current, now):
         if self.mode == "manual" and (self.safety_active or maximum >= self.safety_limit_v):
             # Discard the pre-protection target, including after a manual reset.
-            self.fixed_target_v = self._target(current)
+            self.manual_target_v = self._target(current)
         if maximum >= self.safety_limit_v:
             self.window_last_over_s = now
             if not self.safety_active:
@@ -305,8 +253,8 @@ class GainController:
         if maximum <= self.safety_recovery_v:
             self.safety_active = False
             self.reset_counts()
-            if self.mode in ("fixed", "manual"):
-                self.fixed_limited = True
+            if self.mode == "manual":
+                self.manual_limited = True
                 self.last_action = self.mode + "_limited"
             elif self.mode == "closed_loop":
                 self.settle_until_s = now + self.recovery_settle_s
@@ -325,8 +273,8 @@ class GainController:
         target = self._target(current - self.safety_step_v)
         self.last_safety_adjustment_s = now
         self.last_action = "safety_decreasing"
-        if self.mode in ("fixed", "manual"):
-            self.fixed_limited = True
+        if self.mode == "manual":
+            self.manual_limited = True
         return True, target
 
     def observe(self, raw_voltages, current_dac_v, now_s, data_valid=True):
@@ -372,23 +320,21 @@ class GainController:
             self.last_action = "off"
             return None
 
-        if self.mode in ("fixed", "manual"):
+        if self.mode == "manual":
             self.below_count = self.above_count = 0
-            if self.fixed_limited and self.mode == "manual":
+            if self.manual_limited:
                 self.last_action = "manual_limited"
                 return None
-            if self.fixed_limited:
-                return self._fixed_recovery(maximum, current, now)
-            difference = self.fixed_target_v - current
+            difference = self.manual_target_v - current
             if abs(difference) < 0.005:
                 self.last_action = self.mode + "_holding"
                 return None
-            if now - self.last_adjustment_s < self.fixed_ramp_interval_s:
+            if now - self.last_adjustment_s < self.manual_ramp_interval_s:
                 self.last_action = self.mode + "_waiting"
                 return None
             direction = 1.0 if difference > 0.0 else -1.0
             target = self._target(
-                current + direction * min(abs(difference), self.fixed_ramp_step_v)
+                current + direction * min(abs(difference), self.manual_ramp_step_v)
             )
             self.last_adjustment_s = now
             self.last_action = self.mode + ("_ramping_up" if direction > 0 else "_ramping_down")

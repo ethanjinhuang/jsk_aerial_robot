@@ -108,7 +108,6 @@ class GainControllerTests(unittest.TestCase):
                 controller = GainController(mode="off")
                 self.assertEqual(controller.safety_limit_v, 4.0)
                 self.assertEqual(controller.safety_recovery_v, 3.3)
-                self.assertFalse(controller.fixed_auto_recovery)
                 sample = [0.1] * 3
                 sample[channel] = 3.999875
                 self.assertIsNone(controller.observe(sample, 1.0, 1.0))
@@ -124,8 +123,8 @@ class GainControllerTests(unittest.TestCase):
 
     def make_gain_controller(self, **overrides):
         parameters = {
-            "mode": "fixed",
-            "fixed_target_v": 1.0,
+            "mode": "manual",
+            "manual_target_v": 1.0,
             "target_min_v": 2.5,
             "target_max_v": 3.0,
             "step_v": 0.01,
@@ -137,23 +136,23 @@ class GainControllerTests(unittest.TestCase):
             "safety_recovery_v": 3.3,
             "safety_step_v": 0.1,
             "safety_interval_s": 0.1,
-            "fixed_ramp_step_v": 0.05,
-            "fixed_ramp_interval_s": 0.1,
+            "manual_ramp_step_v": 0.05,
+            "manual_ramp_interval_s": 0.1,
             "recovery_settle_s": 0.2,
             "max_normal_step_v": 0.1,
         }
         parameters.update(overrides)
         return GainController(**parameters)
 
-    def test_fixed_mode_ramps_and_holds(self):
+    def test_manual_mode_ramps_and_holds(self):
         controller = self.make_gain_controller()
         safe = [1.0, 1.1, 1.2]
         self.assertEqual(controller.observe(safe, 0.0, 1.0), 0.05)
         self.assertIsNone(controller.observe(safe, 0.05, 1.05))
-        self.assertEqual(controller.last_action, "fixed_waiting")
+        self.assertEqual(controller.last_action, "manual_waiting")
         self.assertEqual(controller.observe(safe, 0.05, 1.1), 0.10)
         self.assertIsNone(controller.observe(safe, 1.0, 2.0))
-        self.assertEqual(controller.last_action, "fixed_holding")
+        self.assertEqual(controller.last_action, "manual_holding")
 
     def test_exact_safety_limit_immediately_overrides_normal_interval(self):
         controller = self.make_gain_controller(mode="closed_loop", consecutive_samples=1)
@@ -162,7 +161,7 @@ class GainControllerTests(unittest.TestCase):
         self.assertTrue(controller.safety_active)
         self.assertEqual(controller.last_action, "safety_decreasing")
 
-    def test_safety_decreases_until_recovery_then_latches_fixed_mode(self):
+    def test_safety_decreases_until_recovery_then_latches_manual_mode(self):
         controller = self.make_gain_controller()
         high = [3.6, 3.2, 3.1]
         self.assertEqual(controller.observe(high, 1.0, 1.0), 0.9)
@@ -170,11 +169,12 @@ class GainControllerTests(unittest.TestCase):
         self.assertEqual(controller.observe(high, 0.9, 1.1), 0.8)
         self.assertIsNone(controller.observe([3.3, 3.0, 2.9], 0.8, 1.2))
         self.assertFalse(controller.safety_active)
-        self.assertTrue(controller.fixed_limited)
-        self.assertEqual(controller.last_action, "fixed_limited")
+        self.assertTrue(controller.manual_limited)
+        self.assertEqual(controller.last_action, "manual_limited")
         self.assertIsNone(controller.observe([1.0, 1.1, 1.2], 0.8, 2.0))
         controller.reset_safety()
-        self.assertEqual(controller.observe([1.0, 1.1, 1.2], 0.8, 2.1), 0.85)
+        self.assertIsNone(controller.observe([1.0, 1.1, 1.2], 0.8, 2.1))
+        self.assertEqual(controller.manual_target_v, 0.8)
 
     def test_closed_loop_settles_after_safety_recovery(self):
         controller = self.make_gain_controller(
@@ -201,9 +201,9 @@ class GainControllerTests(unittest.TestCase):
     def test_gain_configuration_rejects_unsafe_values(self):
         invalid = [
             {"mode": "automatic"},
-            {"fixed_target_v": 5.01},
+            {"manual_target_v": 5.01},
             {"step_v": 0.11},
-            {"fixed_ramp_step_v": 0.11},
+            {"manual_ramp_step_v": 0.11},
             {"safety_limit_v": 3.3, "safety_recovery_v": 3.3},
             {"safety_limit_v": 4.097},
             {"target_max_v": 3.5},

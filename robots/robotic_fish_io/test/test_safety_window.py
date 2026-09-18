@@ -18,8 +18,8 @@ class SafetyWindowTests(unittest.TestCase):
                 self.assertTrue(c.safety_active)
 
     def test_stale_never_increases_or_releases(self):
-        for mode in ['fixed', 'closed_loop']:
-            c = GainController(mode=mode, fixed_target_v=2., consecutive_samples=1)
+        for mode in ['manual', 'closed_loop']:
+            c = GainController(mode=mode, manual_target_v=2., consecutive_samples=1)
             self.assertIsNone(c.observe([.1]*3, 1., 0., data_valid=False))
             self.assertEqual(c.observe([4.0]*3, 1., 1., data_valid=False), .9)
             self.assertIsNone(c.observe([.1]*3, .9, 2., data_valid=False))

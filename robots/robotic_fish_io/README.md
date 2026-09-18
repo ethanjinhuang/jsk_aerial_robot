@@ -16,7 +16,7 @@ Do not run two joystick publishers at once.
 
 The gain-control node subscribes directly to `/joy` (`gain_control/joy_topic`).
 No changes to the motion teleop node are required. `off` remains the default;
-`fixed` remains available for compatibility, and ignores joystick input.
+`fixed` has been removed. Only `off`, `manual`, and `closed_loop` are supported.
 
 | Input (zero-based indices) | Action per press |
 | --- | --- |
@@ -33,19 +33,26 @@ or non-finite mapped axes are ignored with a throttled warning.
 
 `manual_gain_voltage:=0.0` sets the initial target and overrides YAML
 `gain_control/manual_voltage`. Targets are clamped to configured DAC limits
-(default 0–5 V). Actual output follows the existing `fixed_ramp_step_v` and
-`fixed_ramp_interval_s` settings, driven only by accepted ADC batches.
+(default 0–5 V). Actual output follows the existing `manual_ramp_step_v` and
+`manual_ramp_interval_s` settings, driven only by accepted ADC batches.
 Terminal logs identify LEFT/RIGHT/UP/DOWN, the step, target and confirmed DAC
 voltage; blocked voltage presses print the reason. Actual DAC adjustments have
 separate execution logs. Changed step/target settings are recorded in the
-latched runtime config (the shared target field is `fixed_target_v`).
+latched runtime config (target field: `manual_target_v`).
 
 Raw-ADC protection retains priority in manual mode. Voltage presses are blocked
 while protection is active, ADC is invalid/stale, DAC is unknown, or an error
 is present; blocked presses are not queued. Protection discards the old target.
 After protection releases, a new Up/Down press resumes adjustment from the
-confirmed DAC voltage. `fixed_auto_recovery` does not enable automatic recovery
-in manual mode. The reset service does not restore the pre-protection target.
+confirmed DAC voltage. Manual mode never automatically recovers the old target. The reset service does not restore the pre-protection target.
+
+
+Migration: replace `gain_mode:=fixed` with `gain_mode:=manual` and
+`fixed_gain_voltage` with `manual_gain_voltage`. YAML ramp settings are now
+`manual_ramp_step_v` and `manual_ramp_interval_s`; remove the former `fixed_*`
+settings, including automatic recovery settings. Runtime config JSON now uses
+`manual_target_v` instead of `fixed_target_v`; bag analysis must select the field
+appropriate to the recorded version. No ROS message definition has changed.
 
 ## Safety and lateral-window update (2026-09-08)
 
@@ -65,8 +72,7 @@ in manual mode. The reset service does not restore the pre-protection target.
 
 ### Optional ADC1/ADC2 window control
 
-This is a separate **closed_loop-only opt-in**, not a change to fixed-mode behavior.
-The shipped `window_control: false` and `fixed_auto_recovery: false` remain unchanged.
+This is a separate **closed_loop-only opt-in**. The shipped `window_control: false` remains unchanged.
 To enable later, select `gain_mode:=closed_loop`, set `window_control: true`, and
 explicitly choose `window_high_fraction` in YAML; `null` is deliberately rejected
 when enabling. No allowable fraction has yet been established by bench validation.
@@ -87,7 +93,7 @@ but still triggers safety. Normal steps use `step_v` and `interval_s`.
 
 Each adjustment, invalid sample, gap over `recovery_sample_timeout_s`, or DAC
 change requires a fresh window. Nested DAC metadata must match the current DAC
-for window control/automatic recovery. Means and fractions are sample-weighted;
+for window control. Means and fractions are sample-weighted;
 one sample at/before the window's left edge is retained for full time coverage.
 Both startup values and peak allowances require real acoustic bench validation.
 No software rule guarantees absence of transient saturation.
@@ -100,7 +106,7 @@ build, ROS transport integration, I2C/serial fault injection, or hardware tests.
 - timestamped acquisition of ADC0, ADC1, and ADC2 through an ADS1115;
 - independent transfer-curve calibration for each ADC channel;
 - serial DAC output for the LNA gain-control voltage;
-- fixed-voltage and closed-loop gain control;
+- manual and closed-loop gain control;
 - prioritized DAC reduction when a raw ADC voltage becomes unsafe;
 - diagnostics and observable state suitable for rosbag recording.
 
@@ -174,7 +180,7 @@ The gain-control node never accesses the DAC serial port directly. `/dac` is the
 | --- | --- | --- |
 | `/adc` | `adc_node.py` | ADC acquisition, calibration, timestamps, and diagnostics |
 | `/dac` | `dac_node.py` | DAC serial access, voltage validation, state feedback, and shutdown safety |
-| `/gain_control` | `agc_node.py` | Off, fixed, and closed-loop modes plus ADC overrange protection |
+| `/gain_control` | `agc_node.py` | Off, manual, and closed-loop modes plus ADC overrange protection |
 
 The default command is:
 
@@ -242,15 +248,15 @@ Use `sensor_io.launch` when spinal is not needed. Otherwise, an unavailable embe
 | `enable_adc` | `true` | Start the ADC node |
 | `enable_dac` | `true` | Start the DAC node |
 | `enable_gain_control` | `true` | Start gain control when both ADC and DAC are enabled |
-| `gain_mode` | `off` | Select `off`, `manual`, `fixed`, or `closed_loop` |
-| `fixed_gain_voltage` | `0.0` | Target DAC voltage in fixed mode |
+| `gain_mode` | `off` | Select `off`, `manual`, or `closed_loop` |
+| `manual_gain_voltage` | `0.0` | Target DAC voltage in manual mode |
 | `agc_target_min_v` | `2.5` | Lower raw-ADC target in closed-loop mode |
 | `agc_target_max_v` | `3.0` | Upper raw-ADC target in closed-loop mode |
 | `agc_step_v` | `0.01` | Normal closed-loop DAC adjustment step |
 | `adc_safety_limit_v` | `4.00` | Raw-ADC software safety threshold |
 | `enable_agc` | `false` | Deprecated compatibility argument; `true` selects closed-loop mode |
 
-New launch commands should use `gain_mode`. Do not combine `enable_agc:=true` with fixed mode.
+New launch commands should use `gain_mode`. Do not combine `enable_agc:=true` with manual mode.
 
 ## 4. ADC acquisition and calibration
 
@@ -380,14 +386,14 @@ The controller deliberately ignores `volt_cali`, so clipping protection does not
 roslaunch robotic_fish_io sensor_io.launch gain_mode:=off
 ```
 
-Normal fixed or closed-loop adjustment is disabled, but the controller continues to monitor the ADC safety threshold. If the DAC state is known and an overrange occurs, safety logic can still lower the DAC. If no DAC state is available and an overrange is detected, the controller requests the configured DAC minimum.
+Normal manual or closed-loop adjustment is disabled, but the controller continues to monitor the ADC safety threshold. If the DAC state is known and an overrange occurs, safety logic can still lower the DAC. If no DAC state is available and an overrange is detected, the controller requests the configured DAC minimum.
 
-### 6.2 `fixed` mode
+### 6.2 `manual` mode
 
 ```bash
 roslaunch robotic_fish_io sensor_io.launch \
-  gain_mode:=fixed \
-  fixed_gain_voltage:=0.20
+  gain_mode:=manual \
+  manual_gain_voltage:=0.20
 ```
 
 The default ramp changes the DAC by 0.05 V every 0.10 seconds instead of jumping directly to the target:
@@ -396,7 +402,7 @@ The default ramp changes the DAC by 0.05 V every 0.10 seconds instead of jumping
 0.00 → 0.05 → 0.10 → 0.15 → 0.20 V
 ```
 
-The state becomes `fixed_holding` after reaching the target. Start real-hardware tests at a low voltage; do not begin by commanding 5 V.
+The state becomes `manual_holding` after reaching the target. Start real-hardware tests at a low voltage; do not begin by commanding 5 V.
 
 ### 6.3 `closed_loop` mode
 
@@ -417,7 +423,7 @@ maximum raw ADC > 3.00 V for 3 consecutive groups: decrease DAC by 0.01 V
 minimum interval between normal adjustments: 0.50 s
 ```
 
-The upper ADC target must be strictly below the safety threshold. Both the normal closed-loop step and the fixed-mode ramp step must not exceed `max_normal_step_v`, which defaults to 0.10 V.
+The upper ADC target must be strictly below the safety threshold. Both the normal closed-loop step and the manual-mode ramp step must not exceed `max_normal_step_v`, which defaults to 0.10 V.
 
 ### 6.4 ADC software safety protection
 
@@ -441,7 +447,7 @@ When any raw ADC channel reaches or exceeds 4.00 V:
 3. reduction continues until the maximum raw ADC voltage is at or below 3.30 V;
 4. every command remains clamped to the 0–5 V DAC range.
 
-By default, after an overrange in fixed mode, the controller enters `fixed_limited` and does not automatically ramp back to the original fixed target. Reset the latch only after the cause of the overrange has been checked:
+After an overrange in manual mode, the controller enters `manual_limited` and discards the old target. After protection releases, press Up/Down again to adjust from the confirmed DAC voltage. The reset service only clears the latch; it does not restore the old target:
 
 ```bash
 rosservice call /robotic_fish/gain_control/reset_safety
@@ -469,8 +475,8 @@ Advanced settings are under `gain_control` in `config/io.yaml`:
 | `dac_max_v` | `5.0` | Maximum DAC voltage allowed by the controller |
 | `max_normal_step_v` | `0.10` | Maximum allowed non-safety adjustment step |
 | `start_voltage` | `0.0` | Safe initialization voltage when no DAC state exists |
-| `fixed_ramp_step_v` | `0.05` | Fixed-mode ramp step |
-| `fixed_ramp_interval_s` | `0.10` | Fixed-mode ramp interval |
+| `manual_ramp_step_v` | `0.05` | Manual-mode ramp step |
+| `manual_ramp_interval_s` | `0.10` | Manual-mode ramp interval |
 | `interval_s` | `0.50` | Closed-loop normal adjustment interval |
 | `consecutive_samples` | `3` | Consecutive groups required for a closed-loop adjustment |
 | `recovery_settle_s` | `0.20` | Settling delay after overrange recovery |
@@ -497,7 +503,7 @@ Advanced settings are under `gain_control` in `config/io.yaml`:
 | Service | Type | Description |
 | --- | --- | --- |
 | `/robotic_fish/dac/set_voltage` | `robotic_fish_io/SetDacVoltage` | Request and confirm a DAC voltage |
-| `/robotic_fish/gain_control/reset_safety` | `std_srvs/Trigger` | Clear the fixed-mode safety latch; rejected while overrange remains active |
+| `/robotic_fish/gain_control/reset_safety` | `std_srvs/Trigger` | Clear the manual-mode safety latch; rejected while overrange remains active |
 | `/robotic_fish/agc/enable` | `std_srvs/SetBool` | Compatibility API: true selects closed-loop and false selects off |
 
 ### 7.3 Useful inspection commands
@@ -520,8 +526,8 @@ Terminal 1 — embedded bridge, ADC, DAC, and gain control:
 source /home/khadas/ros/jsk_aerial_robot_ws/devel/setup.bash
 roslaunch robotic_fish_io io.launch \
   dev:=vim4 \
-  gain_mode:=fixed \
-  fixed_gain_voltage:=0.20
+  gain_mode:=manual \
+  manual_gain_voltage:=0.20
 ```
 
 Terminal 2 — joystick and sonic motion control:
@@ -671,54 +677,12 @@ Inspect `calibration_status` and `calibration_id` in `/diagnostics`.
 
 No accepted complete ADC sample group has arrived within `adc_timeout`. The controller will not increase DAC voltage in this state. Check the ADC node, I2C device, and `/robotic_fish/adc/samples` frequency.
 
-### 11.5 `fixed_limited`
+### 11.5 `manual_limited`
 
-#### Optional slow automatic recovery (fixed mode only)
-
-Set `gain_control/fixed_auto_recovery: true` in the YAML loaded by the gain-control
-node, then restart that node. Parameters are read at startup, not dynamically.
-The shipped default remains `false`; changing the code alone does not enable
-automatic recovery or modify the physical DAC.
-
-Initial, **not hardware-validated** settings:
-
-| Parameter under `gain_control` | Default | Meaning |
-| --- | --- | --- |
-| `fixed_recovery_wait_s` | 2.0 | Continuous qualifying input before recovery |
-| `fixed_recovery_max_adc_v` | 1.0 | Maximum of all three raw ADC voltages must stay at or below this value |
-| `fixed_recovery_step_v` | 0.01 | DAC increase per recovery step, V |
-| `fixed_recovery_interval_s` | 0.5 | Minimum interval between increases, s |
-| `recovery_sample_timeout_s` | 0.2 | Maximum gap between qualifying observations, s |
-
-Safety reduction retains priority and the 4.00/3.30 V trigger/release
-thresholds. After safety releases, stable here means **continuous valid input
-below the recovery ADC ceiling**, not a variance or acoustic-source detector.
-Recovery increases no higher than the configured fixed target (itself bounded
-by the DAC limits). Above the recovery ADC ceiling it holds and restarts the
-dwell period; it does not force the ADC toward the closed-loop target range.
-Reaching the fixed target does not clear the recovery latch or switch back to
-fast normal ramping. Another overrange immediately restarts safety reduction.
-Invalid ADC, errors, interrupted samples, or a mode change reset the dwell period.
-Every recovery step and observed DAC change also resets the dwell period, so the
-next increase needs a new full qualifying interval, not just the 0.5 s rate limit.
-Repeated/stale/future-stamped ROS batches cannot accumulate recovery time.
-
-States: `fixed_recovery_waiting` (dwell/step interval), `fixed_recovering`
-(requesting a slow increase), `fixed_recovery_holding` (signal ceiling or fixed
-target reached). These use the existing state string; the message schema is unchanged.
-
-There is **no sound-source-on or fish-handling sensor gate** in this implementation.
-Low input with the source off may also qualify. Leave recovery disabled during
-handling/source-off operation, and validate the gain ceiling and recovery
-settings in a controlled bench setup before enabling it on the robot. Manual
-`reset_safety` still clears the latch and restores the original normal ramp;
-it is different from slow automatic recovery.
-
-Fixed mode previously triggered ADC safety protection. After confirming that the signal is safe, reset the latch:
-
-```bash
-rosservice call /robotic_fish/gain_control/reset_safety
-```
+Manual mode previously triggered ADC protection. Once protection releases,
+press Up or Down again to set a new target relative to the confirmed DAC voltage.
+There is no automatic return to the old target. `reset_safety` clears the latch
+but does not restore the pre-protection target.
 
 ### 11.6 `adc_overrange_at_dac_min`
 
@@ -748,17 +712,17 @@ The current tests cover:
 - ADS1115 configuration, conversion, and timeout behavior;
 - DAC 0–5 V limits, BCD commands, and echo verification;
 - independent three-channel calibration and whole-group fallback;
-- fixed-voltage ramping;
+- manual target ramping;
 - closed-loop counters, step size, interval, and DAC bounds;
 - 4.00/3.30 V default safety triggering and recovery, plus explicit legacy-threshold tests;
-- fixed-mode safety latching;
+- manual-mode safety latching;
 - overrange behavior at the minimum DAC voltage.
 
 Recommended first-hardware-test sequence:
 
 1. start with `gain_mode:=off` and inspect ADC data and diagnostics;
 2. explicitly apply 0 V through the DAC service;
-3. begin fixed-mode testing at a low voltage such as 0.20 V;
+3. begin manual-mode testing at a low voltage such as 0.20 V;
 4. confirm that reducing DAC voltage actually reduces ADC amplitude during an overrange;
 5. proceed to closed-loop and full-system motion tests;
 6. record a rosbag and inspect the message count of every expected topic after stopping.
