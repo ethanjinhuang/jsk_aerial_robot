@@ -9,6 +9,8 @@ import rospy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from robotic_fish_io.msg import DacState
 from robotic_fish_io.runtime_config import ConfigRecorder
+from sensor_msgs.msg import Joy
+from robotic_fish_io.manual_gain import ManualGainInput
 from std_srvs.srv import SetBool, SetBoolResponse, Trigger, TriggerResponse
 
 from robotic_fish_io import dac_driver
@@ -52,7 +54,7 @@ class GainControlNode:
 
         self.controller = GainController(
             mode=self.mode,
-            fixed_target_v=self._param("fixed_voltage", 0.0),
+            fixed_target_v=self._param("manual_voltage" if self.mode == "manual" else "fixed_voltage", 0.0),
             target_min_v=self._param("target_min_v", 2.5),
             target_max_v=self._param("target_max_v", 3.0),
             step_v=self._param("step_v", 0.01),
@@ -89,6 +91,10 @@ class GainControlNode:
         if not self.controller.dac_min_v <= self.start_voltage <= self.controller.dac_max_v:
             raise ValueError("start_voltage is outside configured DAC limits")
 
+        self.joy_topic = str(self._param("joy_topic", "/joy"))
+        self.manual_input = ManualGainInput(self._param("manual_step_v", 0.01),
+                                            self.controller.max_normal_step_v)
+
         self.lock = threading.RLock()
         self.command_lock = threading.Lock()
         self.current_dac_voltage = None
@@ -116,6 +122,7 @@ class GainControlNode:
         self.dac_state_sub = rospy.Subscriber(
             self.dac_state_topic, DacState, self._dac_state_callback, queue_size=10
         )
+        self.joy_sub = rospy.Subscriber(self.joy_topic, Joy, self._joy_callback, queue_size=1)
         self.enable_service = rospy.Service(
             self.enable_service_name, SetBool, self._enable_callback
         )
@@ -187,6 +194,45 @@ class GainControlNode:
                 self.controller.reset_recovery()
             self.current_dac_voltage = voltage
         self._publish_state()
+
+    def _joy_callback(self, msg):
+        # Serialize target edits with ADC decisions and service execution.
+        with self.command_lock, self.lock:
+            try:
+                horizontal, vertical = self.manual_input.events(msg.axes)
+            except ValueError as exc:
+                if self.controller.mode == "manual":
+                    rospy.logwarn_throttle(5.0, "%s", exc)
+                return
+            if self.controller.mode != "manual":
+                return
+            if horizontal:
+                self.manual_input.adjust_step(horizontal)
+                rospy.loginfo("Manual gain %s: step=%.2f V, target=%.2f V, DAC=%s",
+                              "LEFT" if horizontal > 0 else "RIGHT",
+                              self.manual_input.step_v, self.controller.fixed_target_v,
+                              self.current_dac_voltage)
+            if vertical:
+                key = "UP" if vertical > 0 else "DOWN"
+                if (self.controller.safety_active or not self._adc_is_valid() or
+                        self.current_dac_voltage is None or self.last_error):
+                    rospy.loginfo("Manual gain %s blocked: safety=%s, ADC valid=%s, DAC=%s, error=%s",
+                                  key, self.controller.safety_active, self._adc_is_valid(),
+                                  self.current_dac_voltage, self.last_error)
+                else:
+                    base = (self.current_dac_voltage if self.controller.fixed_limited
+                            else self.controller.fixed_target_v)
+                    self.controller.fixed_target_v = self.controller._target(
+                        base + vertical * self.manual_input.step_v)
+                    self.controller.fixed_limited = False
+                    self.controller.reset_counts()
+                    self.controller.last_action = "manual_target_changed"
+                    rospy.loginfo("Manual gain %s: step=%.2f V, target=%.2f V, DAC=%.2f V",
+                                  key, self.manual_input.step_v,
+                                  self.controller.fixed_target_v, self.current_dac_voltage)
+            if horizontal or vertical:
+                self._publish_config()
+                self._publish_state()
 
     def _enable_callback(self, request):
         # Backward-compatible service: enabling selects closed-loop mode.
@@ -261,7 +307,8 @@ class GainControlNode:
                 recovery_batch_valid = recovery_batch_valid and all(
                     math.isfinite(v) and v >= 0 for v in raw_voltages)
                 if self.current_dac_voltage is not None and (
-                        self.controller.window_control or self.controller.fixed_auto_recovery):
+                        self.controller.window_control or
+                        (self.controller.mode == "fixed" and self.controller.fixed_auto_recovery)):
                     recovery_batch_valid = recovery_batch_valid and all(
                         sample.status_dac_feedback and
                         math.isfinite(sample.dac_volt) and
@@ -367,6 +414,7 @@ class GainControlNode:
                         service_timeout=self.service_timeout, adc_timeout=self.adc_timeout,
                         adc_topic=self.adc_topic, dac_state_topic=self.dac_state_topic,
                         dac_service=self.dac_service_name)
+        settings.update(joy_topic=self.joy_topic, manual_step_v=self.manual_input.step_v)
         self.config_recorder.publish(settings)
 
     def _state_message(self):

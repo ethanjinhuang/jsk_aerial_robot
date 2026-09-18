@@ -9,6 +9,7 @@
   <!-- Deprecated compatibility alias. true selects closed_loop. -->
   <arg name="enable_agc" default="false"/>
   <arg name="gain_mode" default="off"/>
+  <arg name="manual_gain_voltage" default="0.0"/>
   <arg name="fixed_gain_voltage" default="0.0"/>
   <arg name="agc_target_min_v" default="2.5"/>
   <arg name="agc_target_max_v" default="3.0"/>
@@ -27,6 +28,7 @@
     <arg name="enable_gain_control" value="$(arg enable_gain_control)"/>
     <arg name="enable_agc" value="$(arg enable_agc)"/>
     <arg name="gain_mode" value="$(arg gain_mode)"/>
+    <arg name="manual_gain_voltage" value="$(arg manual_gain_voltage)"/>
     <arg name="fixed_gain_voltage" value="$(arg fixed_gain_voltage)"/>
     <arg name="agc_target_min_v" value="$(arg agc_target_min_v)"/>
     <arg name="agc_target_max_v" value="$(arg agc_target_max_v)"/>

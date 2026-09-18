@@ -5,6 +5,7 @@ find_package(catkin REQUIRED COMPONENTS
   diagnostic_msgs
   message_generation
   rospy
+  sensor_msgs
   std_msgs
   std_srvs
 )
@@ -31,7 +32,7 @@ generate_messages(
 )
 
 catkin_package(
-  CATKIN_DEPENDS diagnostic_msgs message_runtime rospy std_msgs std_srvs
+  CATKIN_DEPENDS diagnostic_msgs message_runtime rospy sensor_msgs std_msgs std_srvs
 )
 
 catkin_install_python(PROGRAMS
@@ -49,6 +50,7 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_drivers.py)
   catkin_add_nosetests(test/test_calibration.py)
   catkin_add_nosetests(test/test_agc.py)
+  catkin_add_nosetests(test/test_manual_gain.py)
   catkin_add_nosetests(test/test_gain_recovery.py)
   catkin_add_nosetests(test/test_safety_window.py)
   catkin_add_nosetests(test/test_node_safety.py)

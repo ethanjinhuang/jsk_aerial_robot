@@ -1,5 +1,52 @@
 # robotic_fish_io
 
+## Manual joystick gain control
+
+Start IO and the joystick publisher in separate terminals:
+
+```bash
+roslaunch robotic_fish_io io.launch dev:=vim4 gain_mode:=manual
+roslaunch robotic_fish sonic_teleop.launch
+```
+
+`sonic_teleop.launch` also controls fish motion. For gain-only tests, start only
+`rosrun joy joy_node _dev:=/dev/input/js0` as the joystick publisher and use
+`sensor_io.launch gain_mode:=manual` for sensor IO without spinal.
+Do not run two joystick publishers at once.
+
+The gain-control node subscribes directly to `/joy` (`gain_control/joy_topic`).
+No changes to the motion teleop node are required. `off` remains the default;
+`fixed` remains available for compatibility, and ignores joystick input.
+
+| Input (zero-based indices) | Action per press |
+| --- | --- |
+| axes[9] = +1, Left | Increase voltage step by 0.01 V |
+| axes[9] = -1, Right | Decrease voltage step by 0.01 V |
+| axes[10] = +1, Up | Increase target DAC voltage by the current step |
+| axes[10] = -1, Down | Decrease target DAC voltage by the current step |
+
+The initial step is `gain_control/manual_step_v: 0.01`; its bounds are 0.01 V
+and `max_normal_step_v` (default 0.10 V). Each direction change or new press
+triggers once; holding does not repeat. Release and press again to repeat.
+Diagonal presses change the step first, then change the target. Short messages
+or non-finite mapped axes are ignored with a throttled warning.
+
+`manual_gain_voltage:=0.0` sets the initial target and overrides YAML
+`gain_control/manual_voltage`. Targets are clamped to configured DAC limits
+(default 0–5 V). Actual output follows the existing `fixed_ramp_step_v` and
+`fixed_ramp_interval_s` settings, driven only by accepted ADC batches.
+Terminal logs identify LEFT/RIGHT/UP/DOWN, the step, target and confirmed DAC
+voltage; blocked voltage presses print the reason. Actual DAC adjustments have
+separate execution logs. Changed step/target settings are recorded in the
+latched runtime config (the shared target field is `fixed_target_v`).
+
+Raw-ADC protection retains priority in manual mode. Voltage presses are blocked
+while protection is active, ADC is invalid/stale, DAC is unknown, or an error
+is present; blocked presses are not queued. Protection discards the old target.
+After protection releases, a new Up/Down press resumes adjustment from the
+confirmed DAC voltage. `fixed_auto_recovery` does not enable automatic recovery
+in manual mode. The reset service does not restore the pre-protection target.
+
 ## Safety and lateral-window update (2026-09-08)
 
 - Both launch entry points now default to a **4.00 V raw-ADC protection trigger**;
@@ -195,7 +242,7 @@ Use `sensor_io.launch` when spinal is not needed. Otherwise, an unavailable embe
 | `enable_adc` | `true` | Start the ADC node |
 | `enable_dac` | `true` | Start the DAC node |
 | `enable_gain_control` | `true` | Start gain control when both ADC and DAC are enabled |
-| `gain_mode` | `off` | Select `off`, `fixed`, or `closed_loop` |
+| `gain_mode` | `off` | Select `off`, `manual`, `fixed`, or `closed_loop` |
 | `fixed_gain_voltage` | `0.0` | Target DAC voltage in fixed mode |
 | `agc_target_min_v` | `2.5` | Lower raw-ADC target in closed-loop mode |
 | `agc_target_max_v` | `3.0` | Upper raw-ADC target in closed-loop mode |

@@ -9,7 +9,7 @@ from robotic_fish_io.adc_limits import MAX_VOLTAGE_V
 class GainController:
     """Control a DAC from the maximum of three uncalibrated ADC voltages."""
 
-    MODES = ("off", "fixed", "closed_loop")
+    MODES = ("off", "manual", "fixed", "closed_loop")
 
     def __init__(
         self,
@@ -289,6 +289,9 @@ class GainController:
         return float(dac_driver.normalize_voltage(bounded))
 
     def _safety_decision(self, maximum, current, now):
+        if self.mode == "manual" and (self.safety_active or maximum >= self.safety_limit_v):
+            # Discard the pre-protection target, including after a manual reset.
+            self.fixed_target_v = self._target(current)
         if maximum >= self.safety_limit_v:
             self.window_last_over_s = now
             if not self.safety_active:
@@ -302,9 +305,9 @@ class GainController:
         if maximum <= self.safety_recovery_v:
             self.safety_active = False
             self.reset_counts()
-            if self.mode == "fixed":
+            if self.mode in ("fixed", "manual"):
                 self.fixed_limited = True
-                self.last_action = "fixed_limited"
+                self.last_action = self.mode + "_limited"
             elif self.mode == "closed_loop":
                 self.settle_until_s = now + self.recovery_settle_s
                 self.last_action = "settling"
@@ -322,7 +325,7 @@ class GainController:
         target = self._target(current - self.safety_step_v)
         self.last_safety_adjustment_s = now
         self.last_action = "safety_decreasing"
-        if self.mode == "fixed":
+        if self.mode in ("fixed", "manual"):
             self.fixed_limited = True
         return True, target
 
@@ -369,23 +372,26 @@ class GainController:
             self.last_action = "off"
             return None
 
-        if self.mode == "fixed":
+        if self.mode in ("fixed", "manual"):
             self.below_count = self.above_count = 0
+            if self.fixed_limited and self.mode == "manual":
+                self.last_action = "manual_limited"
+                return None
             if self.fixed_limited:
                 return self._fixed_recovery(maximum, current, now)
             difference = self.fixed_target_v - current
             if abs(difference) < 0.005:
-                self.last_action = "fixed_holding"
+                self.last_action = self.mode + "_holding"
                 return None
             if now - self.last_adjustment_s < self.fixed_ramp_interval_s:
-                self.last_action = "fixed_waiting"
+                self.last_action = self.mode + "_waiting"
                 return None
             direction = 1.0 if difference > 0.0 else -1.0
             target = self._target(
                 current + direction * min(abs(difference), self.fixed_ramp_step_v)
             )
             self.last_adjustment_s = now
-            self.last_action = "fixed_ramping_up" if direction > 0 else "fixed_ramping_down"
+            self.last_action = self.mode + ("_ramping_up" if direction > 0 else "_ramping_down")
             return target
 
         if now < self.settle_until_s:

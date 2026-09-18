@@ -32,6 +32,10 @@ dac:
 
 gain_control:
   mode: "off"
+  # manual: joystick axes[9] sets step, axes[10] sets target voltage.
+  joy_topic: /joy
+  manual_voltage: 0.0
+  manual_step_v: 0.01
   fixed_voltage: 0.0
   target_min_v: 2.5
   target_max_v: 3.0

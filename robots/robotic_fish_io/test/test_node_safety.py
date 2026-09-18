@@ -10,6 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
+from robotic_fish_io.manual_gain import ManualGainInput
 from robotic_fish_io.agc_controller import GainController
 from robotic_fish_io import dac_driver
 from robotic_fish_io.adc_limits import MAX_RAW, MAX_VOLTAGE_V
@@ -41,6 +42,8 @@ class NodeSafetyTests(unittest.TestCase):
         n = node_class('agc_node.py', 'GainControlNode').__new__(
             node_class('agc_node.py', 'GainControlNode'))
         n.controller = GainController(mode=mode, fixed_target_v=2., consecutive_samples=1)
+        n.manual_input = ManualGainInput()
+        n.joy_topic = "/joy"
         n.lock = threading.RLock()
         n.command_lock = threading.Lock()
         n.last_sample_stamps = {}
