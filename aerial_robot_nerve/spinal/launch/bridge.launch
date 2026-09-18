@@ -2,8 +2,8 @@
   <arg name="mode" default="serial" />
   <arg name="dev" default="pc" />
 
-  <arg name="serial_port" value="/dev/ttyUSB1" if="$(eval arg('dev') == 'pc')" />
-  <arg name="serial_port" value="/dev/ttyS4" if="$(eval arg('dev') == 'vim4')" />
+  <arg name="serial_port" value="/dev/robotic_fish_spinal" if="$(eval arg('dev') == 'pc')" />
+  <arg name="serial_port" value="/dev/robotic_fish_spinal" if="$(eval arg('dev') == 'vim4')" />
   <arg name="serial_baud" default="921600" />
 
   <arg name="udp_port" default="12345" />
