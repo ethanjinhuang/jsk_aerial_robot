@@ -5,7 +5,7 @@
   <arg name="enable_sensor_io" default="false"/>
   <arg name="enable_adc" default="true"/>
   <arg name="enable_dac" default="true"/>
-  <arg name="sensor_io_config" default="$(find robotic_fish_io)/config/io.yaml"/>
+  <arg name="sensor_io_config" default="$(find robotic_fish_sonic)/config/io.yaml"/>
 
   <include file="$(find spinal)/launch/bridge.launch" if = "$(eval arg('dev') == 'pc')" >
     <arg name="dev" value="$(arg dev)" />
@@ -23,7 +23,7 @@
   </node>
 
   <include if="$(arg enable_sensor_io)"
-           file="$(find robotic_fish_io)/launch/sensor_io.launch">
+           file="$(find robotic_fish_sonic)/launch/sensor_io.launch">
     <arg name="config" value="$(arg sensor_io_config)"/>
     <arg name="enable_adc" value="$(arg enable_adc)"/>
     <arg name="enable_dac" value="$(arg enable_dac)"/>

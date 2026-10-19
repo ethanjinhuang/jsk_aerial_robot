@@ -1,0 +1,754 @@
+# robotic_fish_sonic
+
+## Manual joystick gain control
+
+Start IO and the joystick publisher in separate terminals:
+
+```bash
+roslaunch robotic_fish_sonic io.launch dev:=vim4 gain_mode:=manual
+roslaunch robotic_fish sonic_teleop.launch
+```
+
+`sonic_teleop.launch` also controls fish motion. For gain-only tests, start only
+`rosrun joy joy_node _dev:=/dev/input/js0` as the joystick publisher and use
+`sensor_io.launch gain_mode:=manual` for sensor IO without spinal.
+Do not run two joystick publishers at once.
+
+The gain-control node subscribes directly to `/joy` (`gain_control/joy_topic`).
+No changes to the motion teleop node are required. `off` remains the default;
+`fixed` has been removed. Only `off`, `manual`, and `closed_loop` are supported.
+
+| Input (zero-based indices) | Action per press |
+| --- | --- |
+| axes[9] = +1, Left | Increase voltage step by 0.01 V |
+| axes[9] = -1, Right | Decrease voltage step by 0.01 V |
+| axes[10] = +1, Up | Increase target DAC voltage by the current step |
+| axes[10] = -1, Down | Decrease target DAC voltage by the current step |
+
+The initial step is `gain_control/manual_step_v: 0.01`; its bounds are 0.01 V
+and `max_normal_step_v` (default 0.10 V). Each direction change or new press
+triggers once; holding does not repeat. Release and press again to repeat.
+Diagonal presses change the step first, then change the target. Short messages
+or non-finite mapped axes are ignored with a throttled warning.
+
+`manual_gain_voltage:=0.0` sets the initial target and overrides YAML
+`gain_control/manual_voltage`. Targets are clamped to configured DAC limits
+(default 0–5 V). Actual output follows the existing `manual_ramp_step_v` and
+`manual_ramp_interval_s` settings, driven only by accepted ADC batches.
+Terminal logs identify LEFT/RIGHT/UP/DOWN, the step, target and confirmed DAC
+voltage; blocked voltage presses print the reason. Actual DAC adjustments have
+separate execution logs. Changed step/target settings are recorded in the
+latched runtime config (target field: `manual_target_v`).
+
+Raw-ADC protection retains priority in manual mode. Voltage presses are blocked
+while protection is active, ADC is invalid/stale, DAC is unknown, or an error
+is present; blocked presses are not queued. Protection discards the old target.
+After protection releases, a new Up/Down press resumes adjustment from the
+confirmed DAC voltage. Manual mode never automatically recovers the old target. The reset service does not restore the pre-protection target.
+
+
+Migration: replace `gain_mode:=fixed` with `gain_mode:=manual` and
+`fixed_gain_voltage` with `manual_gain_voltage`. YAML ramp settings are now
+`manual_ramp_step_v` and `manual_ramp_interval_s`; remove the former `fixed_*`
+settings, including automatic recovery settings. Runtime config JSON now uses
+`manual_target_v` instead of `fixed_target_v`; bag analysis must select the field
+appropriate to the recorded version. No ROS message definition has changed.
+
+## Safety and lateral-window update (2026-09-08)
+
+- Both launch entry points now default to a **4.00 V raw-ADC protection trigger**;
+  release remains 3.30 V. Explicit launch arguments override YAML for the parameters
+  forwarded by `sensor_io.launch`. The startup log prints the effective thresholds.
+- Any finite nonnegative channel at/above the trigger still causes protection when
+  another channel is invalid or missing. Raw code 32767 is treated as saturation,
+  even if the accompanying voltage is inconsistent. Thresholds above 4.095875 V
+  are rejected. Saturation means the true peak is unknown, not exactly 4.095875 V.
+- Stale, repeated, future, or invalid batches cannot increase gain or release
+  protection. Nested sample timestamps are checked too; diagnostic validity only
+  reports accepted fresh batches. Such batches may still trigger protective reduction.
+- DAC service requests must address the configured common-gain output channel.
+  All three ADC channels share this gain. Failed serial commands publish an invalid
+  (NaN) DAC state; consumers clear their stored validity instead of retaining it.
+
+### Optional ADC1/ADC2 window control
+
+This is a separate **closed_loop-only opt-in**. The shipped `window_control: false` remains unchanged.
+To enable later, select `gain_mode:=closed_loop`, set `window_control: true`, and
+explicitly choose `window_high_fraction` in YAML; `null` is deliberately rejected
+when enabling. No allowable fraction has yet been established by bench validation.
+
+| Parameter under `gain_control` | Default | Definition |
+| --- | --- | --- |
+| `window_s` | 2.0 s | Continuous same-DAC observation window |
+| `window_mean_min_v` | 2.0 V | Lower target for max(mean ADC1, mean ADC2) |
+| `window_peak_upper_v` | 3.0 V | Lateral peak regulation boundary, not safety trigger |
+| `window_high_fraction` | null | Allowed fraction of groups with either ADC1 or ADC2 > boundary; explicitly required |
+| `window_cooldown_s` | 5.0 s | Minimum elapsed time since observed overrange/start of window monitoring before increases |
+
+Decision order: three-channel fast safety first; then, for a complete window,
+decrease if the high-group fraction exceeds the configured allowance; otherwise
+hold if any lateral peak exceeds 3 V; otherwise increase if the stronger lateral
+mean is below 2 V and cooldown has elapsed. ADC0 does not set the normal target,
+but still triggers safety. Normal steps use `step_v` and `interval_s`.
+
+Each adjustment, invalid sample, gap over `recovery_sample_timeout_s`, or DAC
+change requires a fresh window. Nested DAC metadata must match the current DAC
+for window control. Means and fractions are sample-weighted;
+one sample at/before the window's left edge is retained for full time coverage.
+Both startup values and peak allowances require real acoustic bench validation.
+No software rule guarantees absence of transient saturation.
+
+Tests include isolated node-method doubles; these are not a substitute for catkin
+build, ROS transport integration, I2C/serial fault injection, or hardware tests.
+
+`robotic_fish_sonic` is the ROS 1 hardware-interface package for the robotic fish acoustic acquisition system. It provides:
+
+- timestamped acquisition of ADC0, ADC1, and ADC2 through an ADS1115;
+- independent transfer-curve calibration for each ADC channel;
+- serial DAC output for the LNA gain-control voltage;
+- manual and closed-loop gain control;
+- prioritized DAC reduction when a raw ADC voltage becomes unsafe;
+- diagnostics and observable state suitable for rosbag recording.
+
+This reference describes the sensor IO and gain-control part of `robotic_fish_sonic`.
+The package also contains acoustic channel comparison and historical replay; see
+the package README. Robotic-fish motion control belongs to `robotic_fish`, and
+communication with the embedded controller belongs to `spinal`.
+
+## Compact recording interfaces
+
+AdcSample has 14 fields, including `volt_raw_mean_1s` and `mean_1s_ready`.
+AdcSampleArray contains only
+`AdcSample[] samples`. Freshness and ordering are checked independently per
+channel timestamp; incomplete/invalid groups cannot advance the accepted clocks.
+Observed overrange still takes priority over invalid or stale companion data.
+
+DacState fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| timestamp | time | Operation completion/failure time |
+| dac_volt_target | float64 | Requested voltage, V |
+| dac_volt | float64 | Confirmed applied voltage, V; NaN on failure |
+| status_dac_feedback | bool | Software execution confirmation, not analog measurement |
+| log | string | Failure explanation; empty on success |
+
+The DAC publishes one result for each service, watchdog, or shutdown setting
+attempt, including rejected requests and serial failures. The last result is
+latched; no result is invented merely because the serial port opened. A rejected
+request conservatively invalidates the cached DAC state. The existing service
+request fields (`channel`, `voltage`) and response fields (`success`,
+`applied_voltage`, `message`) remain unchanged; failed responses use NaN voltage.
+
+GainControlState contains only `time timestamp`, `string mode`, `string state`,
+and `string log`. It publishes at startup and when mode/state/log changes.
+Priority is active protection, invalid/stale ADC, unknown DAC, error, then normal
+action. While protection is active the state is `safety_active` (or
+`adc_overrange_at_dac_min`); log retains simultaneous input/DAC/error problems.
+The diagnostic timer observes stale transitions but does not repeat identical
+state messages. Counters and measurement summaries remain in /diagnostics.
+
+RuntimeConfig contains `time timestamp`, `string device`, `string config_json`.
+ADC, DAC, and gain_control each publish their own latched snapshot on
+/robotic_fish/gain_control/config, so a late subscriber receives one latest
+snapshot from each live publisher. JSON holds effective typed settings (not the
+unresolved YAML), including device/channel configuration, the loaded ADC
+calibration document, all normalized controller thresholds, steps, timing,
+window/recovery settings, and mode. ADC/DAC snapshots exist even when gain
+control is disabled. Mode service changes republish the gain snapshot; plain
+rosparam edits do not reconfigure running nodes and do not change the snapshot.
+There is no dynamic parameter-update API beyond the existing mode service.
+
+This changes the ROS definitions for AdcSampleArray, GainControlState and the DAC
+state topic. Rebuild and source all consumers; old bags need schema adapters.
+Default recording keeps samples, DAC results, gain state, and config alongside
+existing motion topics. Diagnostics are opt-in for recording only.
+
+## 1. System relationship
+
+```text
+ADS1115 ──I2C──> /adc ──AdcSampleArray──> /gain_control
+                   │                            │
+                   │                            └──SetDacVoltage──> /dac ──serial──> DAC/LNA
+                   │                                                   │
+                   └──snapshot the latest confirmed DAC voltage <─────┘
+
+/joy ──> /sonic_teleop_node ──> /servo/target_states ──> /rosserial_server ──> MCU
+```
+
+The gain-control node never accesses the DAC serial port directly. `/dac` is the only node that writes to the DAC hardware. `/gain_control` requests voltages through a ROS service and updates its state using the confirmed value published on `/robotic_fish/dac/state`.
+
+## 2. ROS nodes
+
+| Node | Executable | Responsibility |
+| --- | --- | --- |
+| `/adc` | `adc_node.py` | ADC acquisition, calibration, timestamps, and diagnostics |
+| `/dac` | `dac_node.py` | DAC serial access, voltage validation, state feedback, and shutdown safety |
+| `/gain_control` | `agc_node.py` | Off, manual, and closed-loop modes plus ADC overrange protection |
+
+The default command is:
+
+```bash
+roslaunch robotic_fish_sonic sensor_io.launch
+```
+
+It starts all three nodes. `/gain_control` starts in `off` mode, but its ADC overrange protection remains active. To omit the controller completely:
+
+```bash
+roslaunch robotic_fish_sonic sensor_io.launch enable_gain_control:=false
+```
+
+## 3. Launch files
+
+### 3.1 Package-only launch: `sensor_io.launch`
+
+Use this launch file to test the ADC, DAC, and gain controller without starting spinal:
+
+```bash
+roslaunch robotic_fish_sonic sensor_io.launch gain_mode:=off
+```
+
+ADC only:
+
+```bash
+roslaunch robotic_fish_sonic sensor_io.launch \
+  enable_adc:=true enable_dac:=false
+```
+
+DAC only:
+
+```bash
+roslaunch robotic_fish_sonic sensor_io.launch \
+  enable_adc:=false enable_dac:=true
+```
+
+`/gain_control` is not started if either the ADC or DAC node is disabled.
+
+### 3.2 IO and embedded bridge: `io.launch`
+
+```bash
+roslaunch robotic_fish_sonic io.launch dev:=vim4 gain_mode:=off
+```
+
+In addition to the three package nodes, this launch file includes:
+
+```text
+spinal/launch/bridge.launch
+```
+
+Serial mode on the VIM4 starts `/rosserial_server` with:
+
+```text
+/dev/robotic_fish_spinal
+921600 baud
+```
+
+Use `sensor_io.launch` when spinal is not needed. Otherwise, an unavailable embedded controller will cause repeated `Sync with device lost` warnings even if the ADC and DAC nodes are operating correctly.
+
+### 3.3 Common launch arguments
+
+| Argument | Default | Description |
+| --- | ---: | --- |
+| `enable_adc` | `true` | Start the ADC node |
+| `enable_dac` | `true` | Start the DAC node |
+| `enable_gain_control` | `true` | Start gain control when both ADC and DAC are enabled |
+| `gain_mode` | `off` | Select `off`, `manual`, or `closed_loop` |
+| `manual_gain_voltage` | `0.0` | Target DAC voltage in manual mode |
+| `agc_target_min_v` | `2.5` | Lower raw-ADC target in closed-loop mode |
+| `agc_target_max_v` | `3.0` | Upper raw-ADC target in closed-loop mode |
+| `agc_step_v` | `0.01` | Normal closed-loop DAC adjustment step |
+| `adc_safety_limit_v` | `4.00` | Raw-ADC software safety threshold |
+| `enable_agc` | `false` | Deprecated compatibility argument; `true` selects closed-loop mode |
+
+New launch commands should use `gain_mode`. Do not combine `enable_agc:=true` with manual mode.
+
+## 4. ADC acquisition and calibration
+
+### 4.1 Default hardware configuration
+
+| Setting | Default |
+| --- | --- |
+| I2C device | `/dev/i2c-0` |
+| ADS1115 address | `0x48` |
+| Channels | `0, 1, 2` |
+| Data rate | `128 SPS` |
+| Target group rate per channel | `20 Hz` |
+| Full-scale range | ADS1115 driver configuration of `±4.096 V` |
+
+The ADS1115 multiplexes and converts the three channels sequentially. A complete three-channel group is published at approximately 20 Hz, while the combined rate of the individual-sample topic is approximately 60 Hz.
+
+### 4.2 Timestamps
+
+Each `AdcSample.timestamp` records when the host first finishes reading that
+conversion result, before calibration and publication. It is mapped from the
+monotonic read-completion clock onto ROS time. It is not a hardware sampling
+instant. Start/end clocks remain internal for timeout and duration diagnostics.
+The three channels are sequential and retain separate timestamps. The outer
+`AdcSampleArray` contains only `samples`; there is no outer timestamp, sequence, or device.
+
+### 4.3 Calibration file
+
+The current default calibration is:
+
+```text
+config/calibration/adc_independent_transfer_2026-09-27-13-51-52.json
+```
+
+It is selected in `config/io.yaml`:
+
+```yaml
+adc:
+  calibration:
+    enabled: true
+    required: true
+    file: calibration/adc_independent_transfer_2026-09-27-13-51-52.json
+```
+
+A relative path is resolved against this package's `config/` directory. An absolute path is also accepted. With `required: true`, a missing, malformed, or incompatible calibration file prevents the ADC node from starting instead of silently using invalid calibration data.
+
+ADC0, ADC1, and ADC2 each use their own piecewise-linear transfer curve. The calibration does not use DAC voltage as an input and never extrapolates beyond its observed range. If any channel in a group is outside the calibration range, the entire group falls back to raw voltages:
+
+```text
+status_cali = false
+volt_cali = volt_raw
+```
+
+This prevents calibrated and uncalibrated values from being mixed within one three-channel group.
+
+The September 27 equal-input sweep provides 112 nodes per channel. Raw input
+ranges are ADC0 0.01175–3.26569 V, ADC1 0.01225–3.18756 V, and ADC2
+0.02075–3.27638 V (endpoint tolerance 0.0025 V). High-voltage and safety-recovery
+segments were excluded. Within-sweep temporal holdout relative spread has median
+0.78% and 95th percentile 1.59%; this is relative channel matching, not absolute
+voltage accuracy or cross-experiment validation. Details and reproducible fitting
+commands are archived locally with the source bag at
+`/home/dragon/Desktop/fish_rosbag/analysis/20260927/README.md`. Restart ADC after changing the file.
+
+### 4.4 `AdcSample` fields
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `serial_num` | uint32 | Cross-channel sequence within this node run; restarts at zero and wraps at 2^32 |
+| `timestamp` | time | First host read-completion time of this conversion result |
+| `device` | string | Source identifier, default `ads1115` |
+| `channel_id` | uint8 | ADC channel number |
+| `adc_code` | int32 | Signed ADS1115 conversion count |
+| `volt_raw` | float64 | Uncalibrated voltage in V |
+| `volt_raw_mean_1s` | float64 | Per-channel trailing 1-second arithmetic mean of raw voltage in V; partial mean during warmup |
+| `mean_1s_ready` | bool | A full second accumulated with known, unchanged DAC state and uninterrupted sampling |
+| `volt_cali` | float64 | Calibrated voltage in V; falls back to `volt_raw` |
+| `diff_cali` | float64 | `volt_cali - volt_raw` in V; NaN when calibration is inactive |
+| `status_cali` | bool | Calibration successfully applied to this complete group |
+| `cali_id` | string | Applied calibration identifier; empty on fallback |
+| `dac_volt` | float64 | Last confirmed DAC voltage in V captured at conversion start; NaN if invalid |
+| `status_dac_feedback` | bool | Captured DAC state is valid; no independent analog measurement or freshness timeout |
+
+The raw-voltage mean is updated for every complete sampling group and included
+in both individual samples and arrays. Each channel uses its own read-completion
+timestamps; samples older than 1 second are dropped. Startup, observed DAC value
+or validity changes, non-increasing timestamps, I2C reconnects, or a per-channel
+gap exceeding `max(0.2 s, 3 / channel_rate)` restart accumulation. Unknown DAC
+state keeps readiness false. This is a sample-weighted voltage-level mean, not
+waveform RMS. Use it for display/manual gain tuning; instantaneous raw-voltage
+protection and the acoustic 0.5-second calibrated comparison remain unchanged.
+The added fields change both message MD5s: rebuild and restart all publishers
+and subscribers together; old bags keep their embedded definitions.
+
+`dac_volt` is a control voltage, not an LNA gain ratio. DAC metadata is captured
+at conversion start, while `timestamp` is recorded at result-read completion.
+
+This schema replaces the old sample Header, conversion_start/conversion_end,
+and old voltage/calibration field names. Nested samples in AdcSampleArray use
+this same schema; its outer Header is removed and the samples array is retained. Rebuild and
+source the workspace for all publishers/subscribers. Old bags retain their old
+message definitions and require an explicit adapter for replay to new nodes.
+
+## 5. DAC control
+
+Default configuration:
+
+| Setting | Default |
+| --- | --- |
+| Serial device | `/dev/robotic_fish_dac` |
+| Baud rate | `19200` |
+| Channel | `1` |
+| Voltage range | `0.00–5.00 V` |
+| Resolution | `0.01 V` |
+| Echo verification | Enabled |
+| Safe shutdown voltage | `0.00 V` |
+
+Set DAC channel 1 to 0 V:
+
+```bash
+rosservice call /robotic_fish/dac/set_voltage \
+  "channel: 1
+voltage: 0.0"
+```
+
+Example successful response:
+
+```text
+success: True
+applied_voltage: 0.0
+```
+
+All DAC requests now use the set_voltage service; the command topic has been removed. Avoid competing manual and automatic service requests.
+
+Non-numeric values, NaN, Inf, voltages below 0 V, and voltages above 5 V are rejected. On a normal shutdown, `zero_on_shutdown: true` makes the node attempt to apply `safe_voltage`, which defaults to 0 V.
+
+## 6. LNA gain control
+
+All gain-control decisions use the maximum raw voltage in a complete ADC group:
+
+```text
+adc_max_raw_voltage = max(ADC0.volt_raw, ADC1.volt_raw, ADC2.volt_raw)
+```
+
+The controller deliberately ignores `volt_cali`, so clipping protection does not depend on calibration validity or calibration-file contents.
+
+### 6.1 `off` mode
+
+```bash
+roslaunch robotic_fish_sonic sensor_io.launch gain_mode:=off
+```
+
+Normal manual or closed-loop adjustment is disabled, but the controller continues to monitor the ADC safety threshold. If the DAC state is known and an overrange occurs, safety logic can still lower the DAC. If no DAC state is available and an overrange is detected, the controller requests the configured DAC minimum.
+
+### 6.2 `manual` mode
+
+```bash
+roslaunch robotic_fish_sonic sensor_io.launch \
+  gain_mode:=manual \
+  manual_gain_voltage:=0.20
+```
+
+The default ramp changes the DAC by 0.05 V every 0.10 seconds instead of jumping directly to the target:
+
+```text
+0.00 → 0.05 → 0.10 → 0.15 → 0.20 V
+```
+
+The state becomes `manual_holding` after reaching the target. Start real-hardware tests at a low voltage; do not begin by commanding 5 V.
+
+### 6.3 `closed_loop` mode
+
+```bash
+roslaunch robotic_fish_sonic sensor_io.launch \
+  gain_mode:=closed_loop \
+  agc_target_min_v:=2.50 \
+  agc_target_max_v:=3.00 \
+  agc_step_v:=0.01
+```
+
+Default behavior:
+
+```text
+maximum raw ADC < 2.50 V for 3 consecutive groups: increase DAC by 0.01 V
+2.50 V <= maximum raw ADC <= 3.00 V: hold
+maximum raw ADC > 3.00 V for 3 consecutive groups: decrease DAC by 0.01 V
+minimum interval between normal adjustments: 0.50 s
+```
+
+The upper ADC target must be strictly below the safety threshold. Both the normal closed-loop step and the manual-mode ramp step must not exceed `max_normal_step_v`, which defaults to 0.10 V.
+
+### 6.4 ADC software safety protection
+
+Default thresholds:
+
+| Parameter | Default |
+| --- | ---: |
+| Trigger threshold `adc_safety_limit_v` | `4.00 V` |
+| Recovery threshold `adc_safety_recovery_v` | `3.30 V` |
+| Safety reduction step `safety_step_v` | `0.10 V` |
+| Safety adjustment interval `safety_interval_s` | `0.10 s` |
+
+This is a software trigger, not a hardware clamp. The current ADS1115 range is
+4.096 V, leaving only 96 mV headroom; a transient can still saturate before the
+gain is reduced. The protection release threshold remains 3.30 V.
+
+When any raw ADC channel reaches or exceeds 4.00 V:
+
+1. normal consecutive-sample counting and the normal AGC interval are bypassed;
+2. the DAC is reduced by 0.10 V every 0.10 seconds;
+3. reduction continues until the maximum raw ADC voltage is at or below 3.30 V;
+4. every command remains clamped to the 0–5 V DAC range.
+
+After an overrange in manual mode, the controller enters `manual_limited` and discards the old target. After protection releases, press Up/Down again to adjust from the confirmed DAC voltage. The reset service only clears the latch; it does not restore the old target:
+
+```bash
+rosservice call /robotic_fish/gain_control/reset_safety
+```
+
+Closed-loop mode waits 0.20 seconds after recovery, clears its counters, and then resumes normal control. If the DAC has reached 0 V while the ADC remains above the recovery threshold, the state becomes:
+
+```text
+adc_overrange_at_dac_min
+```
+
+Voltage increases remain blocked, and an error is reported through `/diagnostics`.
+
+The controller never increases DAC voltage when ADC data is stale, incomplete, non-finite, or when the DAC state or DAC service is invalid.
+
+> Software protection can react only after an overrange has been sampled. It cannot prevent electrical transients between samples. Hardware clamping or input protection is still required at the ADC input.
+
+### 6.5 Advanced parameters
+
+Advanced settings are under `gain_control` in `config/io.yaml`:
+
+| Parameter | Default | Description |
+| --- | ---: | --- |
+| `dac_min_v` | `0.0` | Minimum DAC voltage allowed by the controller |
+| `dac_max_v` | `5.0` | Maximum DAC voltage allowed by the controller |
+| `max_normal_step_v` | `0.10` | Maximum allowed non-safety adjustment step |
+| `start_voltage` | `0.0` | Safe initialization voltage when no DAC state exists |
+| `manual_ramp_step_v` | `0.05` | Manual-mode ramp step |
+| `manual_ramp_interval_s` | `0.10` | Manual-mode ramp interval |
+| `interval_s` | `0.50` | Closed-loop normal adjustment interval |
+| `consecutive_samples` | `3` | Consecutive groups required for a closed-loop adjustment |
+| `recovery_settle_s` | `0.20` | Settling delay after overrange recovery |
+| `adc_timeout` | `1.0` | ADC sample-group validity timeout |
+| `service_timeout` | `1.0` | DAC service wait timeout |
+
+## 7. ROS interfaces
+
+### 7.1 Topics
+
+| Topic | Type | Publisher/subscriber | Content |
+| --- | --- | --- | --- |
+| `/robotic_fish/adc/sample` | `robotic_fish_sonic/AdcSample` | Published by `/adc` | One channel conversion |
+| `/robotic_fish/adc/samples` | `robotic_fish_sonic/AdcSampleArray` | Published by `/adc` | Complete three-channel group |
+| `/robotic_fish/dac/state` | `robotic_fish_sonic/DacState` | Published by `/dac` | One completed or failed setting operation |
+| `/robotic_fish/gain_control/state` | `robotic_fish_sonic/GainControlState` | Published by `/gain_control` | Mode, state and log; published only when changed |
+| `/robotic_fish/gain_control/config` | `robotic_fish_sonic/RuntimeConfig` | Published by each IO node | Latched effective settings, identified by device |
+| `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | Published by all three nodes | Connection, sampling, calibration, control, and error status |
+
+`/robotic_fish/gain_control/state` is latched, so a new subscriber immediately receives the latest state. Its fields are `timestamp`, `mode`, `state`, and `log`. Identical states are not republished; a diagnostic timer still detects stale ADC input without incoming samples.
+
+### 7.2 Services
+
+| Service | Type | Description |
+| --- | --- | --- |
+| `/robotic_fish/dac/set_voltage` | `robotic_fish_sonic/SetDacVoltage` | Request and confirm a DAC voltage |
+| `/robotic_fish/gain_control/reset_safety` | `std_srvs/Trigger` | Clear the manual-mode safety latch; rejected while overrange remains active |
+| `/robotic_fish/agc/enable` | `std_srvs/SetBool` | Compatibility API: true selects closed-loop and false selects off |
+
+### 7.3 Useful inspection commands
+
+```bash
+rostopic hz /robotic_fish/adc/samples
+rostopic echo -n 1 /robotic_fish/adc/samples
+rostopic echo /robotic_fish/dac/state
+rostopic echo /robotic_fish/gain_control/state
+rostopic echo /diagnostics
+```
+
+## 8. Full-system startup
+
+The current system uses three independent launch files. Run them in separate terminals.
+
+Terminal 1 — embedded bridge, ADC, DAC, and gain control:
+
+```bash
+source /home/khadas/ros/jsk_aerial_robot_ws/devel/setup.bash
+roslaunch robotic_fish_sonic io.launch \
+  dev:=vim4 \
+  gain_mode:=manual \
+  manual_gain_voltage:=0.20
+```
+
+Terminal 2 — joystick and sonic motion control:
+
+```bash
+source /home/khadas/ros/jsk_aerial_robot_ws/devel/setup.bash
+roslaunch robotic_fish sonic_teleop.launch
+```
+
+Terminal 3 — rosbag recording:
+
+```bash
+source /home/khadas/ros/jsk_aerial_robot_ws/devel/setup.bash
+roslaunch robotic_fish record.launch
+```
+
+`sonic_teleop` can publish a servo target as soon as joystick messages arrive. Secure the fish, keep the tail motion area clear, and verify stable spinal communication before starting the full system.
+
+## 9. Rosbag recording
+
+`robots/robotic_fish/launch/record.launch` currently records:
+
+```text
+/robotic_fish/adc/samples
+/robotic_fish/dac/state
+/robotic_fish/gain_control/state
+/robotic_fish/gain_control/config
+/joy
+/imu
+/servo/target_states
+/servo/states
+```
+
+Start recording with:
+
+```bash
+roslaunch robotic_fish record.launch
+```
+
+The default output filename is similar to:
+
+```text
+/home/khadas/sonic_2026-09-02-19-30-15.bag
+```
+
+While recording, the file has a `.bag.active` suffix. Press Ctrl+C to close it normally and produce the final `.bag` file. Do not power off the computer while the bag is active.
+
+Inspect a recording:
+
+```bash
+rosbag info /home/khadas/sonic_TIMESTAMP.bag
+rosbag check /home/khadas/sonic_TIMESTAMP.bag
+```
+
+Replay it with:
+
+```bash
+rosbag play /home/khadas/sonic_TIMESTAMP.bag
+```
+
+Gain control uses a service to command the DAC, and ROS service requests are not stored as rosbag topics. Reconstruct gain-control behavior primarily from:
+
+```text
+/robotic_fish/dac/state
+/robotic_fish/gain_control/state
+/robotic_fish/adc/samples[*].dac_volt
+```
+
+DAC service requests are represented by execution-result messages, including the requested target and failed attempts. To also record diagnostics, use `roslaunch robotic_fish record.launch record_diagnostics:=true`. Diagnostics remain available live regardless of this recording option.
+
+## 10. Stable DAC device name
+
+The default device is `/dev/robotic_fish_dac`, avoiding direct dependence on a changing `/dev/ttyUSB0` number. The current VIM4 rule identifies the CH340 adapter (`1a86:7523`) attached to the dedicated USB hub port `1-1.2`.
+
+Install the rule:
+
+```bash
+source /home/khadas/ros/jsk_aerial_robot_ws/devel/setup.bash
+sudo install -m 0644 \
+  "$(rospack find robotic_fish_sonic)/config/udev/99-robotic-fish-dac.rules" \
+  /etc/udev/rules.d/99-robotic-fish-dac.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger --action=add --subsystem-match=tty
+sudo udevadm settle
+```
+
+The ROS user must belong to `dialout`:
+
+```bash
+groups
+sudo usermod -aG dialout "$USER"
+```
+
+Log out and back in after changing group membership. Verify the device and permissions:
+
+```bash
+ls -l /dev/robotic_fish_dac
+readlink -f /dev/robotic_fish_dac
+test -r /dev/robotic_fish_dac && test -w /dev/robotic_fish_dac
+```
+
+Keep the DAC adapter connected to the physical USB port encoded in the rule. This prevents the system from accidentally driving another serial adapter used by spinal.
+
+## 11. Troubleshooting
+
+### 11.1 `Sync with device lost`
+
+This warning comes from `/rosserial_server`, not from the ADC, DAC, or gain-control nodes. It means `/dev/robotic_fish_spinal` could be opened, but a valid rosserial handshake was not received.
+
+Check:
+
+- embedded-controller power and reset state;
+- whether the current spinal firmware is installed;
+- that both host and firmware use 921600 baud;
+- crossed UART TX/RX and a shared ground;
+- the VIM4 UART pinmux/overlay;
+- whether another process owns `/dev/robotic_fish_spinal`.
+
+Use the package-only launch while testing sensors:
+
+```bash
+roslaunch robotic_fish_sonic sensor_io.launch
+```
+
+### 11.2 `/dev/robotic_fish_dac` does not exist
+
+```bash
+lsusb
+ls -l /dev/ttyUSB*
+sudo udevadm control --reload-rules
+sudo udevadm trigger --action=add --subsystem-match=tty
+```
+
+Confirm that the CH340 is connected to the physical port expected by the udev rule and that the user belongs to `dialout`.
+
+### 11.3 `status_cali: false`
+
+Common causes are:
+
+- at least one channel is outside the calibration file's observed range;
+- calibration is disabled;
+- the current group does not satisfy the required three-channel configuration.
+
+Inspect `calibration_status` and `calibration_id` in `/diagnostics`.
+
+### 11.4 `adc_stale`
+
+No accepted complete ADC sample group has arrived within `adc_timeout`. The controller will not increase DAC voltage in this state. Check the ADC node, I2C device, and `/robotic_fish/adc/samples` frequency.
+
+### 11.5 `manual_limited`
+
+Manual mode previously triggered ADC protection. Once protection releases,
+press Up or Down again to set a new target relative to the confirmed DAC voltage.
+There is no automatic return to the old target. `reset_safety` clears the latch
+but does not restore the pre-protection target.
+
+### 11.6 `adc_overrange_at_dac_min`
+
+The DAC has reached 0 V, but the raw ADC voltage remains above the recovery threshold. Do not increase gain. Check input amplitude, analog biasing, the signal chain, and hardware input protection.
+
+## 12. Build and test
+
+Build the package:
+
+```bash
+cd /home/khadas/ros/jsk_aerial_robot_ws
+catkin build robotic_fish_sonic --no-deps
+source devel/setup.bash
+```
+
+Run the unit tests:
+
+```bash
+cd /home/khadas/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot
+python3 -m unittest discover \
+  -s robots/robotic_fish_sonic/test \
+  -p 'test_*.py' -v
+```
+
+The current tests cover:
+
+- ADS1115 configuration, conversion, and timeout behavior;
+- DAC 0–5 V limits, BCD commands, and echo verification;
+- independent three-channel calibration and whole-group fallback;
+- manual target ramping;
+- closed-loop counters, step size, interval, and DAC bounds;
+- 4.00/3.30 V default safety triggering and recovery, plus explicit legacy-threshold tests;
+- manual-mode safety latching;
+- overrange behavior at the minimum DAC voltage.
+
+Recommended first-hardware-test sequence:
+
+1. start with `gain_mode:=off` and inspect ADC data and diagnostics;
+2. explicitly apply 0 V through the DAC service;
+3. begin manual-mode testing at a low voltage such as 0.20 V;
+4. confirm that reducing DAC voltage actually reduces ADC amplitude during an overrange;
+5. proceed to closed-loop and full-system motion tests;
+6. record a rosbag and inspect the message count of every expected topic after stopping.

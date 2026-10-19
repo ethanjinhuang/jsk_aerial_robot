@@ -1,0 +1,4 @@
+# Private parameters of acoustic_quadrants. Model selection remains a launch argument.
+window_s: 0.5
+gap_s: 0.2
+low_signal_v: 0.001

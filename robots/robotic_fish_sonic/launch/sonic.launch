@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Sensor/acoustic entry point. The spinal bridge, joystick and motion are separate. -->
+  <arg name="config" default="$(find robotic_fish_sonic)/config/io.yaml"/>
+  <arg name="acoustic_config" default="$(find robotic_fish_sonic)/config/acoustic.yaml"/>
+  <arg name="enable_adc" default="true"/>
+  <arg name="enable_dac" default="true"/>
+  <arg name="enable_gain_control" default="true"/>
+  <arg name="enable_acoustic" default="true"/>
+  <arg name="enable_agc" default="false"/>
+  <arg name="gain_mode" default="off"/>
+  <arg name="manual_gain_voltage" default="0.0"/>
+  <arg name="agc_target_min_v" default="2.5"/>
+  <arg name="agc_target_max_v" default="3.0"/>
+  <arg name="agc_step_v" default="0.01"/>
+  <arg name="adc_safety_limit_v" default="4.00"/>
+  <arg name="model" default=""/>
+  <arg name="window_s" default=""/>
+  <arg name="gap_s" default=""/>
+  <arg name="low_signal_v" default=""/>
+
+  <include file="$(find robotic_fish_sonic)/launch/sensor_io.launch">
+    <arg name="config" value="$(arg config)"/>
+    <arg name="enable_adc" value="$(arg enable_adc)"/>
+    <arg name="enable_dac" value="$(arg enable_dac)"/>
+    <arg name="enable_gain_control" value="$(arg enable_gain_control)"/>
+    <arg name="enable_agc" value="$(arg enable_agc)"/>
+    <arg name="gain_mode" value="$(arg gain_mode)"/>
+    <arg name="manual_gain_voltage" value="$(arg manual_gain_voltage)"/>
+    <arg name="agc_target_min_v" value="$(arg agc_target_min_v)"/>
+    <arg name="agc_target_max_v" value="$(arg agc_target_max_v)"/>
+    <arg name="agc_step_v" value="$(arg agc_step_v)"/>
+    <arg name="adc_safety_limit_v" value="$(arg adc_safety_limit_v)"/>
+  </include>
+
+  <include if="$(arg enable_acoustic)" file="$(find robotic_fish_sonic)/launch/quadrant.launch">
+    <arg name="config" value="$(arg acoustic_config)"/>
+    <arg name="model" value="$(arg model)"/>
+    <arg name="window_s" value="$(arg window_s)"/>
+    <arg name="gap_s" value="$(arg gap_s)"/>
+    <arg name="low_signal_v" value="$(arg low_signal_v)"/>
+  </include>
+</launch>

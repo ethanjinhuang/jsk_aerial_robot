@@ -1,0 +1,17 @@
+<launch>
+  <arg name="config" default="$(find robotic_fish_sonic)/config/acoustic.yaml"/>
+  <arg name="model" default=""/>
+  <!-- Empty overrides use the selected YAML values. -->
+  <arg name="window_s" default=""/>
+  <arg name="gap_s" default=""/>
+  <arg name="low_signal_v" default=""/>
+  <node pkg="robotic_fish_sonic" type="quadrant_node.py" name="acoustic_quadrants" output="screen">
+    <rosparam command="load" file="$(arg config)"/>
+    <param name="model" value="$(arg model)"/>
+    <param if="$(eval arg('window_s') != '')" name="window_s" type="double" value="$(arg window_s)"/>
+    <param if="$(eval arg('gap_s') != '')" name="gap_s" type="double" value="$(arg gap_s)"/>
+    <param if="$(eval arg('low_signal_v') != '')" name="low_signal_v" type="double" value="$(arg low_signal_v)"/>
+    <remap from="~probabilities" to="/robotic_fish/acoustic/quadrant_probabilities"/>
+    <remap from="~comparison" to="/robotic_fish/acoustic/channel_comparison"/>
+  </node>
+</launch>

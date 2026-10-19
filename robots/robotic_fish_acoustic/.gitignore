@@ -1,4 +1,0 @@
-__pycache__/
-*.pyc
-# Keep the Chinese README local; exclude it from Git synchronization.
-/README.md

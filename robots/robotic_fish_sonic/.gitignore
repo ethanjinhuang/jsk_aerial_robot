@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+# Preserve the previously local acoustic notes without publishing them.
+/COMPARISON.local.md

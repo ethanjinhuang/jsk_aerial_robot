@@ -47,5 +47,8 @@ rosdep install --from-paths src -y -q -r --ignore-src --rosdistro ${ROS_DISTRO} 
 # Build
 catkin config --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 catkin build --no-status
-catkin build --catkin-make-args run_tests -- -i --no-deps --no-status -p 1 -j 1 aerial_robot
+catkin build --catkin-make-args run_tests -- -i --no-deps --no-status -p 1 -j 1 aerial_robot robotic_fish_sonic
+source devel/setup.bash
+python3 "src/${REPOSITORY_NAME}/robots/robotic_fish_sonic/test/ros_smoke.py"
+python3 "src/${REPOSITORY_NAME}/robots/robotic_fish_sonic/test/bag_compatibility.py"
 catkin_test_results --verbose build || catkin_test_results --all build

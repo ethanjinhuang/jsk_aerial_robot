@@ -108,14 +108,14 @@ rosmsg show spinal/ServoControlCmd
 
 | 设备 | PC | VIM4 |
 | --- | --- | --- |
-| 下位机串口 | `/dev/ttyUSB0` | `/dev/ttyS4` |
+| 下位机串口 | `/dev/robotic_fish_spinal` | `/dev/robotic_fish_spinal` |
 | 串口波特率 | `921600` | `921600` |
 | 手柄 | `/dev/input/js0` | `/dev/input/js0` |
 
 检查设备：
 
 ```bash
-ls -l /dev/ttyUSB* /dev/ttyS4 2>/dev/null
+ls -l /dev/robotic_fish_spinal
 ls -l /dev/input/js* 2>/dev/null
 ```
 
@@ -146,13 +146,13 @@ PC 模式会自动启动 `spinal` 串口桥、手柄节点和控制节点：
 roslaunch robotic_fish teleop.launch dev:=pc
 ```
 
-默认连接 `/dev/ttyUSB0`，波特率为 `921600`。
+默认连接 `/dev/robotic_fish_spinal`，波特率为 `921600`。现场需核实设备链接。
 
 ### 5.2 VIM4 串口模式
 
 当前 teleop launch 文件在 `dev:=vim4` 时不会自动包含 `spinal/bridge.launch`，因此需要分两个终端启动。
 
-终端 1，启动 `/dev/ttyS4` 通信桥：
+终端 1，启动 `/dev/robotic_fish_spinal` 通信桥：
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -188,31 +188,33 @@ roslaunch robotic_fish spring_teleop.launch dev:=pc
 roslaunch robotic_fish advance_teleop.launch dev:=pc
 ```
 
-使用 sonic 总体程序并同时启动 ADC/DAC：
+声学采集与处理已经合并到 `robotic_fish_sonic`。以下命令在不同终端运行：
 
 ```bash
-roslaunch robotic_fish sonic_teleop.launch \
-  dev:=vim4 \
-  enable_sensor_io:=true
+roslaunch robotic_fish_sonic sonic.launch gain_mode:=manual
+roslaunch spinal bridge.launch dev:=vim4
+roslaunch robotic_fish sonic_teleop.launch
+roslaunch robotic_fish record.launch
 ```
 
-`sonic_teleop.launch` 默认同时启动 rosbag，文件保存在用户主目录，名称类似 `~/sonic_2026-09-01-18-30-00.bag`。录制内容包括：
+`sonic_teleop.launch` 只启动运动节点和手柄。IO、声学处理、串口桥及录包
+需要分别启动；不要重复启动同一串口桥或手柄发布者。
+`record.launch` 默认将 bag 保存在用户主目录，前缀为 `sonic`。录制内容包括：
 
 - ADC 三通道批数据（原始电压、校准电压、校准标识和时间戳）
-- DAC 命令与状态、节点诊断
+- DAC 执行结果、增益状态和有效配置
+- 声学通道比较及方向概率状态；诊断可用 `record_diagnostics:=true` 加入
 - 手柄输入、IMU、舵机目标命令与状态反馈
 
 改变保存目录或文件名前缀时，目标目录需要预先创建：
 
 ```bash
 mkdir -p ~/bags
-roslaunch robotic_fish sonic_teleop.launch \
-  dev:=vim4 \
-  enable_sensor_io:=true \
-  bag_prefix:=$HOME/bags/sonic_
+roslaunch robotic_fish record.launch bag_prefix:=$HOME/bags/sonic
 ```
 
-如本次运行不需要录制，可使用 `record_bag:=false`。停止整个 launch 时，rosbag 会同步结束并正常关闭文件。录制后可检查内容：
+不需录制时不启动 `record.launch`，也可使用该入口的 `enabled:=false`。
+停止录包终端的 launch 后检查：
 
 ```bash
 rosbag info ~/sonic_*.bag
@@ -377,9 +379,9 @@ catkin build spinal robotic_fish --force-cmake
 检查设备名、用户组和是否被其他进程占用：
 
 ```bash
-ls -l /dev/ttyUSB0 /dev/ttyS4 2>/dev/null
+ls -l /dev/robotic_fish_spinal
 groups
-lsof /dev/ttyUSB0 2>/dev/null
+lsof /dev/robotic_fish_spinal
 ```
 
 ### 没有 `/joy` 数据
