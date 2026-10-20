@@ -1,6 +1,5 @@
 <?xml version="1.0"?>
 <launch>
-  <arg name="bias_rate_limit" default="512.0"/>
   <arg name="joy_timeout_s" default="0.5"/>
   <arg name="update_rate" default="50.0"/>
   <arg name="joy_autorepeat_rate" default="20.0"/>
@@ -19,7 +18,6 @@
     <param name="auto_frequency" value="1.5"/>
     <param name="auto_default_amplitude" value="512.0"/>
     <param name="auto_amplitude_rate" value="64.0"/>
-    <param name="bias_rate_limit" value="$(arg bias_rate_limit)"/>
     <param name="joy_timeout_s" value="$(arg joy_timeout_s)"/>
     <param name="update_rate" value="$(arg update_rate)"/>
     <param name="steering_axis" type="int" value="$(arg steering_axis)"/>

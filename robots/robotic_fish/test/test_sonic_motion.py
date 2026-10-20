@@ -60,15 +60,37 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.feed(c, 20.).mode, 'manual')
         self.assertEqual(c.tick(20.02).target, 2048.)
 
-    def test_bias_slew_and_reversal(self):
-        c = SonicController(bias_rate_limit=100., joy_timeout_s=10.)
-        state = self.feed(c, 0., steering=-1.)
-        self.assertEqual((state.requested_bias, state.applied_bias), (1024., 0.))
-        self.assertAlmostEqual(c.tick(.1).applied_bias, 10.)
-        self.assertAlmostEqual(c.tick(1.).applied_bias, 100.)
-        self.feed(c, 1., steering=1.)
-        self.assertAlmostEqual(c.tick(1.2).applied_bias, 80.)
-        self.assertAlmostEqual(c.tick(1.3).applied_bias, 70.)
+    def test_manual_position_follows_joystick_directly(self):
+        c = SonicController()
+        for now, axis, target in [(0., -1., 3072.), (.001, 1., 1024.),
+                                  (.002, -.25, 2304.), (.003, .05, 2048.)]:
+            state = self.feed(c, now, steering=axis)
+            self.assertEqual(state.target, target)
+            self.assertEqual(state.applied_bias, state.requested_bias)
+            self.assertEqual(c.tick(now + .0001).target, target)
+
+    def test_mode_switches_use_current_joystick_position(self):
+        c = SonicController(joy_timeout_s=10.)
+        self.assertEqual(self.feed(c, 0., steering=-.5).target, 2560.)
+        state = self.feed(c, .1, steering=1., pressed=(3,))
+        self.assertEqual((state.mode, state.applied_bias, state.target), ('auto', -1024., 1024.))
+        self.assertEqual(c.tick(.2).applied_bias, -1024.)
+        state = self.feed(c, .21, steering=1., pressed=(0,))
+        self.assertEqual((state.mode, state.target), ('manual', 1024.))
+        self.feed(c, .22, pressed=(1,))
+        self.feed(c, .23)
+        self.feed(c, .24, pressed=(0,))
+        self.assertEqual(self.feed(c, .25, steering=-1.).target, 3072.)
+
+    def test_auto_center_follows_joystick_without_resetting_phase(self):
+        c = SonicController(joy_timeout_s=10.)
+        state = self.feed(c, 0., steering=-.5, pressed=(3,))
+        self.assertEqual((state.applied_bias, state.target), (512., 2560.))
+        for now, axis, target in [(.125, .25, 2304.), (.25, 1., 1024.),
+                                  (.251, -1., 3072.), (.375, 0., 1536.)]:
+            state = self.feed(c, now, steering=axis)
+            self.assertEqual(state.applied_bias, state.requested_bias)
+            self.assertAlmostEqual(state.target, target)
 
     def test_dead_zone_preserves_previous_mapping(self):
         c = SonicController()
@@ -83,8 +105,8 @@ class ControllerTests(unittest.TestCase):
         self.feed(c, .2)
         self.assertEqual(self.feed(c, .25, pressed=(3,)).target, 2048.)
 
-    def test_auto_bias_envelope_with_slew(self):
-        c = SonicController(bias_rate_limit=10000., joy_timeout_s=10.)
+    def test_auto_bias_envelope_at_position_boundary(self):
+        c = SonicController(joy_timeout_s=10.)
         self.feed(c, 0., pressed=(3,), steering=-1.)
         state = c.tick(.2)
         self.assertEqual(state.applied_bias, 1024.)
@@ -188,7 +210,7 @@ class ControllerTests(unittest.TestCase):
         c = SonicController()
         self.assertEqual(self.feed(c, 0., pressed=(0, 3)).reason, 'mode_conflict')
 
-    def test_clock_faults_stop_without_huge_slew(self):
+    def test_clock_faults_stop_and_clear_bias(self):
         for time_value, reason in [(float('nan'), 'invalid_clock'), (-1., 'invalid_clock'), (.5, 'clock_rewind')]:
             with self.subTest(time=time_value):
                 c = SonicController()
@@ -202,7 +224,7 @@ class ControllerTests(unittest.TestCase):
         buttons = [0] * 7; buttons[4] = 1
         self.assertEqual(c.handle_joy([-.5, 1., 1.], buttons, 0.).requested_bias, 512.)
         bad = [{'frequency': 0}, {'frequency': float('nan')}, {'default_amplitude': 1025},
-               {'amplitude': -1}, {'amplitude_rate': -1}, {'bias_rate_limit': 0},
+               {'amplitude': -1}, {'amplitude_rate': -1},
                {'joy_timeout_s': 0}, {'joy_dead_zone': 1}, {'joy_dead_zone': -.1},
                {'stop_button': -1}, {'manual_button': True}, {'manual_button': 3},
                {'steering_axis': 3}, {'amplitude_buttons': []}, {'amplitude_buttons': [1]},

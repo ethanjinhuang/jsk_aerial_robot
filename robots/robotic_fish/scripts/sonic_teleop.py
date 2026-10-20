@@ -20,7 +20,6 @@ class Teleop:
             'default_amplitude': rospy.get_param('~auto_default_amplitude', 512.),
             'amplitude': rospy.get_param('~auto_amplitude', None),
             'amplitude_rate': rospy.get_param('~auto_amplitude_rate', 64.),
-            'bias_rate_limit': rospy.get_param('~bias_rate_limit', 512.),
             'joy_timeout_s': rospy.get_param('~joy_timeout_s', .5),
             'joy_dead_zone': rospy.get_param('~joy_dead_zone', .1),
         }
@@ -52,8 +51,8 @@ class Teleop:
         self.joy_sub = rospy.Subscriber('/joy', Joy, self._joyCallback, queue_size=1)
         self._thread = threading.Thread(target=self._run, name='sonic-motion', daemon=True)
         rospy.on_shutdown(self._shutdown)
-        rospy.loginfo('Sonic motion: %.1f Hz wall clock, bias limit %.1f units/s, Joy timeout %.3f s',
-                      self.update_rate, self.controller.bias_rate_limit, self.controller.joy_timeout_s)
+        rospy.loginfo('Sonic motion: %.1f Hz wall clock, direct joystick mapping, Joy timeout %.3f s',
+                      self.update_rate, self.controller.joy_timeout_s)
         self._thread.start()
 
     def _joyCallback(self, msg):

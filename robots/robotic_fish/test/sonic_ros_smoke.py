@@ -66,7 +66,7 @@ def main():
         node = subprocess.Popen(
             [sys.executable, str(args.node_script), '__name:=sonic_motion_under_test',
              '/joy:=/motion_test/joy', '/servo/target_states:=/motion_test/targets',
-             '_joy_timeout_s:=0.35', '_auto_frequency:=2.0', '_bias_rate_limit:=200.0'],
+             '_joy_timeout_s:=0.35', '_auto_frequency:=2.0'],
             stdout=node_log, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
@@ -106,15 +106,22 @@ def main():
         centered(send(.2, pressed=(3,)))
         send(.1)
         centered(send(.15, pressed=(0,)))
-        rows = send(.3, steering=-1.)
-        assert rows[-1][1] > 2080 and max(v for _, v in rows) < 2130, rows
-        print('PASS: latched stop, explicit manual recovery and bounded bias slew', flush=True)
+        for steering, target in [(-.25, 2304), (-1., 3072), (1., 1024), (0., 2048)]:
+            rows = send(.15, steering=steering)
+            assert len(rows) >= 3 and all(v == target for _, v in rows), rows
+        send(.12, pressed=(3,))
+        for steering, target in [(-1., 3072), (1., 1024)]:
+            rows = send(.15, steering=steering)
+            assert len(rows) >= 3 and all(v == target for _, v in rows), rows
+        rows = send(.6, steering=-.25)
+        assert len(rows) >= 15 and max(v for _, v in rows) > 2750 and min(v for _, v in rows) < 1850, rows
+        print('PASS: latched stop, direct manual positioning and direct auto center adjustment', flush=True)
         centered(send(.2, malformed=True))
         centered(send(.15, pressed=(3,)))
         send(.1)
         send(.1, pressed=(0,))
         rows = send(.2, steering=-1.)
-        assert rows[-1][1] > 2070
+        assert rows[-1][1] == 3072
         time.sleep(.55)
         with lock:
             tail = list(received[-5:])
