@@ -1,5 +1,16 @@
 <?xml version="1.0"?>
 <launch>
+  <arg name="bias_rate_limit" default="512.0"/>
+  <arg name="joy_timeout_s" default="0.5"/>
+  <arg name="update_rate" default="50.0"/>
+  <arg name="joy_autorepeat_rate" default="20.0"/>
+  <arg name="steering_axis" default="2"/>
+  <arg name="amplitude_decrease_axis" default="3"/>
+  <arg name="amplitude_increase_axis" default="4"/>
+  <arg name="stop_button" default="1"/>
+  <arg name="auto_button" default="3"/>
+  <arg name="manual_button" default="0"/>
+  <arg name="amplitude_buttons" default="[6, 7]"/>
 
   <node pkg="robotic_fish" type="sonic_teleop.py" name="sonic_teleop_node" output="screen">
     <param name="joy_dead_zone" value="0.1"/>
@@ -8,11 +19,22 @@
     <param name="auto_frequency" value="1.5"/>
     <param name="auto_default_amplitude" value="512.0"/>
     <param name="auto_amplitude_rate" value="64.0"/>
+    <param name="bias_rate_limit" value="$(arg bias_rate_limit)"/>
+    <param name="joy_timeout_s" value="$(arg joy_timeout_s)"/>
+    <param name="update_rate" value="$(arg update_rate)"/>
+    <param name="steering_axis" type="int" value="$(arg steering_axis)"/>
+    <param name="amplitude_decrease_axis" type="int" value="$(arg amplitude_decrease_axis)"/>
+    <param name="amplitude_increase_axis" type="int" value="$(arg amplitude_increase_axis)"/>
+    <param name="stop_button" type="int" value="$(arg stop_button)"/>
+    <param name="auto_button" type="int" value="$(arg auto_button)"/>
+    <param name="manual_button" type="int" value="$(arg manual_button)"/>
+    <rosparam param="amplitude_buttons" subst_value="true">$(arg amplitude_buttons)</rosparam>
   </node>
 
   <node pkg="joy" type="joy_node" name="joy_node" output="screen" >
 
     <param name="dev" value="/dev/input/js0"/>
     <param name="coalesce_interval" value="0.025"/>
+    <param name="autorepeat_rate" value="$(arg joy_autorepeat_rate)"/>
   </node>
 </launch>

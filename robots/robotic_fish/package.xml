@@ -58,12 +58,15 @@
   <exec_depend>roscpp</exec_depend>
   <exec_depend>rospy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>usb_cam</exec_depend>
   <exec_depend>image_view</exec_depend>
   <exec_depend>spinal</exec_depend>
   <exec_depend>joy</exec_depend>
   <exec_depend>robotic_fish_sonic</exec_depend>
   <exec_depend>rosbag</exec_depend>
+
+  <test_depend>python3-nose</test_depend>
 
 
   <!-- The export tag contains other, unspecified, tags -->

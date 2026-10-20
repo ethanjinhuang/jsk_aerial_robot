@@ -267,6 +267,73 @@ rosbag info ~/sonic_*.bag
 | `buttons[4]` + `buttons[5]` | 快速转向 |
 | `buttons[6]`/`buttons[7]` + `axes[3]`/`axes[4]` | 电机加速/减速 |
 
+### 6.4 `sonic_teleop.py`：单舵机运动接口
+
+`sonic_teleop` 只输出舵机 0 的位置目标，没有接入声学控制。
+摆尾公式为 `center + applied_bias + effective_amplitude * sin(2*pi*f*t)`。
+`sonic_motion.py` 独立计算轨迹和模式，ROS 脚本统一发布
+`/servo/target_states`。不要同时运行其他向该话题发布运动命令的程序。
+
+| 默认 Joy 输入 | 功能 |
+| --- | --- |
+| `axes[2]` | 目标中心偏置为 `-axis * servo_range`，死区内为零 |
+| `buttons[3]` 的新按下 | 启动／重新定相自动摆尾 |
+| `buttons[0]` 的新按下 | 进入手动位置模式，或从停止恢复手动 |
+| `buttons[1]` | 停止摆尾、回中并锁存；优先于其他输入 |
+| `buttons[6]` 或 `buttons[7]` 按住 | 用 `axes[4]` 增幅、`axes[3]` 减幅，沿用原映射 |
+
+启动后默认手动模式；首个有效手柄输入之前不发送舵机命令。
+手动和自动模式均以默认 50 Hz 的墙上时间循环输出。
+轨迹和超时使用 `time.monotonic()`，不依赖 ROS `/clock`；
+ROS 仿真时钟暂停或回拨不会暂停运动或手柄超时检查。
+这也意味着不能依靠暂停 `/clock` 停止这个硬件控制节点，应使用停止键。
+
+停止、输入异常或手柄超时后进入 `stopped`：目标偏置和实际偏置清零，
+取消正弦摆动，从下一控制周期起发送中心位置。回中覆盖普通偏置限速。
+需要先松开停止／自动／手动模式键和调幅键，将方向轴回到死区，
+收到一个完整有效的释放帧，再在回中状态重新按自动键或手动键。
+保持原来的按键、恢复连接或单纯收到中立消息均不会恢复运动。
+这相对原版“停止后直接回到手动模式”是有意的行为变化。
+
+| 参数／launch 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `bias_rate_limit` | 512 | 中心偏置最大变化速率，舵机刻度／秒 |
+| `joy_timeout_s` | 0.5 | 最后一个有效 Joy 消息的接收超时，秒 |
+| `update_rate` | 50 | 控制循环目标频率，Hz；应大于摆尾频率的两倍 |
+| `joy_autorepeat_rate` | 20 | launch 为 joy_node 设置的重复发布频率 |
+| `steering_axis` | 2 | 方向轴索引 |
+| `amplitude_decrease_axis` / `amplitude_increase_axis` | 3 / 4 | 调幅轴索引 |
+| `stop_button` / `auto_button` / `manual_button` | 1 / 3 / 0 | 模式按键索引 |
+| `amplitude_buttons` | `[6, 7]` | 调幅使能按键列表 |
+
+中心 2048、软件范围 ±1024、启动文件摆频 1.5 Hz、默认摆幅 512 和
+调幅速率 64 刻度／秒保留。直接 rosrun 时的摆频默认仍为 2 Hz。
+位置、幅值和偏置使用舵机刻度，软件范围不等于已验证的机械限位。
+偏置先限速，实际摆幅再受剩余位置余量限制；靠近位置边界时摆幅会缩小。
+日志显示模式／原因、目标和实际偏置、请求和实际摆幅以及最终目标位置。
+
+```bash
+roslaunch robotic_fish sonic_teleop.launch bias_rate_limit:=256 joy_timeout_s:=0.5
+```
+
+上述新增默认值是软件调试起点，尚未经本次水中实验确认。
+Joy 只检查映射到的轴和按键；短消息、非有限轴、越界轴或无效按键使运动停止，
+不刷新有效输入时间。看门狗检查消息是否继续到达，不能证明无线手柄的物理
+链路仍有效；现场应实际验证手柄断连时驱动的行为。进程／串口完全失联时，
+主机回中命令的送达也不能由此节点保证。
+
+在仓库根目录验证（编译并 source 后）：
+
+```bash
+python3 -m unittest discover -s robots/robotic_fish/test -v
+python3 robots/robotic_fish/test/sonic_ros_smoke.py
+```
+
+通信测试只启动本机端口 11428 的独立 master、合成 Joy 发布者和运动节点，
+命令重映射到测试话题，不启动桥或执行器。该端口需空闲。
+支持 `--node-script` 指定安装后的 `sonic_teleop.py` 进行安装空间验证。
+本次检查结果和现场待验证项见 [运动验证记录](MOTION_VALIDATION.md)。
+
 ## 7. ROS 话题与参数
 
 ### 7.1 主要话题
