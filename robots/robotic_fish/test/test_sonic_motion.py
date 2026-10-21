@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
+sys.path.insert(0, str(ROOT.parent / 'robotic_fish_sonic' / 'src'))
 from robotic_fish.sonic_motion import SonicController, SonicMotion
 
 
@@ -96,6 +97,55 @@ class ControllerTests(unittest.TestCase):
         c = SonicController()
         self.assertEqual(self.feed(c, 0., steering=.05).requested_bias, 0.)
         self.assertAlmostEqual(self.feed(c, .1, steering=.1).requested_bias, -102.4)
+
+    def test_acoustic_bias_only_controls_tracking_and_never_rearms_stop(self):
+        c = SonicController(tracking_enabled=True)
+        self.assertEqual(self.feed(c, 0., steering=-1.).target, 3072.)
+        self.assertEqual(self.feed(c, .1, steering=-1., pressed=(2,)).target, 2048.)
+        c.set_tracking_bias(256.)
+        self.assertEqual(self.feed(c, .2, steering=1.).applied_bias, 256.)
+        self.assertEqual(c.auto_epoch, .1)
+        for value in (float('nan'), 1025.):
+            with self.assertRaises(ValueError): c.set_tracking_bias(value)
+        self.feed(c, .3, pressed=(1,))
+        with self.assertRaises(ValueError): c.set_tracking_bias(256.)
+        self.feed(c, .4)
+        self.assertEqual(self.feed(c, .45, pressed=(0,),steering=0.).mode,'manual')
+        self.assertEqual(self.feed(c,.46,steering=1.).target,1024.)
+
+    def test_circle_selects_tracking_without_toggling_or_restarting_phase(self):
+        c = SonicController(tracking_enabled=True)
+        self.assertEqual(self.feed(c, 0., pressed=(2,)).mode, 'tracking')
+        c.set_tracking_bias(128.)
+        self.feed(c, .05)
+        state = self.feed(c, .1, pressed=(2,))
+        self.assertEqual((state.mode, state.applied_bias, c.auto_epoch), ('tracking', 128., 0.))
+        self.assertEqual(self.feed(c, .15, pressed=(2,)).mode, 'tracking')
+        state = self.feed(c, .2, pressed=(3,), steering=1.)
+        self.assertEqual((state.mode, state.applied_bias), ('auto', -1024.))
+        with self.assertRaises(ValueError): c.set_tracking_bias(128.)
+        self.assertEqual(self.feed(c, .25, pressed=(0,)).mode, 'manual')
+        state = self.feed(c, .3, pressed=(2,))
+        self.assertEqual((state.mode, state.applied_bias, c.auto_epoch), ('tracking', 0., .3))
+
+    def test_cross_stops_tracking_and_circle_recovery_requires_release(self):
+        c = SonicController(tracking_enabled=True)
+        self.feed(c, 0., pressed=(2,))
+        state = self.feed(c, .1, pressed=(0, 1, 2, 3))
+        self.assertEqual((state.mode, state.reason, state.target), ('stopped', 'stop_button', 2048.))
+        self.assertEqual(self.feed(c, .2, pressed=(2,)).mode, 'stopped')
+        self.feed(c, .3)
+        state = self.feed(c, .4, pressed=(2,))
+        self.assertEqual((state.mode, state.applied_bias), ('tracking', 0.))
+        state = c.tick(.901)
+        self.assertEqual((state.mode, state.reason), ('stopped', 'joy_timeout'))
+
+    def test_circle_requires_enabled_tracking_and_conflicting_keys_stop(self):
+        c = SonicController()
+        self.assertEqual(self.feed(c, 0., pressed=(2,)).reason, 'tracking_unavailable')
+        for pressed in ((0, 2), (2, 3)):
+            c = SonicController(tracking_enabled=True)
+            self.assertEqual(self.feed(c, 0., pressed=pressed).reason, 'mode_conflict')
 
     def test_auto_phase_edges_and_zero_amplitude_restart(self):
         c = SonicController(amplitude=0., joy_timeout_s=10.)
@@ -220,13 +270,14 @@ class ControllerTests(unittest.TestCase):
 
     def test_mapping_and_configuration_validation(self):
         c = SonicController(steering_axis=0, amplitude_decrease_axis=1, amplitude_increase_axis=2,
-                            stop_button=2, auto_button=4, manual_button=5, amplitude_buttons=[6])
+                            stop_button=2, auto_button=4, manual_button=5, tracking_button=3, amplitude_buttons=[6])
         buttons = [0] * 7; buttons[4] = 1
         self.assertEqual(c.handle_joy([-.5, 1., 1.], buttons, 0.).requested_bias, 512.)
         bad = [{'frequency': 0}, {'frequency': float('nan')}, {'default_amplitude': 1025},
                {'amplitude': -1}, {'amplitude_rate': -1},
                {'joy_timeout_s': 0}, {'joy_dead_zone': 1}, {'joy_dead_zone': -.1},
                {'stop_button': -1}, {'manual_button': True}, {'manual_button': 3},
+               {'tracking_button': 1}, {'tracking_enabled': 'true'},
                {'steering_axis': 3}, {'amplitude_buttons': []}, {'amplitude_buttons': [1]},
                {'amplitude_buttons': [6, 6]}]
         for kwargs in bad:
@@ -240,14 +291,21 @@ class RosAdapterTests(unittest.TestCase):
         fake_ros = NS(get_param=lambda k, default=None: (params or {}).get(k, default),
                       Publisher=Mock(return_value=NS(publish=published.append)),
                       Subscriber=Mock(return_value=NS(unregister=lambda: None)), on_shutdown=Mock(),
-                      loginfo=Mock(), logwarn=Mock(), loginfo_throttle=Mock(), ROSException=RuntimeError)
+                      loginfo=Mock(), logwarn=Mock(), loginfo_throttle=Mock(), ROSException=RuntimeError,
+                      Service=Mock(return_value=NS(shutdown=Mock())))
         modules = {'rospy': fake_ros, 'sensor_msgs.msg': NS(Joy=object),
-                   'spinal.msg': NS(ServoControlCmd=lambda: NS(index=[], cmd=[]))}
+                   'spinal.msg': NS(ServoControlCmd=lambda: NS(index=[], cmd=[])),
+                   'robotic_fish_sonic.msg': NS(AdcSampleArray=object,
+                       AcousticSteeringState=lambda: NS(header=NS())),
+                   'robotic_fish_sonic.srv': NS(SetAcousticSteering=object,
+                       SetAcousticSteeringResponse=lambda success,message:NS(success=success,message=message))}
         spec = importlib.util.spec_from_file_location('tested_sonic_teleop', ROOT / 'scripts/sonic_teleop.py')
         module = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, modules):
             spec.loader.exec_module(module)
+        module._mock_modules = modules
         clock = [0.]
+        fake_ros.Time = NS(now=lambda:NS(to_sec=lambda:clock[0]),from_sec=lambda t:t)
         module.time = NS(monotonic=lambda: clock[0])
         module.threading = NS(RLock=threading.RLock, Event=threading.Event,
                               Thread=Mock(return_value=NS(start=lambda: None, join=lambda **k: None,
@@ -284,6 +342,71 @@ class RosAdapterTests(unittest.TestCase):
         node = module.Teleop()
         node._shutdown()
         self.assertEqual(published, [])
+
+    def adc(self, t):
+        return NS(samples=[NS(channel_id=i,timestamp=NS(to_sec=lambda:t),volt_cali=value,
+                              status_cali=True,cali_id='test',adc_code=100,
+                              status_dac_feedback=True,dac_volt=.9)
+                           for i,value in enumerate((1.,2.,1.))])
+
+    def test_acoustic_decision_and_atomic_runtime_parameters(self):
+        module,ros,clock,published=self.make_node({'~acoustic_steering/enabled':True})
+        with patch.dict(sys.modules,module._mock_modules):
+            node=module.Teleop()
+        node._adcCallback(self.adc(0.))
+        node._joyCallback(NS(axes=joy(pressed=(2,))[0],buttons=joy(pressed=(2,))[1]))
+        node._controlLoop()
+        self.assertEqual(node.controller.applied_bias,0.)
+        for i in range(1,11):
+            clock[0]=i*.05
+            node._adcCallback(self.adc(clock[0]))
+            node._joyCallback(NS(axes=joy(steering=-1.)[0],buttons=joy()[1]))
+            node._controlLoop()
+            if i<10:self.assertEqual(node.controller.applied_bias,0.)
+        self.assertEqual((node.controller.mode,node.controller.applied_bias),('tracking',256.))
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.7,bias=128.)).success)
+        self.assertFalse(node._setAcousticSteering(NS(threshold=.2,bias=1025.)).success)
+        self.assertEqual(node.acoustic.settings.bias,256.)
+        for i in range(11,21):
+            clock[0]=i*.05
+            node._adcCallback(self.adc(clock[0]))
+            node._joyCallback(NS(axes=joy()[0],buttons=joy()[1]))
+            node._controlLoop()
+        self.assertEqual((node.controller.applied_bias,node.acoustic.settings.bias),(0.,128.))
+        clock[0]=1.21
+        node._joyCallback(NS(axes=joy()[0],buttons=joy()[1]))
+        node._controlLoop()
+        self.assertEqual((node.controller.mode,node.controller.reason),('stopped','acoustic_adc_timeout'))
+        self.assertTrue(any(getattr(msg,'cmd',[])==[2048] for msg in published))
+        node._shutdown()
+        ros.Service.return_value.shutdown.assert_called_once()
+
+    def test_acoustic_missing_data_cannot_start_tracking_but_manual_works(self):
+        module,_,clock,_=self.make_node({'~acoustic_steering/enabled':True})
+        with patch.dict(sys.modules,module._mock_modules):
+            node=module.Teleop()
+        node._joyCallback(NS(axes=joy(steering=-1.)[0],buttons=joy()[1]))
+        node._controlLoop()
+        self.assertEqual(node.controller.tick(0.).target,3072.)
+        node._joyCallback(NS(axes=joy(pressed=(2,))[0],buttons=joy(pressed=(2,))[1]))
+        node._controlLoop()
+        self.assertEqual(node.controller.reason,'acoustic_no_data')
+        clock[0]=.1
+        node._joyCallback(NS(axes=joy(pressed=(2,))[0],buttons=joy(pressed=(2,))[1]))
+        node._controlLoop()
+        self.assertEqual(node.controller.mode,'stopped')
+
+    def test_triangle_ordinary_auto_ignores_acoustic_faults_and_uses_joystick(self):
+        module,_,clock,_=self.make_node({'~acoustic_steering/enabled':True})
+        with patch.dict(sys.modules,module._mock_modules):
+            node=module.Teleop()
+        node._joyCallback(NS(axes=joy(pressed=(3,),steering=-.25)[0],buttons=joy(pressed=(3,))[1]))
+        node._controlLoop()
+        self.assertEqual((node.controller.mode,node.controller.applied_bias),('auto',256.))
+        clock[0]=.1
+        node._adcCallback(NS(samples=[]))
+        node._controlLoop()
+        self.assertEqual((node.controller.mode,node.controller.reason),('auto','auto_button'))
 
 
 if __name__ == '__main__':

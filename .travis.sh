@@ -52,4 +52,5 @@ source devel/setup.bash
 python3 "src/${REPOSITORY_NAME}/robots/robotic_fish_sonic/test/ros_smoke.py"
 python3 "src/${REPOSITORY_NAME}/robots/robotic_fish_sonic/test/bag_compatibility.py"
 python3 "src/${REPOSITORY_NAME}/robots/robotic_fish/test/sonic_ros_smoke.py"
+python3 "src/${REPOSITORY_NAME}/robots/robotic_fish/test/cycle_steering_ros_smoke.py"
 catkin_test_results --verbose build || catkin_test_results --all build

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ROS adapter for single-servo motion; no acoustic control in this node yet."""
+"""Single-servo ROS adapter, with optional complete-cycle acoustic steering."""
 import math
 import threading
 import time
@@ -22,10 +22,12 @@ class Teleop:
             'amplitude_rate': rospy.get_param('~auto_amplitude_rate', 64.),
             'joy_timeout_s': rospy.get_param('~joy_timeout_s', .5),
             'joy_dead_zone': rospy.get_param('~joy_dead_zone', .1),
+            'tracking_enabled': rospy.get_param('~acoustic_steering/enabled', False),
         }
         for name, default in [('steering_axis', 2), ('amplitude_decrease_axis', 3),
                               ('amplitude_increase_axis', 4), ('stop_button', 1),
-                              ('auto_button', 3), ('manual_button', 0), ('amplitude_buttons', [6, 7])]:
+                              ('auto_button', 3), ('manual_button', 0), ('tracking_button', 2),
+                              ('amplitude_buttons', [6, 7])]:
             parameters[name] = rospy.get_param('~' + name, default)
         self.controller = SonicController(**parameters)
         self.update_rate = rospy.get_param('~update_rate', 50.)
@@ -47,6 +49,31 @@ class Teleop:
         self.lock = threading.RLock()
         self._stopping = threading.Event()
         self._last_transition = None
+        self.acoustic = None
+        self._acoustic_token = None
+        self._acoustic_status = 'disabled'
+        if self.controller.tracking_enabled:
+            from robotic_fish_sonic.cycle_steering import CycleSteering, SteeringFault
+            from robotic_fish_sonic.msg import AdcSampleArray, AcousticSteeringState
+            from robotic_fish_sonic.srv import SetAcousticSteering, SetAcousticSteeringResponse
+            self._SteeringFault = SteeringFault
+            self._AcousticState = AcousticSteeringState
+            self._SteeringResponse = SetAcousticSteeringResponse
+            self.acoustic = CycleSteering(
+                frequency=self.controller.frequency, max_bias=self.controller.motion.servo_range,
+                threshold=rospy.get_param('~acoustic_steering/threshold', .1),
+                bias=rospy.get_param('~acoustic_steering/bias', 256.),
+                left_bias_sign=rospy.get_param('~acoustic_steering/left_bias_sign', 1),
+                gap_s=rospy.get_param('~acoustic_steering/gap_s', .2),
+                max_age_s=rospy.get_param('~acoustic_steering/max_age_s', .2),
+                future_tolerance_s=rospy.get_param('~acoustic_steering/future_tolerance_s', .05),
+                low_signal_v=rospy.get_param('~acoustic_steering/low_signal_v', .001))
+            self.acoustic_pub = rospy.Publisher('/robotic_fish/acoustic/steering_state',
+                                               AcousticSteeringState, queue_size=1)
+            self.adc_sub = rospy.Subscriber('/robotic_fish/adc/samples', AdcSampleArray,
+                                            self._adcCallback, queue_size=100)
+            self.settings_service = rospy.Service('~set_acoustic_steering', SetAcousticSteering,
+                                                   self._setAcousticSteering)
         self.servo_cmd_pub = rospy.Publisher('/servo/target_states', ServoControlCmd, queue_size=1)
         self.joy_sub = rospy.Subscriber('/joy', Joy, self._joyCallback, queue_size=1)
         self._thread = threading.Thread(target=self._run, name='sonic-motion', daemon=True)
@@ -54,6 +81,21 @@ class Teleop:
         rospy.loginfo('Sonic motion: %.1f Hz wall clock, direct joystick mapping, Joy timeout %.3f s',
                       self.update_rate, self.controller.joy_timeout_s)
         self._thread.start()
+
+    def _adcCallback(self, msg):
+        with self.lock:
+            if not self._stopping.is_set():
+                self.acoustic.push(msg, time.monotonic(), rospy.Time.now().to_sec())
+
+    def _setAcousticSteering(self, request):
+        with self.lock:
+            if self._stopping.is_set():
+                return self._SteeringResponse(False, 'motion node is shutting down')
+            try:
+                self.acoustic.configure(request.threshold, request.bias)
+            except ValueError as exc:
+                return self._SteeringResponse(False, str(exc))
+            return self._SteeringResponse(True, 'accepted; applies at next valid full-cycle decision')
 
     def _joyCallback(self, msg):
         with self.lock:
@@ -67,9 +109,68 @@ class Teleop:
         msg.cmd = [int(state.target)]
         self.servo_cmd_pub.publish(msg)
 
+    def _acousticStep(self, state, now):
+        updated = False
+        if state is None or state.mode != 'tracking':
+            self.acoustic.deactivate()
+            self._acoustic_token = None
+            self._acoustic_status = 'idle' if state is None else state.reason if state.mode == 'stopped' else state.mode
+        else:
+            token = (self.controller.auto_epoch, self.controller.frequency)
+            try:
+                if token != self._acoustic_token:
+                    self.acoustic.begin(*token, now)
+                    self._acoustic_token = token
+                    self._acoustic_status = 'warmup'
+                decision = self.acoustic.evaluate(now)
+                if decision is not None:
+                    self.controller.set_tracking_bias(decision.bias)
+                    updated = True
+                    self._acoustic_status = 'active'
+                    rospy.loginfo('Acoustic cycle=%d, L/R=%.5f/%.5f, difference=%.3f, bias=%.1f',
+                                  decision.cycle, decision.left_mean, decision.right_mean,
+                                  decision.difference, decision.bias)
+            except self._SteeringFault as exc:
+                self._acoustic_status = 'acoustic_' + str(exc)
+                self.controller.stop(self._acoustic_status)
+                self.acoustic.deactivate()
+                self._acoustic_token = None
+            state = self.controller.tick(now)
+        self._publishAcousticState(state, now, updated)
+        return state
+
+    def _publishAcousticState(self, state, now, updated):
+        msg = self._AcousticState()
+        msg.header.stamp = rospy.Time.now()
+        msg.header.frame_id = 'fish_base_link'
+        msg.enabled = True
+        msg.motion_mode = 'idle' if state is None else state.mode
+        msg.status, msg.decision_updated = self._acoustic_status, updated
+        msg.parameters_pending = self.acoustic.pending is not None
+        msg.frequency, msg.window_s = self.acoustic.frequency, self.acoustic.period
+        msg.threshold, msg.turn_bias = self.acoustic.settings.threshold, self.acoustic.settings.bias
+        msg.left_bias_sign = self.acoustic.left_bias_sign
+        msg.command_bias = 0. if state is None else state.applied_bias
+        msg.left_mean = msg.right_mean = msg.normalized_difference = float('nan')
+        if self.acoustic.latest_stamp is not None:
+            msg.sample_stamp = rospy.Time.from_sec(self.acoustic.latest_stamp)
+        decision = self.acoustic.last_decision
+        if decision is not None:
+            # Convert monotonic boundaries using the ADC/ROS clock mapping.
+            offset = self.acoustic.epoch_clock_offset
+            msg.window_start = rospy.Time.from_sec(max(0., decision.start - offset))
+            msg.window_end = rospy.Time.from_sec(max(0., decision.end - offset))
+            msg.cycle_index, msg.sample_count = decision.cycle, decision.sample_count
+            msg.left_mean, msg.right_mean = decision.left_mean, decision.right_mean
+            msg.normalized_difference = decision.difference
+        self.acoustic_pub.publish(msg)
+
     def _controlLoop(self):
         with self.lock:
-            state = self.controller.tick(time.monotonic())
+            now = time.monotonic()
+            state = self.controller.tick(now)
+            if self.acoustic is not None:
+                state = self._acousticStep(state, now)
             if state is None:
                 return
             self.publish_cmd(state)
@@ -97,6 +198,9 @@ class Teleop:
     def _shutdown(self):
         self._stopping.set()
         self.joy_sub.unregister()
+        if self.acoustic is not None:
+            self.adc_sub.unregister()
+            self.settings_service.shutdown()
         if self._thread.is_alive() and threading.current_thread() is not self._thread:
             self._thread.join(timeout=1.)
         with self.lock:

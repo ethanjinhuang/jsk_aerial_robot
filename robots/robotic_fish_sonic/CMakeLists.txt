@@ -20,12 +20,14 @@ add_message_files(
   RuntimeConfig.msg
   GainControlState.msg
   ChannelComparison.msg
+  AcousticSteeringState.msg
   QuadrantProbabilities.msg
 )
 
 add_service_files(
   FILES
   SetDacVoltage.srv
+  SetAcousticSteering.srv
 )
 
 generate_messages(
@@ -68,4 +70,5 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_safety_window.py)
   catkin_add_nosetests(test/test_node_safety.py)
   catkin_add_nosetests(test/test_acoustic_core.py)
+  catkin_add_nosetests(test/test_cycle_steering.py)
 endif()

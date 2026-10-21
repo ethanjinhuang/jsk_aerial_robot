@@ -1,5 +1,8 @@
 # robotic_fish_sonic 合并验证
 
+2026-10-20 新增的完整摆尾周期声学控制、在线调参和隔离通信验证见
+[周期趋声验证记录](docs/cycle_steering_validation.md)。下文保留合并时的验证范围。
+
 ## 范围
 
 合并 `robotic_fish_io` 与 `robotic_fish_acoustic`，统一构建、Python 包、

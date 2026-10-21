@@ -17,6 +17,7 @@
               /robotic_fish/gain_control/config
               /robotic_fish/acoustic/quadrant_probabilities
               /robotic_fish/acoustic/channel_comparison
+              /robotic_fish/acoustic/steering_state
               $(arg diagnostics_topic)
               /joy
               /imu

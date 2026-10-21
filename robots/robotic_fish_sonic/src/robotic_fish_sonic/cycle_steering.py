@@ -1,0 +1,217 @@
+"""One acoustic decision per complete gait cycle; no ROS or hardware access."""
+from collections import deque
+from dataclasses import dataclass
+import math
+
+from robotic_fish_sonic.acoustic_core import adapt, Status
+
+
+def number(value, name):
+    if isinstance(value, bool):
+        raise ValueError(name + ' must be finite')
+    try:
+        value = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(name + ' must be finite') from exc
+    if not math.isfinite(value):
+        raise ValueError(name + ' must be finite')
+    return value
+
+
+class SteeringFault(ValueError):
+    """Input or timing fault requiring explicit motion recovery."""
+
+
+@dataclass(frozen=True)
+class SteeringSettings:
+    threshold: float
+    bias: float
+
+
+@dataclass(frozen=True)
+class CycleDecision:
+    cycle: int
+    start: float
+    end: float
+    left_mean: float
+    right_mean: float
+    difference: float
+    bias: float
+    sample_count: int
+
+
+class CycleSteering:
+    """Compare calibrated voltage means from [cycle start, cycle end).
+
+    Epochs, receipts and decisions use the motion node's monotonic clock.
+    Acquisition stamps are mapped from ROS time at reception, with bounded
+    clock skew/age. A full elapsed period is required, not 80% window warmup.
+    Edge gaps and internal gaps must fit gap_s; samples need not hit endpoints.
+    """
+    def __init__(self, frequency, max_bias=1024., threshold=.1, bias=256.,
+                 left_bias_sign=1, gap_s=.2, max_age_s=.2,
+                 future_tolerance_s=.05, low_signal_v=.001):
+        self.max_bias = number(max_bias, 'max_bias')
+        self.gap_s = number(gap_s, 'gap_s')
+        self.max_age_s = number(max_age_s, 'max_age_s')
+        self.future_tolerance_s = number(future_tolerance_s, 'future_tolerance_s')
+        self.low_signal_v = number(low_signal_v, 'low_signal_v')
+        if min(self.max_bias, self.gap_s, self.max_age_s, self.low_signal_v) <= 0 or self.future_tolerance_s < 0:
+            raise ValueError('limits must be positive; future tolerance nonnegative')
+        if isinstance(left_bias_sign, bool) or left_bias_sign not in (-1, 1):
+            raise ValueError('left_bias_sign must be -1 or 1')
+        self.left_bias_sign = int(left_bias_sign)
+        self.settings = self._settings(threshold, bias)
+        self.pending = None
+        self._set_frequency(frequency)
+        self.rows = deque()
+        self.epoch = None
+        self.epoch_clock_offset = None
+        self.cycle = 0
+        self.last_decision = None
+        self.latest_time = self.latest_stamp = self.last_sensor_stamp = None
+        self.latest_error = 'no_data'
+        self.fault = ''
+        self.signature = self.clock_offset = None
+
+    def _settings(self, threshold, bias):
+        threshold, bias = number(threshold, 'threshold'), number(bias, 'bias')
+        if not 0 <= threshold <= 1 or not 0 <= bias <= self.max_bias:
+            raise ValueError('threshold must be in [0,1] and bias in [0,max_bias]')
+        return SteeringSettings(threshold, bias)
+
+    def configure(self, threshold, bias):
+        """Validate the complete pair now; apply it at the next valid decision."""
+        self.pending = self._settings(threshold, bias)
+
+    def _set_frequency(self, frequency):
+        frequency = number(frequency, 'frequency')
+        if frequency <= 0 or not math.isfinite(1. / frequency):
+            raise ValueError('frequency must have a positive finite period')
+        self.frequency, self.period = frequency, 1. / frequency
+
+    def _reject(self, reason):
+        self.latest_error = reason
+        self.rows.clear()
+        if self.epoch is not None:
+            self.fault = reason
+        return False
+
+    def push(self, message, received, ros_now):
+        """Ingest one sequential ADC group; invalid frames never refresh health."""
+        try:
+            received, ros_now = number(received, 'receipt'), number(ros_now, 'ROS time')
+            g = adapt(message)
+            if g['status']:
+                return self._reject('|'.join(flag.name.lower() for flag in Status if flag & g['status']))
+            age = ros_now - g['t']
+            if age < -self.future_tolerance_s:
+                return self._reject('future_sample')
+            if age > self.max_age_s:
+                return self._reject('stale_sample')
+            if self.last_sensor_stamp is not None and g['t'] <= self.last_sensor_stamp:
+                self.last_sensor_stamp = g['t']
+                return self._reject('sample_time_reset')
+            offset = received - ros_now
+            if self.clock_offset is not None and abs(offset - self.clock_offset) > self.future_tolerance_s:
+                self.clock_offset = offset
+                self.last_sensor_stamp = g['t']
+                return self._reject('clock_changed')
+            acquisition = min(received, g['t'] + offset)
+            if self.latest_time is not None and acquisition <= self.latest_time:
+                self.latest_time = None
+                return self._reject('receipt_time_reset')
+            total = g['volts'][1] + g['volts'][2]
+            if not math.isfinite(total):
+                return self._reject('invalid_signal_sum')
+            if total < self.low_signal_v:
+                return self._reject('low_signal')
+        except (ValueError, TypeError, AttributeError, OverflowError) as exc:
+            return self._reject('invalid_input: ' + str(exc))
+        # A fresh frame must not hide a missed health deadline between ticks.
+        # Keep the recovered frame for explicit rearming, but latch active faults.
+        continuity_error = ''
+        if self.latest_time is not None:
+            if received - self.latest_time > self.max_age_s + 1e-9:
+                continuity_error = 'adc_timeout'
+            elif acquisition - self.latest_time > self.gap_s + 1e-9:
+                continuity_error = 'adc_gap'
+        if continuity_error:
+            self.rows.clear()
+            if self.epoch is not None:
+                self.fault = continuity_error
+        if self.signature is not None and g['signature'] != self.signature:
+            self.rows.clear()
+            if self.epoch is not None:
+                self.fault = 'gain_or_calibration_changed'
+        self.signature = g['signature']
+        self.clock_offset = offset
+        self.last_sensor_stamp = self.latest_stamp = g['t']
+        self.latest_time, self.latest_error = acquisition, ''
+        self.rows.append((acquisition, g['volts'][1], g['volts'][2]))
+        while self.rows and acquisition - self.rows[0][0] > self.period + 2. * self.gap_s:
+            self.rows.popleft()
+        if len(self.rows) > 10000:
+            return self._reject('sample_buffer_overflow')
+        return True
+
+    def _health(self, now):
+        if self.latest_error:
+            raise SteeringFault(self.latest_error)
+        if self.latest_time is None or now - self.latest_time > self.max_age_s:
+            raise SteeringFault('adc_timeout')
+        if now < self.latest_time:
+            raise SteeringFault('clock_rewind')
+
+    def begin(self, epoch, frequency, now):
+        now = number(now, 'start time')
+        self._health(now)
+        self._set_frequency(frequency)
+        self.epoch = number(epoch, 'epoch')
+        if self.epoch < 0 or self.epoch > now:
+            raise SteeringFault('invalid_epoch')
+        self.epoch_clock_offset = self.clock_offset
+        self.cycle, self.last_decision, self.fault = 0, None, ''
+
+    def deactivate(self):
+        self.epoch = None
+        self.fault = ''
+
+    def evaluate(self, now):
+        """Detect the next positive-going crossing and decide exactly once."""
+        now = number(now, 'decision time')
+        if self.epoch is None:
+            return None
+        if self.fault:
+            raise SteeringFault(self.fault)
+        self._health(now)
+        elapsed = now - self.epoch
+        if elapsed < 0:
+            raise SteeringFault('clock_rewind')
+        cycles = elapsed / self.period
+        if not math.isfinite(cycles):
+            raise SteeringFault('phase_overflow')
+        cycle = math.floor(cycles + 1e-9)
+        if cycle <= self.cycle:
+            return None
+        if cycle != self.cycle + 1:
+            raise SteeringFault('missed_cycle')
+        start, end = self.epoch + (cycle - 1) * self.period, self.epoch + cycle * self.period
+        rows = [row for row in self.rows if start <= row[0] < end]
+        times = [start] + [row[0] for row in rows] + [end]
+        if len(rows) < 2 or max(b - a for a, b in zip(times, times[1:])) > self.gap_s + 1e-9:
+            raise SteeringFault('incomplete_cycle')
+        left = sum(row[1] / len(rows) for row in rows)
+        right = sum(row[2] / len(rows) for row in rows)
+        if not math.isfinite(left + right):
+            raise SteeringFault('invalid_signal_sum')
+        if left + right < self.low_signal_v:
+            raise SteeringFault('low_signal')
+        difference = (left - right) / (left + right)
+        if self.pending is not None:
+            self.settings, self.pending = self.pending, None
+        direction = 1 if difference > self.settings.threshold else -1 if difference < -self.settings.threshold else 0
+        self.cycle = cycle
+        self.last_decision = CycleDecision(cycle, start, end, left, right, difference,
+                                           direction * self.left_bias_sign * self.settings.bias, len(rows))
+        return self.last_decision

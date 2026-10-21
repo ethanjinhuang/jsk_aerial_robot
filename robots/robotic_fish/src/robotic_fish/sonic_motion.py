@@ -66,17 +66,18 @@ class MotionState:
 
 
 class SonicController:
-    """Direct manual/auto bias input and a latched stopped state.
+    """Manual, ordinary auto, acoustic tracking and a latched stopped state.
 
     Startup is manual, but produces no command before the first Joy input.
     Stop/fault recovery requires a neutral, released frame followed by a new
-    manual/auto button press while neutral. Repeated messages cannot clear a stop.
+    mode button press while neutral. Repeated messages cannot clear a stop.
     """
     def __init__(self, center=2048., servo_range=1024., frequency=2.,
                  default_amplitude=512., amplitude=None, amplitude_rate=64.,
                  joy_timeout_s=.5, joy_dead_zone=.1,
                  steering_axis=2, amplitude_decrease_axis=3, amplitude_increase_axis=4,
-                 stop_button=1, auto_button=3, manual_button=0, amplitude_buttons=(6, 7)):
+                 stop_button=1, auto_button=3, manual_button=0, amplitude_buttons=(6, 7),
+                 tracking_button=2, tracking_enabled=False):
         self.motion = SonicMotion(center, servo_range)
         self.frequency = _number(frequency, 'auto_frequency')
         self.default_amplitude = _number(default_amplitude, 'auto_default_amplitude')
@@ -84,6 +85,9 @@ class SonicController:
         self.amplitude_rate = _number(amplitude_rate, 'auto_amplitude_rate')
         self.joy_timeout_s = _number(joy_timeout_s, 'joy_timeout_s')
         self.dead_zone = _number(joy_dead_zone, 'joy_dead_zone')
+        if not isinstance(tracking_enabled, bool):
+            raise ValueError('tracking_enabled must be boolean')
+        self.tracking_enabled = tracking_enabled
         if self.frequency <= 0 or not math.isfinite(2. * math.pi * self.frequency):
             raise ValueError('auto_frequency must be positive with a finite phase rate')
         if (not 0 <= self.default_amplitude <= self.motion.servo_range or
@@ -99,11 +103,12 @@ class SonicController:
         self.stop_button = _index(stop_button, 'stop_button')
         self.auto_button = _index(auto_button, 'auto_button')
         self.manual_button = _index(manual_button, 'manual_button')
+        self.tracking_button = _index(tracking_button, 'tracking_button')
         if not isinstance(amplitude_buttons, (list, tuple)) or not amplitude_buttons:
             raise ValueError('amplitude_buttons must be a nonempty list of indices')
         self.amplitude_buttons = tuple(_index(x, 'amplitude_buttons') for x in amplitude_buttons)
-        mode_buttons = (self.stop_button, self.auto_button, self.manual_button)
-        if len(set(mode_buttons)) != 3 or len(set(self.amplitude_buttons)) != len(self.amplitude_buttons):
+        mode_buttons = (self.stop_button, self.auto_button, self.manual_button, self.tracking_button)
+        if len(set(mode_buttons)) != 4 or len(set(self.amplitude_buttons)) != len(self.amplitude_buttons):
             raise ValueError('mode and amplitude buttons must have distinct indices')
         if set(mode_buttons) & set(self.amplitude_buttons):
             raise ValueError('amplitude buttons must not overlap mode buttons')
@@ -113,14 +118,27 @@ class SonicController:
         self.requested_bias = self.applied_bias = 0.
         self.input_error = ''
         self._last_joy = self._last_event = self._auto_start = None
-        self._auto_prev = self._manual_prev = self._rearm_ready = False
+        self._auto_prev = self._manual_prev = self._tracking_prev = self._rearm_ready = False
         self._has_output = False
+
+    @property
+    def auto_epoch(self):
+        return self._auto_start
+
+    def set_tracking_bias(self, bias):
+        """Set acoustic bias without restarting the gait or bypassing stop."""
+        bias = _number(bias, 'auto bias')
+        if not self.tracking_enabled or self.mode != 'tracking':
+            raise ValueError('acoustic bias requires enabled tracking mode')
+        if abs(bias) > self.motion.servo_range:
+            raise ValueError('auto bias must fit the servo envelope')
+        self.requested_bias = self.applied_bias = bias
 
     def stop(self, reason='stop'):
         self.mode, self.reason = 'stopped', reason
         self.requested_bias = self.applied_bias = 0.
         self._auto_start = None
-        self._auto_prev = self._manual_prev = True
+        self._auto_prev = self._manual_prev = self._tracking_prev = True
         self._rearm_ready = False
         self._has_output = True
         return self._snapshot()
@@ -149,7 +167,7 @@ class SonicController:
         if self.mode == 'stopped':
             return MotionState(self.mode, self.motion.center, 0., 0., self.amplitude,
                                0., self.frequency, self.reason)
-        active = self.mode == 'auto'
+        active = self.mode in ('auto', 'tracking')
         elapsed = now - self._auto_start if active else 0.
         try:
             target, effective = self.motion.sample(elapsed, self.applied_bias,
@@ -162,7 +180,8 @@ class SonicController:
 
     def _validate_joy(self, axes, buttons):
         indices = (self.steering_axis, self.decrease_axis, self.increase_axis)
-        button_indices = (self.stop_button, self.auto_button, self.manual_button, *self.amplitude_buttons)
+        button_indices = (self.stop_button, self.auto_button, self.manual_button,
+                          self.tracking_button, *self.amplitude_buttons)
         if len(axes) <= max(indices) or len(buttons) <= max(button_indices):
             raise ValueError('Joy message is shorter than the configured mapping')
         values = [_number(axes[i], 'mapped Joy axis') for i in indices]
@@ -193,25 +212,37 @@ class SonicController:
         dt = 0. if self._last_joy is None else max(0., min(self.joy_timeout_s, now - self._last_joy))
         self._last_joy = now
         auto, manual = bool(buttons[self.auto_button]), bool(buttons[self.manual_button])
+        tracking = bool(buttons[self.tracking_button])
         auto_edge, manual_edge = auto and not self._auto_prev, manual and not self._manual_prev
+        tracking_edge = tracking and not self._tracking_prev
         self._auto_prev, self._manual_prev = auto, manual
+        self._tracking_prev = tracking
         adjusting = any(buttons[i] for i in self.amplitude_buttons)
         neutral = steering == 0 or abs(steering) < self.dead_zone
-        if auto and manual:
+        if sum((auto, manual, tracking)) > 1:
             return self.stop('mode_conflict')
         if self.mode == 'stopped':
-            if neutral and not adjusting and not auto and not manual:
+            if neutral and not adjusting and not auto and not manual and not tracking:
                 self._rearm_ready = True
-            if not (self._rearm_ready and neutral and not adjusting and (auto_edge or manual_edge)):
+            if not (self._rearm_ready and neutral and not adjusting and (auto_edge or manual_edge or tracking_edge)):
                 return self._snapshot()
             self._rearm_ready = False
         if auto_edge:
             self.mode, self.reason, self._auto_start = 'auto', 'auto_button', now
             if self.amplitude <= 0:
                 self.amplitude = self.default_amplitude
+        elif tracking_edge:
+            if not self.tracking_enabled:
+                return self.stop('tracking_unavailable')
+            if self.mode != 'tracking':
+                self.mode, self.reason, self._auto_start = 'tracking', 'tracking_button', now
+                self.requested_bias = 0.
+                if self.amplitude <= 0:
+                    self.amplitude = self.default_amplitude
         elif manual_edge:
             self.mode, self.reason, self._auto_start = 'manual', 'manual_button', None
-        self.requested_bias = 0. if neutral else -steering * self.motion.servo_range
+        if self.mode in ('manual', 'auto'):
+            self.requested_bias = 0. if neutral else -steering * self.motion.servo_range
         self.applied_bias = self.requested_bias
         if adjusting:
             delta = .5 * (1. - increase) - .5 * (1. - decrease)

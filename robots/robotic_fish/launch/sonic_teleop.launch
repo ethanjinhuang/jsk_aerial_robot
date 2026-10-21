@@ -1,5 +1,10 @@
 <?xml version="1.0"?>
 <launch>
+  <arg name="auto_frequency" default="1.5"/>
+  <arg name="acoustic_steering" default="false"/>
+  <arg name="acoustic_threshold" default="0.1"/>
+  <arg name="acoustic_bias" default="256.0"/>
+  <arg name="left_bias_sign" default="1"/>
   <arg name="joy_timeout_s" default="0.5"/>
   <arg name="update_rate" default="50.0"/>
   <arg name="joy_autorepeat_rate" default="20.0"/>
@@ -9,13 +14,18 @@
   <arg name="stop_button" default="1"/>
   <arg name="auto_button" default="3"/>
   <arg name="manual_button" default="0"/>
+  <arg name="tracking_button" default="2"/>
   <arg name="amplitude_buttons" default="[6, 7]"/>
 
   <node pkg="robotic_fish" type="sonic_teleop.py" name="sonic_teleop_node" output="screen">
     <param name="joy_dead_zone" value="0.1"/>
     <param name="servo_center" value="2048.0"/>
     <param name="servo_range" value="1024.0"/>
-    <param name="auto_frequency" value="1.5"/>
+    <param name="auto_frequency" value="$(arg auto_frequency)"/>
+    <param name="acoustic_steering/enabled" type="bool" value="$(arg acoustic_steering)"/>
+    <param name="acoustic_steering/threshold" value="$(arg acoustic_threshold)"/>
+    <param name="acoustic_steering/bias" value="$(arg acoustic_bias)"/>
+    <param name="acoustic_steering/left_bias_sign" type="int" value="$(arg left_bias_sign)"/>
     <param name="auto_default_amplitude" value="512.0"/>
     <param name="auto_amplitude_rate" value="64.0"/>
     <param name="joy_timeout_s" value="$(arg joy_timeout_s)"/>
@@ -26,6 +36,7 @@
     <param name="stop_button" type="int" value="$(arg stop_button)"/>
     <param name="auto_button" type="int" value="$(arg auto_button)"/>
     <param name="manual_button" type="int" value="$(arg manual_button)"/>
+    <param name="tracking_button" type="int" value="$(arg tracking_button)"/>
     <rosparam param="amplitude_buttons" subst_value="true">$(arg amplitude_buttons)</rosparam>
   </node>
 

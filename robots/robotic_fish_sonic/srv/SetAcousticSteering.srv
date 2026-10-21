@@ -1,0 +1,6 @@
+# Applied together at the next valid positive-going gait zero crossing.
+float64 threshold
+float64 bias
+---
+bool success
+string message
