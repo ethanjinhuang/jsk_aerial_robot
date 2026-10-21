@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Isolated ROS cycle-steering test with synthetic ADC/Joy, no hardware."""
 import argparse
+from collections import defaultdict
+import json
+import math
 from pathlib import Path
 import os
 import re
@@ -12,6 +15,65 @@ import tempfile
 import threading
 import time
 import xmlrpc.client
+from xml.etree import ElementTree
+
+
+RECORD_TOPICS = {'/robotic_fish/adc/samples': 'adc',
+                 '/robotic_fish/acoustic/steering_state': 'state',
+                 '/robotic_fish/sonic/motion_state': 'motion',
+                 '/robotic_fish/sonic/config': 'config',
+                 '/robotic_fish/acoustic/steering_events': 'events',
+                 '/robotic_fish/sonic/status_snapshot': 'snapshot',
+                 '/servo/target_states': 'targets', '/joy': 'joy'}
+
+
+def verify_recording(directory):
+    """Read a bag made by the real record.launch, including late latched config."""
+    import rosbag
+    paths = list(directory.glob('sonic_*.bag'))
+    assert len(paths) == 1 and not list(directory.glob('*.bag.active')), paths
+    recorded = defaultdict(list)
+    with rosbag.Bag(str(paths[0])) as bag:
+        for topic, message, _ in bag.read_messages():
+            # rosbag stores the requested topic name, even when its subscription is remapped.
+            recorded[RECORD_TOPICS.get(topic, topic)].append(message)
+    for topic in ('adc', 'state', 'motion', 'config', 'events', 'targets', 'snapshot'):
+        assert recorded[topic], 'missing recording: ' + topic
+    assert recorded['/rosout'], 'record.launch did not record ROS logs'
+    configs = [json.loads(m.config_json) for m in recorded['config']]
+    assert configs[0]['settings']['acoustic_steering']['bias'] == 128., 'late startup config lost'
+    assert configs[0]['pending_request'] is None
+    assert any(c['pending_request'] for c in configs), 'pending configuration lost'
+    assert configs[-1]['pending_request'] is None and configs[-1]['applied_request_id'] > 0
+    motions = recorded['motion']
+    assert {'manual', 'auto', 'tracking', 'stopped'} <= {m.motion_mode for m in motions}
+    assert any(not m.command_published and math.isnan(m.target_position) for m in motions)
+    assert {'valid', 'calibration_fallback', 'gain_unknown', 'stale_sample'} <= {m.adc_quality for m in motions}
+    assert any(m.reason == 'acoustic_adc_timeout' for m in motions)
+    for m in motions:
+        if not m.command_published:
+            continue
+        assert m.target_command == int(m.target_position)
+        if m.motion_mode in ('auto', 'tracking'):
+            assert 0 <= m.phase_rad < 2 * math.pi
+            expected = 2048. + m.applied_bias + m.effective_amplitude * math.sin(m.phase_rad)
+            assert abs(m.target_position - expected) < 1e-7
+        else:
+            assert math.isnan(m.phase_rad)
+    states = recorded['state']
+    decisions = [m for m in states if m.decision_updated]
+    assert decisions and all(m.has_decision and m.decision_current and m.head_mean == 1. for m in decisions)
+    assert all(m.voltage_difference == m.left_mean - m.right_mean for m in decisions)
+    assert any(m.direction == 'holding' and m.has_decision and not m.decision_current for m in states)
+    events = recorded['events']
+    assert {'accepted', 'rejected', 'applied'} <= {m.event for m in events}
+    for applied in (m for m in events if m.event == 'applied'):
+        assert applied.cycle_index > 0
+        assert any(m.event == 'accepted' and m.request_id == applied.request_id and
+                   (m.threshold, m.turn_bias, m.lr_offset) ==
+                   (applied.threshold, applied.turn_bias, applied.lr_offset) for m in events)
+    print('PASS: actual record.launch bag readback: motion/phase/ADC quality, cycle means, '
+          'late latched config, parameter request/application events and ROS logs; ' + str(paths[0]), flush=True)
 
 
 def main():
@@ -20,6 +82,8 @@ def main():
                         default=Path(__file__).resolve().parents[1] / 'scripts/sonic_teleop.py')
     parser.add_argument('--console-script', type=Path,
                         default=Path(__file__).resolve().parents[2] / 'robotic_fish_sonic/scripts/status_console.py')
+    parser.add_argument('--record-launch', type=Path,
+                        default=Path(__file__).resolve().parents[1] / 'launch/record.launch')
     args = parser.parse_args()
     port = 11429
     try:
@@ -85,6 +149,9 @@ def main():
                  '/robotic_fish/adc/samples:=' + prefix + '/adc',
                  '/robotic_fish/acoustic/steering_state:=' + prefix + '/state',
                  '/robotic_fish/sonic/status_snapshot:=' + prefix + '/snapshot',
+                 '/robotic_fish/sonic/motion_state:=' + prefix + '/motion',
+                 '/robotic_fish/sonic/config:=' + prefix + '/config',
+                 '/robotic_fish/acoustic/steering_events:=' + prefix + '/events',
                  '_acoustic_steering/enabled:=true', '_acoustic_steering/bias:=128.0',
                  '_acoustic_steering/left_bias_sign:=' + str(polarity),
                  '_auto_frequency:=' + str(frequency)], stdout=log, stderr=subprocess.STDOUT)
@@ -180,12 +247,32 @@ def main():
                 return report
 
             thread = threading.Thread(target=drive, daemon=True)
+            recorder = None
             try:
                 deadline = time.monotonic() + 8
                 while not (joy_pub.get_num_connections() and adc_pub.get_num_connections()):
                     if node.poll() is not None or time.monotonic() > deadline:
                         raise RuntimeError('test topic connection failed; see ' + str(output))
                     time.sleep(.02)
+                if case == 0:
+                    recorder_log = (output / 'recorder.log').open('w'); logs.append(recorder_log)
+                    # Use an explicit launch scope for isolated recorder subscriptions.
+                    launch = ElementTree.Element('launch')
+                    for source, dest in RECORD_TOPICS.items():
+                        ElementTree.SubElement(launch, 'remap', {'from': source, 'to': prefix + '/' + dest})
+                    include = ElementTree.SubElement(launch, 'include', {'file': str(args.record_launch.resolve())})
+                    ElementTree.SubElement(include, 'arg', {'name': 'bag_prefix', 'value': str(output / 'sonic')})
+                    wrapper = output / 'record_test.launch'
+                    ElementTree.ElementTree(launch).write(str(wrapper), encoding='unicode')
+                    recorder = subprocess.Popen(['roslaunch', str(wrapper)],
+                        stdout=recorder_log, stderr=subprocess.STDOUT)
+                    processes.append(recorder)
+                    deadline = time.monotonic() + 10
+                    while adc_pub.get_num_connections() < 2 or joy_pub.get_num_connections() < 2:
+                        if recorder.poll() is not None or time.monotonic() > deadline:
+                            raise RuntimeError('recorder failed to subscribe; see ' + str(output))
+                        time.sleep(.02)
+                    time.sleep(.1)  # Capture idle telemetry before the first synthetic Joy.
                 thread.start()
                 wait_state(lambda s: s.motion_mode == 'manual')
                 set_input(axis=.25)
@@ -234,7 +321,13 @@ def main():
                 rospy.wait_for_service('/' + name + '/set_acoustic_steering', timeout=3)
                 configure = rospy.ServiceProxy('/' + name + '/set_acoustic_steering', SetAcousticSteering)
                 assert not configure(-1., 64., 0.).success
-                assert configure(.6, 64., 0.).success
+                response = configure(.6, 64., 0.)
+                assert response.success and response.parameters_pending
+                assert response.motion_mode == 'tracking' and response.direction == 'left'
+                assert response.adc_quality == 'valid'
+                assert (response.active_threshold, response.active_bias, response.active_lr_offset) == (.1, 128., 0.)
+                assert (response.pending_threshold, response.pending_bias, response.pending_lr_offset) == (.6, 64., 0.)
+                assert response.request_id == response.pending_request_id
                 wait_state(lambda s: s.parameters_pending)
                 state = wait_state(lambda s: s.cycle_index >= 2 and not s.parameters_pending)
                 assert state.command_bias == 0. and state.turn_bias == 64.
@@ -248,6 +341,13 @@ def main():
                      '{threshold: 0.15, bias: 96.0, lr_offset: 0.5}'],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=5)
                 assert command.returncode == 0 and 'success: True' in command.stdout, command.stdout
+                (output / (name + '_steering_response.yaml')).write_text(command.stdout)
+                import yaml
+                feedback = yaml.safe_load(command.stdout)
+                assert feedback['motion_mode'] == 'tracking' and feedback['adc_quality'] == 'valid'
+                assert feedback['parameters_pending'] and feedback['pending_bias'] == 96.
+                assert (feedback['active_threshold'], feedback['active_bias'], feedback['active_lr_offset']) == (.1, 64., 0.)
+                assert feedback['pending_threshold'] == .15 and feedback['pending_lr_offset'] == .5
                 state = wait_state(lambda s: s.lr_offset == .5 and s.command_bias == -polarity * 96.)
                 assert (state.threshold, state.turn_bias, state.lr_offset) == (.15, 96., .5)
                 with lock:
@@ -384,9 +484,15 @@ def main():
                 if console.poll() is None:
                     console.send_signal(signal.SIGINT)
                     assert console.wait(timeout=5) == 0
+                if recorder is not None:
+                    recorder.send_signal(signal.SIGINT)
+                    assert recorder.wait(timeout=10) == 0
                 node_output = (output / (name + '.log')).read_text()
                 assert 'SONIC STATUS / SHARE' not in node_output
                 assert 'Sonic manual: bias' not in node_output
+                assert 'threshold=0.1500 bias=96.0 lr_offset=+0.5000' in node_output
+            if recorder is not None:
+                verify_recording(output)
         rospy.signal_shutdown('cycle steering smoke complete')
         print('PASS: clean shutdown; isolated logs: ' + str(output), flush=True)
     finally:

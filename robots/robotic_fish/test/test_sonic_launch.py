@@ -33,6 +33,20 @@ class SonicLaunchTests(unittest.TestCase):
         self.assertEqual(config.params['/joy_node/autorepeat_rate'].value, 20.)
         self.assertEqual(config.params['/joy_node/coalesce_interval'].value, .025)
 
+    def test_recording_includes_continuous_state_configuration_events_and_diagnostics(self):
+        config = self.load('record.launch')
+        self.assertEqual(len(config.nodes), 1)
+        topics = config.nodes[0].args.split()
+        for topic in ('/robotic_fish/adc/samples', '/robotic_fish/acoustic/steering_state',
+                      '/robotic_fish/sonic/motion_state', '/robotic_fish/sonic/config',
+                      '/robotic_fish/acoustic/steering_events', '/robotic_fish/sonic/status_snapshot',
+                      '/robotic_fish/gain_control/config', '/servo/target_states', '/diagnostics', '/rosout'):
+            self.assertIn(topic, topics)
+
+    def test_recording_diagnostics_can_be_disabled(self):
+        config = self.load('record.launch', 'record_diagnostics:=false')
+        self.assertNotIn('/diagnostics', config.nodes[0].args.split())
+
     def test_pc_joystick_options(self):
         config = self.load('joy.launch', 'joy_dev:=/dev/input/js1', 'joy_autorepeat_rate:=30')
         self.assertEqual(config.params['/joy_node/dev'].value, '/dev/input/js1')

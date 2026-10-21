@@ -200,15 +200,49 @@ roslaunch robotic_fish advance_teleop.launch dev:=pc
 录包建议在 VIM4 的另一终端运行，让录制时间与 ADC、运动状态使用同一台主机的时间：
 
 ```bash
-roslaunch robotic_fish record.launch record_diagnostics:=true
+roslaunch robotic_fish record.launch
 ```
 
 `record.launch` 默认将 bag 保存在用户主目录，前缀为 `sonic`。录制内容包括：
 
 - ADC 三通道批数据（原始电压、校准电压、校准标识和时间戳）
 - DAC 执行结果、增益状态和有效配置
-- 声学通道比较及方向概率状态；诊断可用 `record_diagnostics:=true` 加入
+- 每个控制周期的运动状态、周期趋声判断、Share 快照及在线调参事件
+- 完整运动／声学控制配置快照，以及诊断和 ROS 日志
 - 手柄输入、IMU、舵机目标命令与状态反馈
+
+诊断默认录制，可用 `record_diagnostics:=false` 关闭。固定窗口的通道比较、方向概率话题
+也在订阅列表中；只有另外启动 `quadrant.launch` 等发布者时才有消息，周期趋声不依赖它们。
+
+新增记录话题如下，不需要按 Share 才能保存：
+
+| 话题 | 内容 | 发布时机 |
+| --- | --- | --- |
+| `/robotic_fish/sonic/motion_state` | 模式、原因、输入错误、目标位置及整数命令、请求／实际偏置与摆幅、摆频、相位、Joy 年龄、ADC 时序与质量 | 每个控制周期，默认 50 Hz，首次 Joy 前也发布空闲状态 |
+| `/robotic_fish/acoustic/steering_state` | 三通道周期均值、L-R 电压差、归一化／补偿后判据、窗口、参数、偏置、当前方向及历史决策标记 | 声学功能启用时，每个控制周期 |
+| `/robotic_fish/sonic/config` | 舵机范围、初始摆幅、键位、控制频率、Joy／ADC 时间限制、阈值／偏置／补偿、待生效请求及主机信息 | 启动与配置变更时，锁存，支持中途开始录包 |
+| `/robotic_fish/acoustic/steering_events` | 调参请求的接受、拒绝、被替换、实际生效及关机取消；含请求编号、数值、生效周期 | 对应事件发生时 |
+| `/rosout`、`/diagnostics` | 模式切换日志和硬件／增益诊断 | 按原节点发布节奏 |
+
+`motion_state.command_published=false` 表示本次没有发送舵机命令，此时目标位置为 NaN；
+手动／停止时没有摆尾相位，相位与摆尾时长也为 NaN。目标和摆幅等使用舵机刻度，
+相位单位为弧度、范围 `[0,2*pi)`。ROS 时间戳与本机 `monotonic_s` 一并保存，
+接收年龄、控制间隔用单调时钟，不能拿不同主机的单调时钟直接相减。
+
+`adc_source_age_at_receipt_s` 是控制节点接收该组时的 ROS 时间减采样时间，
+`adc_source_age_s` 是当前控制周期的 ROS 时间减采样时间；未来样本可出现负值。
+`adc_receipt_age_s` 与 `adc_receipt_interval_s` 分别是本机接收年龄和最近两组接收间隔。
+无数据／结构无效时不可计算的值为 NaN；`adc_quality_flags` 使用 `acoustic_core.Status`
+的采样质量位，时间问题另外由 `adc_quality` 标出。
+
+`steering_state.has_decision=false` 表示尚无有效周期结果，均值和差值为 NaN。
+`decision_current=false` 时保留的均值与 `decision_direction` 是历史结果；
+当前动作以 `direction` 和运动状态为准，例如 `holding`、`warmup` 或 `stopped`。
+调参请求编号在每个运动进程内递增，事件只覆盖录包期间；锁存配置包含当前参数和待生效请求，
+便于中途录包恢复当时状态。关机阶段的最后消息按 ROS 通信尽力发送。
+
+本次新增消息并扩展了 `AcousticSteeringState`，两端需重新编译
+`robotic_fish_sonic robotic_fish`、source 并重启相关节点。旧 bag 仍保留原有嵌入式消息定义。
 
 改变保存目录或文件名前缀时，目标目录需要预先创建：
 
@@ -468,8 +502,39 @@ roslaunch robotic_fish sonic_teleop.launch enable_joy:=false \
 ```bash
 rosservice call /sonic_teleop_node/set_acoustic_steering \
   "{threshold: 0.15, bias: 128.0, lr_offset: 0.08}"
-rostopic echo /robotic_fish/acoustic/steering_state
 ```
+
+命令终端直接返回请求处理时的状态快照。例如当前正使用阈值 0.1、偏置 256、无补偿，
+且正在左转时，返回内容类似：
+
+```yaml
+success: True
+message: "accepted; applies at next valid full-cycle decision"
+request_id: 1
+motion_mode: tracking
+status: active
+reason: tracking_button
+direction: left
+adc_quality: valid
+command_bias: 256.0
+active_threshold: 0.1
+active_bias: 256.0
+active_lr_offset: 0.0
+parameters_pending: True
+pending_request_id: 1
+pending_threshold: 0.15
+pending_bias: 128.0
+pending_lr_offset: 0.08
+```
+
+`success` 表示请求被接受；`active_*` 是正在使用的参数，`pending_*` 是等待生效的参数，
+`command_bias` 是控制器当前偏置。服务查询不推进摆尾周期、不发送舵机命令，也不自动进入跟踪。
+手动／停止或数据预热期间可以接受参数，继续等待下一次有效完整周期。
+参数实际生效后，VIM4 运动终端打印一次 `Acoustic steering applied: request=... cycle=...`
+以及本次生效的三项参数，可用请求编号与调用返回、录包事件对应。
+拒绝请求时也返回当前状态和此前保留的待生效参数；没有待生效请求时，
+`parameters_pending=false`、`pending_request_id=0`，三个 `pending_*` 数值为 NaN。
+本次扩展了服务响应，两端需重新编译两包、source 并重启运动节点后使用。
 
 每次调用请同时填写三项：阈值范围 `[0,1]`，偏置范围 `[0,servo_range]`，
 补偿范围 `[-1,1]`。`lr_offset: 0.0` 表示取消左右补偿。

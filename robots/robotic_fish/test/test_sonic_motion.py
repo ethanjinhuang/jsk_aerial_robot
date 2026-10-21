@@ -1,5 +1,6 @@
 """Deterministic trajectory, joystick, watchdog and ROS adapter tests; no hardware."""
 import importlib.util
+import json
 import math
 from pathlib import Path
 import sys
@@ -298,6 +299,8 @@ class RosAdapterTests(unittest.TestCase):
                    'std_msgs.msg': NS(String=lambda data:NS(data=data)),
                    'spinal.msg': NS(ServoControlCmd=lambda: NS(index=[], cmd=[])),
                    'robotic_fish_sonic.msg': NS(AdcSampleArray=object,
+                       SonicMotionState=lambda: NS(header=NS()),
+                       RuntimeConfig=lambda: NS(), AcousticSteeringEvent=lambda: NS(header=NS()),
                        AcousticSteeringState=lambda: NS(header=NS())),
                    'robotic_fish_sonic.srv': NS(SetAcousticSteering=object,
                        SetAcousticSteeringResponse=lambda success,message:NS(success=success,message=message))}
@@ -307,7 +310,7 @@ class RosAdapterTests(unittest.TestCase):
             spec.loader.exec_module(module)
         module._mock_modules = modules
         clock = [0.]
-        fake_ros.Time = NS(now=lambda:NS(to_sec=lambda:clock[0]),from_sec=lambda t:t)
+        fake_ros.Time = NS(now=lambda:NS(to_sec=lambda value=clock[0]:value),from_sec=lambda t:t)
         module.time = NS(monotonic=lambda: clock[0])
         module.threading = NS(RLock=threading.RLock, Event=threading.Event,
                               Thread=Mock(return_value=NS(start=lambda: None, join=lambda **k: None,
@@ -318,17 +321,18 @@ class RosAdapterTests(unittest.TestCase):
     def test_real_adapter_publish_stop_and_shutdown(self):
         module, ros, clock, published = self.make_node()
         node = module.Teleop()
-        node._controlLoop(); self.assertEqual(published, [])
+        node._controlLoop(); self.assertFalse(any(hasattr(m, 'cmd') for m in published))
         node._joyCallback(NS(axes=joy(pressed=(3,))[0], buttons=joy(pressed=(3,))[1]))
         clock[0] = .125; node._controlLoop()
-        self.assertEqual((published[-1].index, published[-1].cmd), ([0], [2560]))
+        command = [m for m in published if hasattr(m, 'cmd')][-1]
+        self.assertEqual((command.index, command.cmd), ([0], [2560]))
         clock[0] = .6; node._controlLoop()
-        self.assertEqual(published[-1].cmd, [2048])
+        self.assertEqual([m for m in published if hasattr(m, 'cmd')][-1].cmd, [2048])
         self.assertEqual(node.controller.reason, 'joy_timeout')
         node._shutdown()
-        self.assertEqual(published[-1].cmd, [2048])
+        self.assertEqual([m for m in published if hasattr(m, 'cmd')][-1].cmd, [2048])
         self.assertEqual(node.controller.reason, 'shutdown')
-        self.assertEqual(ros.Publisher.call_count, 2)
+        self.assertEqual(ros.Publisher.call_count, 5)
 
     def test_invalid_config_fails_before_publisher(self):
         for params in [{'~update_rate': 0}, {'~update_rate': 4}, {'~update_rate': True},
@@ -349,7 +353,18 @@ class RosAdapterTests(unittest.TestCase):
         module, _, _, published = self.make_node()
         node = module.Teleop()
         node._shutdown()
-        self.assertEqual(published, [])
+        self.assertFalse(any(hasattr(m, 'cmd') for m in published))
+
+    def test_shutdown_centers_before_optional_recording_failure(self):
+        module, ros, _, published = self.make_node({'~acoustic_steering/enabled': True})
+        with patch.dict(sys.modules, module._mock_modules):
+            node = module.Teleop()
+        self.send_status_joy(node, (3,), steering=-.25)
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.15, bias=128., lr_offset=.08)).success)
+        node.event_pub = NS(publish=Mock(side_effect=ros.ROSException('event transport closed')))
+        node._shutdown()
+        self.assertEqual(node.controller.reason, 'shutdown')
+        self.assertEqual([m for m in published if hasattr(m, 'cmd')][-1].cmd, [2048])
 
     def adc(self, t):
         return NS(samples=[NS(channel_id=i,timestamp=NS(to_sec=lambda:t),volt_cali=value,
@@ -666,9 +681,219 @@ class RosAdapterTests(unittest.TestCase):
         self.assertEqual(self.status_reports(ros), [])
         node._adcCallback(NS(samples=[]))
         self.send_status_joy(node, (10,))
-        self.assertIn('expected channels 0,1,2', self.status_reports(ros)[-1])
+        self.assertIn('expected one channel each', self.status_reports(ros)[-1])
         module.write_snapshot.assert_called_once_with(self.status_reports(ros)[-1])
         self.assertEqual(node.controller.mode, 'manual')
+
+    def test_continuous_idle_state_and_latched_effective_configuration_do_not_send_commands(self):
+        module, ros, clock, published = self.make_node({'~servo_center': 2000., '~auto_amplitude': 400.})
+        node = module.Teleop()
+        for t in (0., .02, .04):
+            clock[0] = t
+            node._controlLoop()
+        states = [m for m in published if hasattr(m, 'command_published')]
+        self.assertEqual(len(states), 3)
+        self.assertEqual(states[-1].motion_mode, 'idle')
+        self.assertFalse(states[-1].command_published)
+        self.assertTrue(math.isnan(states[-1].target_position))
+        self.assertTrue(math.isnan(states[-1].phase_rad))
+        self.assertTrue(math.isnan(states[-1].valid_joy_age_s))
+        self.assertEqual(states[-1].adc_quality, 'no_data')
+        self.assertAlmostEqual(states[-1].control_interval_s, .02)
+        self.assertFalse(any(hasattr(m, 'cmd') for m in published))
+        configs = [m for m in published if hasattr(m, 'config_json')]
+        self.assertEqual(len(configs), 1)
+        values = json.loads(configs[0].config_json)
+        self.assertEqual(values['settings']['servo_center'], 2000.)
+        self.assertEqual(values['settings']['auto_amplitude'], 400.)
+        self.assertEqual(values['settings']['initial_servo_cmd'], 2000.)
+        self.assertEqual(values['settings']['acoustic_steering']['max_age_s'], .2)
+        self.assertIsNone(values['pending_request'])
+        self.assertTrue(any(call.args[0] == '/robotic_fish/sonic/config' and call.kwargs.get('latch')
+                            for call in ros.Publisher.call_args_list))
+
+    def test_motion_telemetry_matches_servo_output_phase_and_amplitude_clipping(self):
+        module, _, clock, published = self.make_node()
+        node = module.Teleop()
+        self.send_status_joy(node, (3,), steering=-.25)
+        clock[0] = .125
+        node._controlLoop()
+        state = [m for m in published if hasattr(m, 'command_published')][-1]
+        self.assertEqual((state.requested_bias, state.applied_bias), (256., 256.))
+        self.assertEqual((state.requested_amplitude, state.effective_amplitude), (512., 512.))
+        self.assertAlmostEqual(state.phase_rad, math.pi / 2)
+        self.assertEqual(state.target_position, 2816.)
+        self.assertEqual(state.target_command, [m for m in published if hasattr(m, 'cmd')][-1].cmd[0])
+        self.send_status_joy(node, steering=-1.)
+        state = [m for m in published if hasattr(m, 'command_published')][-1]
+        self.assertEqual((state.effective_amplitude, state.target_command), (0., 3072))
+        self.send_status_joy(node, (1,))
+        state = [m for m in published if hasattr(m, 'command_published')][-1]
+        self.assertEqual((state.reason, state.target_command), ('stop_button', 2048))
+        self.assertTrue(math.isnan(state.phase_rad))
+
+    def test_adc_telemetry_distinguishes_source_clock_receipt_age_and_gap(self):
+        module, _, clock, published = self.make_node()
+        node = module.Teleop()
+        clock[0] = 1.
+        node._adcCallback(self.adc(1.067))
+        node._controlLoop()
+        state = [m for m in published if hasattr(m, 'command_published')][-1]
+        self.assertEqual(state.adc_quality, 'future_sample')
+        self.assertAlmostEqual(state.adc_source_age_at_receipt_s, -.067)
+        self.assertAlmostEqual(state.adc_source_age_s, -.067)
+        self.assertEqual(state.adc_receipt_age_s, 0.)
+        clock[0] = 1.1
+        node._controlLoop()
+        state = [m for m in published if hasattr(m, 'command_published')][-1]
+        self.assertEqual(state.adc_quality, 'valid')
+        self.assertAlmostEqual(state.adc_source_age_s, .033)
+        self.assertAlmostEqual(state.adc_source_age_at_receipt_s, -.067)
+        clock[0] = 1.3
+        node._adcCallback(self.adc(1.3))
+        node._controlLoop()
+        state = [m for m in published if hasattr(m, 'command_published')][-1]
+        self.assertAlmostEqual(state.adc_receipt_interval_s, .3)
+        clock[0] = 1.6
+        node._controlLoop()
+        state = [m for m in published if hasattr(m, 'command_published')][-1]
+        self.assertEqual(state.adc_quality, 'stale_sample')
+        node._adcCallback(NS(samples=[]))
+        node._controlLoop()
+        state = [m for m in published if hasattr(m, 'command_published')][-1]
+        self.assertFalse(state.adc_structurally_valid)
+        self.assertIn('invalid_input', state.adc_quality)
+        self.assertTrue(math.isnan(state.adc_source_age_s))
+
+    def test_invalid_joy_records_arrival_without_refreshing_watchdog_age(self):
+        module, _, clock, published = self.make_node()
+        node = module.Teleop()
+        self.send_status_joy(node, (3,))
+        clock[0] = .1
+        node._joyCallback(NS(axes=[], buttons=[]))
+        node._controlLoop()
+        state = [m for m in published if hasattr(m, 'command_published')][-1]
+        self.assertEqual(state.reason, 'invalid_joy')
+        self.assertTrue(state.input_error)
+        self.assertEqual(state.joy_receipt_age_s, 0.)
+        self.assertAlmostEqual(state.valid_joy_age_s, .1)
+
+    def test_structured_cycle_means_and_historical_decision_during_quality_hold(self):
+        module, _, clock, published = self.make_node({'~acoustic_steering/enabled': True})
+        with patch.dict(sys.modules, module._mock_modules):
+            node = module.Teleop()
+        node._adcCallback(self.adc(0.))
+        self.send_status_joy(node, (2,))
+        warmup = [m for m in published if hasattr(m, 'decision_updated')][-1]
+        self.assertFalse(warmup.has_decision)
+        self.assertEqual(warmup.direction, 'warmup')
+        self.assertTrue(math.isnan(warmup.head_mean))
+        for i in range(1, 11):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            self.send_status_joy(node)
+        active = [m for m in published if hasattr(m, 'decision_updated')][-1]
+        self.assertTrue(active.has_decision and active.decision_current)
+        self.assertEqual((active.head_mean, active.voltage_difference), (1., 1.))
+        self.assertEqual((active.direction, active.decision_direction), ('left', 'left'))
+        clock[0] = .55
+        frame = self.adc(.55)
+        frame.samples[0].status_cali = False
+        node._adcCallback(frame)
+        self.send_status_joy(node)
+        held = [m for m in published if hasattr(m, 'decision_updated')][-1]
+        self.assertTrue(held.has_decision)
+        self.assertFalse(held.decision_current)
+        self.assertEqual((held.direction, held.decision_direction), ('holding', 'left'))
+        self.assertEqual(held.head_mean, 1.)
+        motion = [m for m in published if hasattr(m, 'command_published')][-1]
+        self.assertEqual(motion.adc_quality_flags, 4)
+        self.assertEqual(motion.acoustic_status, 'calibration_fallback')
+
+    def test_parameter_events_link_requests_supersession_rejection_and_actual_application(self):
+        module, _, clock, published = self.make_node({'~acoustic_steering/enabled': True})
+        with patch.dict(sys.modules, module._mock_modules):
+            node = module.Teleop()
+        node._adcCallback(self.adc(0.))
+        self.send_status_joy(node, (2,))
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.2, bias=128., lr_offset=.08)).success)
+        self.assertFalse(node._setAcousticSteering(NS(threshold=float('nan'), bias=64., lr_offset=0.)).success)
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.7, bias=64., lr_offset=.1)).success)
+        events = [m for m in published if hasattr(m, 'event')]
+        self.assertEqual([(m.request_id, m.event) for m in events],
+                         [(1, 'accepted'), (2, 'rejected'), (1, 'superseded'), (3, 'accepted')])
+        self.assertTrue(math.isnan(events[1].threshold))
+        pending = json.loads([m for m in published if hasattr(m, 'config_json')][-1].config_json)
+        self.assertEqual(pending['pending_request']['request_id'], 3)
+        self.assertEqual(pending['settings']['acoustic_steering']['threshold'], .1)
+        for i in range(1, 11):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            self.send_status_joy(node)
+        applied = [m for m in published if hasattr(m, 'event')][-1]
+        self.assertEqual((applied.request_id, applied.event, applied.cycle_index), (3, 'applied', 1))
+        config = json.loads([m for m in published if hasattr(m, 'config_json')][-1].config_json)
+        self.assertIsNone(config['pending_request'])
+        self.assertEqual(config['applied_request_id'], 3)
+        self.assertEqual(config['settings']['acoustic_steering']['threshold'], .7)
+        self.assertEqual(config['settings']['initial_servo_cmd'], 2048.)
+        self.assertEqual(node.controller.applied_bias, 0.)
+        # Repeating the active values is still a distinct request and application.
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.7, bias=64., lr_offset=.1)).success)
+        for i in range(11, 21):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            self.send_status_joy(node)
+        repeated = [m for m in published if hasattr(m, 'event')][-1]
+        self.assertEqual((repeated.request_id, repeated.event, repeated.cycle_index), (4, 'applied', 2))
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.1, bias=32., lr_offset=0.)).success)
+        node._shutdown()
+        cancelled = [m for m in published if hasattr(m, 'event')][-1]
+        self.assertEqual((cancelled.request_id, cancelled.event), (5, 'cancelled'))
+        self.assertFalse([m for m in published if hasattr(m, 'decision_updated')][-1].parameters_pending)
+        self.assertEqual([m for m in published if hasattr(m, 'command_published')][-1].reason, 'shutdown')
+
+    def test_service_feedback_reports_active_pending_state_and_rejection_without_motion(self):
+        module, _, clock, published = self.make_node({'~acoustic_steering/enabled': True})
+        with patch.dict(sys.modules, module._mock_modules):
+            node = module.Teleop()
+        # A configuration call before Joy remains read-only with respect to motion.
+        accepted = node._setAcousticSteering(NS(threshold=.15, bias=128., lr_offset=.08))
+        self.assertEqual((accepted.success, accepted.request_id, accepted.motion_mode), (True, 1, 'manual'))
+        self.assertEqual((accepted.adc_quality, accepted.direction, accepted.command_bias),
+                         ('no_data', 'not_tracking', 0.))
+        self.assertEqual((accepted.active_threshold, accepted.active_bias, accepted.active_lr_offset),
+                         (.1, 256., 0.))
+        self.assertTrue(accepted.parameters_pending)
+        self.assertEqual((accepted.pending_request_id, accepted.pending_threshold,
+                          accepted.pending_bias, accepted.pending_lr_offset), (1, .15, 128., .08))
+        self.assertFalse(any(hasattr(m, 'cmd') for m in published))
+        node._adcCallback(self.adc(0.))
+        self.send_status_joy(node, (2,))
+        for i in range(1, 11):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            self.send_status_joy(node)
+        decision, epoch = node.acoustic.last_decision, node.controller.auto_epoch
+        commands = len([m for m in published if hasattr(m, 'cmd')])
+        rejected = node._setAcousticSteering(NS(threshold=-1., bias=64., lr_offset=0.))
+        self.assertFalse(rejected.success)
+        self.assertEqual((rejected.motion_mode, rejected.status, rejected.direction, rejected.adc_quality),
+                         ('tracking', 'active', 'left', 'valid'))
+        self.assertEqual((rejected.command_bias, rejected.active_threshold,
+                          rejected.active_bias, rejected.active_lr_offset), (128., .15, 128., .08))
+        self.assertFalse(rejected.parameters_pending)
+        self.assertEqual(rejected.pending_request_id, 0)
+        self.assertTrue(all(math.isnan(value) for value in
+                            (rejected.pending_threshold, rejected.pending_bias, rejected.pending_lr_offset)))
+        accepted = node._setAcousticSteering(NS(threshold=.3, bias=64., lr_offset=.1))
+        rejected = node._setAcousticSteering(NS(threshold=.4, bias=1025., lr_offset=.2))
+        self.assertEqual((rejected.request_id, rejected.pending_request_id), (4, accepted.request_id))
+        self.assertEqual((rejected.pending_threshold, rejected.pending_bias, rejected.pending_lr_offset),
+                         (.3, 64., .1))
+        self.assertEqual(len([m for m in published if hasattr(m, 'cmd')]), commands)
+        self.assertIs(node.acoustic.last_decision, decision)
+        self.assertEqual(node.controller.auto_epoch, epoch)
 
 
 if __name__ == '__main__':

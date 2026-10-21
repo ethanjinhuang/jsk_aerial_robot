@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <launch>
   <arg name="enabled" default="true"/>
-  <arg name="record_diagnostics" default="false"/>
+  <arg name="record_diagnostics" default="true"/>
   <arg name="diagnostics_topic" value="$(eval '/diagnostics' if arg('record_diagnostics') else '')"/>
   <arg name="bag_prefix" default="$(env HOME)/sonic"/>
 
@@ -19,6 +19,10 @@
               /robotic_fish/acoustic/channel_comparison
               /robotic_fish/acoustic/steering_state
               /robotic_fish/sonic/status_snapshot
+              /robotic_fish/sonic/motion_state
+              /robotic_fish/sonic/config
+              /robotic_fish/acoustic/steering_events
+              /rosout
               $(arg diagnostics_topic)
               /joy
               /imu

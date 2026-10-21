@@ -23,3 +23,12 @@ float64 normalized_difference
 # normalized_difference - lr_offset used by the retained decision.
 float64 compensated_difference
 float64 command_bias
+# Retained previous-cycle values, not instantaneous voltages.
+float64 head_mean
+float64 voltage_difference
+bool has_decision
+# False while stopped, outside tracking, or holding / warming up.
+bool decision_current
+string decision_direction
+# Current action: left/right/straight, holding, warmup, stopped, not_tracking, idle.
+string direction

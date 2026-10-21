@@ -21,6 +21,8 @@ add_message_files(
   GainControlState.msg
   ChannelComparison.msg
   AcousticSteeringState.msg
+  SonicMotionState.msg
+  AcousticSteeringEvent.msg
   QuadrantProbabilities.msg
 )
 

@@ -82,8 +82,10 @@ roslaunch robotic_fish joy.launch
 VIM4 已有 `io.launch` 时，可仅启动运动：`sonic_teleop.launch enable_joy:=false acoustic_steering:=true`。
 每台设备的操作与切换说明见[周期趋声控制](../robotic_fish/README.md#65-周期趋声控制)。
 只运行一个手柄发布者、一个运动命令发布者和一个 spinal 桥。
-录包建议在 VIM4 另开终端运行 `roslaunch robotic_fish record.launch record_diagnostics:=true`，
+录包建议在 VIM4 另开终端运行 `roslaunch robotic_fish record.launch`，
 让录制时间与采样、控制时间同源；PC 录包仍需要考虑两端时钟偏差。
+录包默认包含连续运动状态、三通道周期结果、锁存控制配置、在线调参事件、诊断和 ROS 日志，
+不依赖 Share。详见[录包字段与时序说明](../robotic_fish/README.md#53-控制程序选择)。
 
 ## 配置与声学输出
 
@@ -149,6 +151,9 @@ VIM4 运动节点按 Share 发布纯文本快照，组合入口及 `io.launch` �
 - `srv/SetAcousticSteering`：统一接收 `threshold`、`bias` 和 `lr_offset`，
   三项整组验证、暂存，在下一有效周期一起生效；补偿范围 `[-1,1]`，无单位。
 - `msg/AcousticSteeringState`：记录周期窗口、方向差值、偏置、参数及模式状态。
+- `msg/SonicMotionState`：记录每个控制周期的运动输出、摆幅／相位、输入年龄及 ADC 质量。
+- `msg/AcousticSteeringEvent`：记录调参请求接受／拒绝／替换、实际生效周期及关机取消。
+- `/robotic_fish/sonic/config`：复用 `RuntimeConfig`，锁存完整控制配置及待生效请求。
 - `/robotic_fish/acoustic/steering_state`：启用功能后的运行状态，可随 bag 记录。
 
 目前摆频由 VIM4 运动启动参数指定，窗口自动取倒数；更换摆频后重启并重新积累完整周期。
@@ -156,7 +161,9 @@ ADC 年龄、未来时间戳检查均在 VIM4 本机进行，未来容差继续�
 `acoustic_future_tolerance_s` 在启动时显式设置，启动日志显示主机名和实际时间限值。
 补偿可通过运动 launch 的 `acoustic_lr_offset` 设置初值，运行时调用
 `/sonic_teleop_node/set_acoustic_steering` 并填写三项；具体命令见运动包说明。
-本次扩展了周期状态消息和原服务请求，两端需重新编译并 source 两包后重启相关节点。
+调用后直接返回当前模式、数据质量、方向、控制偏置、正在使用及待生效参数；
+真正生效时 VIM4 运动终端打印请求编号、周期和参数。服务成功表示接受请求，仍等待有效周期。
+本次扩展了周期状态消息及服务请求／响应，两端需重新编译并 source 两包后重启相关节点。
 不会在运动底层加入通用偏置限速。验证边界见
 [周期趋声验证记录](docs/cycle_steering_validation.md)。
 

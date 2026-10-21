@@ -125,6 +125,11 @@ class SonicController:
     def auto_epoch(self):
         return self._auto_start
 
+    @property
+    def last_joy_time(self):
+        """Receipt time used by the watchdog; invalid Joy does not refresh it."""
+        return self._last_joy
+
     def set_tracking_bias(self, bias):
         """Set acoustic bias without restarting the gait or bypassing stop."""
         bias = _number(bias, 'auto bias')
