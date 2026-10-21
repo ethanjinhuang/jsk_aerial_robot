@@ -145,6 +145,31 @@ Share 新增 `Compensated mean`、`Comp. L-R [V]`、`LR offset [V]` 和 `Pending
 示例 bag：`/tmp/fish-cycle-ros-gbsehwsw/sonic_2026-10-21-21-40-27.bag`。
 8 个改动 Python 文件通过 Python 3.8 语法检查，未运行实际硬件。
 
+## 2026-10-21 精简 Share 并区分文件校准与左右补偿
+
+正常跟踪快照为 16 行，保持 78 列对齐和原颜色规则。三通道电压表仅包含
+原始瞬时电压、原始周期均值、校准文件处理后的周期均值；两类均值来自同一窗口与同一批采样。
+周期缓冲额外保留原始电压，缺少或无效的原始诊断值显示为 `--`，不冒充校准值，
+也不改变原有声学控制的质量检查与方向判据。
+
+判据区显示 `Diff before [%]`（文件校准后、左右补偿前）、`Diff after/T [%]`
+（左右补偿后／阈值）和电压补偿。`lr_voltage_offset_v` 不改变电压表里的任何一行数据。
+停止时显示原因；预热或历史均值显示 `UNAVAILABLE`／`HISTORICAL`；
+仅存在待生效补偿时显示 `Pending LR [V]`。
+移出终端的时间、年龄、周期详情和历史判断方向仍由结构化状态与 ADC 话题保存。
+ROS 消息／服务定义、连续状态发布与录包话题列表保持原样；原始周期均值也随 Share 快照录包。
+
+两包构建、安装及 210 项 CMake 测试通过（声学 148、运动 62）。
+新增周期回归验证原始与校准均值使用同一窗口并排除右端点、左右补偿不改写两类均值、
+原始诊断缺失／异常不阻断控制。显示与适配器回归验证补偿前后百分数及电压表隔离，
+以及历史／预热／停止提示、待生效值、对齐和颜色。
+构建、测试和安装日志使用 `calibration-view-*.log`，Python 3.8 语法检查通过。
+安装空间的两种摆频／符号 ROS 回归及实际录包读回通过。合成输入的原始电压为校准电压的一半，
+验证两类均值分开显示；在线左右补偿反转判定时，两行均值保持原值，判据区显示补偿前后百分数。
+正常快照 16 行、跨进程颜色与历史／质量等待提示均通过，未运行实际硬件。
+日志：`/tmp/fish-cycle-ros-mykygpif`；示例 bag：
+`/tmp/fish-cycle-ros-mykygpif/sonic_2026-10-21-22-43-08.bag`。
+
 ## 当前行为
 
 - `robotic_fish_sonic.cycle_steering` 负责输入校验、完整周期统计和阈值判定；
@@ -188,7 +213,7 @@ Share 新增 `Compensated mean`、`Comp. L-R [V]`、`LR offset [V]` 和 `Pending
 
 | 检查 | 结果 |
 | --- | --- |
-| 声学包单元测试 | 146 项通过，其中周期控制 37 项、显示与颜色 7 项 |
+| 声学包单元测试 | 148 项通过，其中周期控制 39 项、显示与颜色 7 项 |
 | 运动包单元测试 | 62 项通过，包含百分比边界判断与运动、显示、服务、状态一致性 |
 | CMake 构建、测试、安装 | 两包均在 `/tmp` 独立空间完成 |
 | 安装空间导入 | 两包模块、新状态消息、新调参服务均可导入 |
@@ -243,7 +268,7 @@ Share 新增 `Compensated mean`、`Comp. L-R [V]`、`LR offset [V]` 和 `Pending
 
 测试只运行独立本机 master：原手柄回归端口 11428，周期测试端口 11429。
 Joy、ADC、舵机命令、周期状态和 Share 快照全部使用各自测试话题，无桥、ADC/DAC 驱动或硬件。
-最新周期测试日志：`/tmp/fish-cycle-ros-gbsehwsw`，其中 `*_console.log` 为独立显示端输出；
+最新周期测试日志：`/tmp/fish-cycle-ros-mykygpif`，其中 `*_console.log` 为独立显示端输出；
 原手柄回归日志：`/tmp/fish-motion-ros-d386870n`。
 构建和安装日志在 `/tmp/robotic-fish-sonic-merge-check` 与
 `/tmp/robotic-fish-motion-check` 的 `steering-triplet-*.log` 中；

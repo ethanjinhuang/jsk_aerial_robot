@@ -58,6 +58,7 @@ class CycleDecision:
     compensated_left_mean: float
     compensated_right_mean: float
     compensated_difference: float
+    raw_means: tuple
 
 
 class CycleSteering:
@@ -204,7 +205,16 @@ class CycleSteering:
         self.latest_time = acquisition
         self.latest_error = ''
         if not waiting:
-            self.rows.append((acquisition, *g['volts']))
+            # Raw voltages are diagnostics only. Missing values in older input
+            # schemas must remain unavailable, without changing steering health.
+            raw = {}
+            for sample in message.samples:
+                channel = int(sample.channel if hasattr(sample, 'calibrated_voltage') else sample.channel_id)
+                try:
+                    raw[channel] = number(getattr(sample, 'volt_raw', None), 'raw voltage')
+                except ValueError:
+                    raw[channel] = float('nan')
+            self.rows.append((acquisition, *g['volts'], *(raw[i] for i in range(3))))
         while self.rows and acquisition - self.rows[0][0] > self.period + 2. * self.gap_s:
             self.rows.popleft()
         if len(self.rows) > 10000:
@@ -268,6 +278,7 @@ class CycleSteering:
         if len(rows) < 2 or max(b - a for a, b in zip(times, times[1:])) > self.gap_s + 1e-9:
             raise SteeringFault('incomplete_cycle')
         head, left, right = [math.fsum(row[i] / len(rows) for row in rows) for i in (1, 2, 3)]
+        raw_means = tuple(math.fsum(row[i] / len(rows) for row in rows) for i in (4, 5, 6))
         if not math.isfinite(left + right):
             raise SteeringFault('invalid_signal_sum')
         if left + right < self.low_signal_v:
@@ -292,6 +303,6 @@ class CycleSteering:
         self.last_decision = CycleDecision(cycle, start, end, head, left, right, difference,
                                            direction * self.left_bias_sign * self.settings.bias, len(rows),
                                            self.settings.lr_voltage_offset_v,
-                                           compensated_left, compensated_right, compensated)
+                                           compensated_left, compensated_right, compensated, raw_means)
         self.waiting_status, self._stable_since = '', None
         return self.last_decision

@@ -10,7 +10,7 @@ def batch(t, left=2., right=1., head=1., **changes):
     samples = []
     for channel, value in enumerate((head, left, right)):
         data = dict(channel_id=channel, timestamp=NS(to_sec=lambda t=t: t),
-                    volt_cali=value, status_cali=True, cali_id='test',
+                    volt_raw=value * .5, volt_cali=value, status_cali=True, cali_id='test',
                     adc_code=100, status_dac_feedback=True, dac_volt=.9)
         data.update(changes)
         samples.append(NS(**data))
@@ -63,13 +63,49 @@ class CycleTests(unittest.TestCase):
         self.assertAlmostEqual(first.head_mean, 1.)
         self.assertAlmostEqual(first.left_mean, 2.)
         self.assertAlmostEqual(first.right_mean, 1.)
+        self.assertEqual(first.raw_means, (.5, 1., .5))
         self.assertEqual(first.sample_count, 10)
         self.fill(e, .5, 1., left=1., right=3.)
         second = e.evaluate(101.)
         self.assertAlmostEqual(second.head_mean, 1.3)
         self.assertAlmostEqual(second.left_mean, 1.)
         self.assertAlmostEqual(second.right_mean, 3.)
+        self.assertAlmostEqual(second.raw_means[0], .65)
+        self.assertEqual(second.raw_means[1:], (.5, 1.5))
         self.assertEqual(second.sample_count, 10)
+
+    def test_steering_offset_does_not_change_raw_or_file_calibrated_cycle_means(self):
+        e = CycleSteering(2.)
+        self.start(e)
+        self.fill(e)
+        before = e.evaluate(100.5)
+        e.configure(.1, 128., -.75)
+        self.fill(e, .5, 1.)
+        after = e.evaluate(101.)
+        self.assertEqual(before.raw_means, (.5, 1., .5))
+        self.assertEqual(after.raw_means, before.raw_means)
+        self.assertEqual((after.head_mean, after.left_mean, after.right_mean),
+                         (before.head_mean, before.left_mean, before.right_mean))
+        self.assertAlmostEqual(after.difference, before.difference)
+        self.assertGreater(before.compensated_difference, 0.)
+        self.assertLess(after.compensated_difference, 0.)
+
+    def test_missing_or_invalid_raw_diagnostics_do_not_stop_steering(self):
+        for value in (None, float('nan'), float('inf'), 'bad', True):
+            with self.subTest(value=value):
+                e = CycleSteering(2.)
+                frame = batch(0.)
+                if value is None:
+                    del frame.samples[0].volt_raw
+                else:
+                    frame.samples[0].volt_raw = value
+                self.assertTrue(e.push(frame, 100., 0.))
+                e.begin(100., 2., 100.)
+                self.fill(e)
+                result = e.evaluate(100.5)
+                self.assertTrue(math.isnan(result.raw_means[0]))
+                self.assertEqual(result.raw_means[1:], (1., .5))
+                self.assertEqual(result.bias, 256.)
 
     def test_threshold_sign_and_neutral(self):
         for left, right, expected in [(3., 1., 128.), (1., 3., -128.),

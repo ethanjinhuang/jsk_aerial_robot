@@ -38,33 +38,28 @@ def format_status(data):
                                        for i, (cell, width) in enumerate(zip(cells, widths))) + ' |')
 
     row('Mode / state', '%s / %s' % (data['mode'], data['status']))
-    row('Direction', data['direction'].upper())
-    row('Bias / limit', '(%s/%s)' % (numeric(data['bias'], 1, True), numeric(data['bias_limit'], 1)))
-    row('Reason', data['reason'])
-    row('Snapshot ROS [s]', numeric(data['stamp'], 3))
+    row('Direction', '%s; bias=(%s/%s)' %
+        (data['direction'].upper(), numeric(data['bias'], 1, True), numeric(data['bias_limit'], 1)))
+    row('ADC quality', data['quality'])
+    if data['mode'] == 'stopped':
+        row('Reason', data['reason'])
     lines.append(border)
     lines.append('| %-22s | %15s | %15s | %13s |' %
                  ('Voltage [V]', 'Head (ADC0)', 'Left (ADC1)', 'Right (ADC2)'))
     voltages('Raw instant', data['raw'])
-    voltages('Calibrated / fallback', data['calibrated'])
-    voltages('Previous cycle mean', data['means'])
-    voltages('Compensated mean', data['compensated_means'])
+    voltages('Raw cycle mean', data['raw_means'])
+    voltages('Calibrated cycle mean', data['means'])
     lines.append(border)
-    row('ADC quality', data['quality'])
-    row('Source / Rx age', '%s / %s s' % (numeric(data['sample_age'], 3), numeric(data['receipt_age'], 3)))
     if data['means'] is None:
-        row('Cycle', 'unavailable (no completed tracking cycle)')
-    else:
-        row('Cycle', '#%d %s; W=%.3f s; N=%d' %
-            (data['cycle'], 'HISTORICAL' if data['historical'] else 'CURRENT', data['window'], data['count']))
-    row('L-R [V]', numeric(data['delta'], 5, True))
-    row('Comp. L-R [V]', numeric(data['compensated_delta'], 5, True))
-    row('Raw diff [%]', percent(data['difference'], True))
-    row('LR offset [V]', numeric(data['lr_voltage_offset_v'], 5, True))
-    row('Pending LR [V]', numeric(data['pending_lr_voltage_offset_v'], 5, True))
-    row('Diff / T [%]', '%s / %s' % (percent(data['compensated_difference'], True),
+        row('Cycle', 'UNAVAILABLE (no completed tracking cycle)')
+    elif data['historical']:
+        row('Cycle', 'HISTORICAL (held means and difference)')
+    row('Diff before [%]', percent(data['difference'], True))
+    row('Diff after/T [%]', '%s / %s' % (percent(data['compensated_difference'], True),
                                      percent(data['threshold'])))
-    row('Last decision', data['judged'].upper())
+    row('LR offset [V]', numeric(data['lr_voltage_offset_v'], 5, True))
+    if data['pending_lr_voltage_offset_v'] is not None:
+        row('Pending LR [V]', numeric(data['pending_lr_voltage_offset_v'], 5, True))
     lines.append(border)
     return '\n'.join(lines)
 

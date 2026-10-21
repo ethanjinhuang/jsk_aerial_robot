@@ -193,7 +193,7 @@ def main():
                         stamp = rospy.Time.now()
                         samples = [AdcSample(channel_id=i, timestamp=stamp,
                                              adc_code=32767 if values['saturated'] else 100,
-                                             volt_raw=v, volt_cali=v, status_cali=values['valid'],
+                                             volt_raw=v * .5, volt_cali=v, status_cali=values['valid'],
                                              cali_id='synthetic' if values['valid'] else '',
                                              status_dac_feedback=values['gain_known'],
                                              dac_volt=(values['gain'] + (.05 if values['mixed_gain'] and i == 0 else 0.)
@@ -315,13 +315,13 @@ def main():
                     updates = [s for _, s in states if s.decision_updated]
                 assert len(updates) == 1, updates
                 report = share_report()
-                assert re.search(r'Raw instant\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
-                assert re.search(r'Previous cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
-                assert re.search(r'L-R \[V\]\s*:\s*\+1.00000', report)
-                assert re.search(r'Raw diff \[%\]\s*:\s*\+66.67', report)
-                assert re.search(r'Diff / T \[%\]\s*:\s*\+66.67 / 10.00', report)
+                assert re.search(r'Raw instant\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000', report)
+                assert re.search(r'Raw cycle mean\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000', report)
+                assert re.search(r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
+                assert re.search(r'Diff after/T \[%\]\s*:\s*\+66.67 / 10.00', report)
                 assert re.search(r'Direction\s*:\s*LEFT', report)
                 assert set(map(len, report.splitlines())) == {78}
+                assert len(report.splitlines()) == 16
                 # Re-press Circle: keep tracking and the existing phase/window.
                 set_input(button=2)
                 time.sleep(.1)
@@ -372,9 +372,11 @@ def main():
                 phase_cycles = (state.window_end - previous_end).to_sec() * frequency
                 assert abs(phase_cycles - round(phase_cycles)) < 1e-6
                 report = share_report()
-                assert re.search(r'Raw diff \[%\]\s*:\s*\+66.67', report)
                 assert re.search(r'LR offset \[V\]\s*:\s*-0.75000', report)
-                assert re.search(r'Diff / T \[%\]\s*:\s*-33.33 / 15.00', report)
+                assert re.search(r'Raw cycle mean\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000', report)
+                assert re.search(r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
+                assert re.search(r'Diff before \[%\]\s*:\s*\+66.67', report)
+                assert re.search(r'Diff after/T \[%\]\s*:\s*-33.33 / 15.00', report)
                 assert re.search(r'Direction\s*:\s*RIGHT', report)
                 previous_cycle = state.cycle_index
                 assert configure(.1, 64., -.75).success

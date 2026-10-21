@@ -324,38 +324,28 @@ class Teleop:
     def _formatStatus(self, state, now):
         """Describe the actual held decision; never run a new steering decision."""
         data = dict(mode=state.mode, status=self._acoustic_status, reason=state.reason,
-                    stamp=rospy.Time.now().to_sec(), raw=None, calibrated=None, means=None,
-                    quality='no_data', sample_age=None, receipt_age=None, cycle=0,
-                    historical=False, window=1. / self.controller.frequency, count=0,
-                    delta=None, difference=None, compensated_difference=None, lr_voltage_offset_v=0.,
-                    compensated_means=None, compensated_delta=None, pending_lr_voltage_offset_v=None,
-                    threshold=None, judged='unavailable',
+                    raw=None, raw_means=None, means=None, historical=False,
+                    difference=None, compensated_difference=None,
+                    lr_voltage_offset_v=0., pending_lr_voltage_offset_v=None,
+                    threshold=None,
                     bias=state.applied_bias, bias_limit=self.controller.motion.servo_range)
-        adc = self._adcStatus(now, data['stamp'])
-        data.update(quality=adc['quality'],
-                    sample_age=None if math.isnan(adc['source_age']) else adc['source_age'],
-                    receipt_age=None if math.isnan(adc['receipt_age']) else adc['receipt_age'])
+        data['quality'] = self._adcStatus(now, rospy.Time.now().to_sec())['quality']
         if self._latest_adc_group is not None:
             samples = sorted(self._latest_adc.samples, key=lambda s: s.channel_id)
             data['raw'] = [getattr(sample, 'volt_raw', float('nan')) for sample in samples]
-            data['calibrated'] = self._latest_adc_group['volts']
         decision = None if self.acoustic is None else self.acoustic.last_decision
-        active, judged, direction = self._directions(state)
+        active, _, direction = self._directions(state)
         if self.acoustic is not None:
             data['threshold'] = self.acoustic.settings.threshold
             data['lr_voltage_offset_v'] = self.acoustic.settings.lr_voltage_offset_v
             if self.acoustic.pending is not None:
                 data['pending_lr_voltage_offset_v'] = self.acoustic.pending.lr_voltage_offset_v
         if decision is not None:
-            data.update(judged=judged,
+            data.update(raw_means=decision.raw_means,
                         means=(decision.head_mean, decision.left_mean, decision.right_mean),
-                        cycle=decision.cycle, historical=not active,
-                        window=decision.end - decision.start, count=decision.sample_count,
-                        delta=decision.left_mean - decision.right_mean, difference=decision.difference,
+                        historical=not active,
                         lr_voltage_offset_v=decision.lr_voltage_offset_v,
-                        compensated_means=(decision.head_mean, decision.compensated_left_mean,
-                                           decision.compensated_right_mean),
-                        compensated_delta=decision.compensated_left_mean - decision.compensated_right_mean,
+                        difference=decision.difference,
                         compensated_difference=decision.compensated_difference)
         data['direction'] = direction
         return format_status(data)

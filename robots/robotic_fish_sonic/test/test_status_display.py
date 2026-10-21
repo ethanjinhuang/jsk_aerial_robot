@@ -11,13 +11,11 @@ from robotic_fish_sonic.status_display import format_status, write_snapshot
 
 
 def snapshot(**changes):
-    data = dict(mode='tracking', status='active', reason='tracking_button', stamp=123.45,
+    data = dict(mode='tracking', status='active', reason='tracking_button',
                 direction='left', bias=128., bias_limit=1024., raw=(.5, .7, .4),
-                calibrated=(.51, .72, .42), means=(.5, .7, .4), quality='valid',
-                sample_age=.02, receipt_age=.015, cycle=3, historical=False,
-                window=2/3, count=13, delta=.3, difference=6/11, lr_voltage_offset_v=0.,
-                compensated_means=(.5, .7, .4), compensated_delta=.3, pending_lr_voltage_offset_v=None,
-                compensated_difference=6/11, threshold=.1, judged='left')
+                raw_means=(.49, .68, .38), means=(.5, .7, .4), quality='valid', historical=False,
+                lr_voltage_offset_v=0., pending_lr_voltage_offset_v=None,
+                difference=6/11, compensated_difference=6/11, threshold=.1)
     data.update(changes)
     return data
 
@@ -35,43 +33,48 @@ class DisplayTests(unittest.TestCase):
     def test_aligned_columns_precision_and_previous_cycle_values(self):
         plain = format_status(snapshot())
         self.assertEqual(set(map(len, plain.splitlines())), {78})
-        self.assertRegex(plain, r'Calibrated / fallback\s*\|\s*0.51000\s*\|\s*0.72000\s*\|\s*0.42000')
-        self.assertRegex(plain, r'Previous cycle mean\s*\|\s*0.50000\s*\|\s*0.70000\s*\|\s*0.40000')
+        self.assertEqual(len(plain.splitlines()), 16)
+        self.assertRegex(plain, r'Raw instant\s*\|\s*0.50000\s*\|\s*0.70000\s*\|\s*0.40000')
+        self.assertRegex(plain, r'Raw cycle mean\s*\|\s*0.49000\s*\|\s*0.68000\s*\|\s*0.38000')
+        self.assertRegex(plain, r'Calibrated cycle mean\s*\|\s*0.50000\s*\|\s*0.70000\s*\|\s*0.40000')
         self.assertIn('(+128.0/1024.0)', plain)
+        for label in ('Snapshot', 'Source / Rx age', 'L-R [V]', 'Raw diff', 'Last decision', 'Pending LR', 'Reason'):
+            self.assertNotIn(label, plain)
         self.assertNotIn('\033[', plain)
 
-    def test_compensation_is_visible_without_replacing_raw_differences(self):
+    def test_compensation_and_pending_value_are_visible_without_replacing_measured_means(self):
         plain = format_status(snapshot(lr_voltage_offset_v=-.165, compensated_difference=-.05454545,
-                                        compensated_means=(.5, .535, .565), compensated_delta=-.03,
                                         pending_lr_voltage_offset_v=-.1,
-                                        direction='straight', judged='straight'))
+                                        direction='straight'))
         self.assertEqual(set(map(len, plain.splitlines())), {78})
-        self.assertRegex(plain, r'L-R \[V\]\s*:\s*\+0.30000')
-        self.assertRegex(plain, r'Raw diff \[%\]\s*:\s*\+54.55')
+        self.assertRegex(plain, r'Calibrated cycle mean\s*\|\s*0.50000\s*\|\s*0.70000\s*\|\s*0.40000')
         self.assertRegex(plain, r'LR offset \[V\]\s*:\s*-0.16500')
         self.assertRegex(plain, r'Pending LR \[V\]\s*:\s*-0.10000')
-        self.assertRegex(plain, r'Compensated mean\s*\|\s*0.50000\s*\|\s*0.53500\s*\|\s*0.56500')
-        self.assertRegex(plain, r'Comp. L-R \[V\]\s*:\s*-0.03000')
-        self.assertRegex(plain, r'Diff / T \[%\]\s*:\s*-5.45 / 10.00')
+        self.assertNotIn('Compensated mean', plain)
+        self.assertRegex(plain, r'Diff before \[%\]\s*:\s*\+54.55')
+        self.assertRegex(plain, r'Diff after/T \[%\]\s*:\s*-5.45 / 10.00')
 
     def test_long_quality_and_reason_wrap_inside_table(self):
-        plain = format_status(snapshot(reason='fault_' * 40,
+        plain = format_status(snapshot(mode='stopped', direction='stopped', reason='fault_' * 40,
                                        quality='calibration_fallback|gain_unknown|' * 8))
         self.assertEqual(set(map(len, plain.splitlines())), {78})
         self.assertIn('calibration_fallback', plain)
+        self.assertIn('Reason', plain)
+        self.assertIn('fault_', plain)
 
     def test_unavailable_values_and_historical_direction_are_explicit(self):
-        plain = format_status(snapshot(raw=None, calibrated=None, means=None, quality='no_data',
-                                       direction='warmup', delta=None, difference=None,
-                                       compensated_difference=None, compensated_means=None, compensated_delta=None))
+        plain = format_status(snapshot(raw=None, raw_means=None, means=None, quality='no_data', direction='warmup',
+                                       difference=None, compensated_difference=None))
         self.assertIn('no completed tracking cycle', plain)
-        self.assertRegex(plain, r'Raw diff \[%\]\s*:\s*--')
-        self.assertRegex(plain, r'Diff / T \[%\]\s*:\s*-- / 10.00')
-        self.assertRegex(plain, r'Previous cycle mean\s*\|\s*--\s*\|\s*--\s*\|\s*--')
-        held = format_status(snapshot(direction='stopped', historical=True, bias=0.))
+        self.assertRegex(plain, r'Diff before \[%\]\s*:\s*--')
+        self.assertRegex(plain, r'Diff after/T \[%\]\s*:\s*-- / 10.00')
+        self.assertRegex(plain, r'Calibrated cycle mean\s*\|\s*--\s*\|\s*--\s*\|\s*--')
+        held = format_status(snapshot(mode='stopped', direction='stopped', reason='acoustic_adc_timeout',
+                                      historical=True, bias=0.))
         self.assertIn('HISTORICAL', held)
         self.assertRegex(held, r'Direction\s*:\s*STOPPED')
-        self.assertRegex(held, r'Last decision\s*:\s*LEFT')
+        self.assertRegex(held, r'Reason\s*:\s*acoustic_adc_timeout')
+        self.assertNotIn('Last decision', held)
 
     def test_color_changes_no_visible_text_or_alignment(self):
         for direction in ('left', 'right', 'straight', 'warmup', 'holding', 'stopped'):

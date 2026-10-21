@@ -459,10 +459,12 @@ class RosAdapterTests(unittest.TestCase):
             self.send_status_joy(node)
         self.send_status_joy(node, (8,))
         report = self.status_reports(ros)[-1]
-        self.assertRegex(report, r'Raw diff \[%\]\s*:\s*\+66.67')
         self.assertRegex(report, r'LR offset \[V\]\s*:\s*-0.75000')
-        self.assertRegex(report, r'Compensated mean\s*\|\s*1.00000\s*\|\s*1.25000\s*\|\s*1.75000')
-        self.assertRegex(report, r'Diff / T \[%\]\s*:\s*-33.33 / 10.00')
+        self.assertRegex(report, r'Raw cycle mean\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000')
+        self.assertRegex(report, r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000')
+        self.assertRegex(report, r'Diff before \[%\]\s*:\s*\+66.67')
+        self.assertNotIn('Compensated mean', report)
+        self.assertRegex(report, r'Diff after/T \[%\]\s*:\s*-33.33 / 10.00')
         self.assertRegex(report, r'Direction\s*:\s*RIGHT')
         self.assertEqual(node.controller.applied_bias, -128.)
         state = [m for m in published if hasattr(m, 'normalized_difference')][-1]
@@ -637,10 +639,8 @@ class RosAdapterTests(unittest.TestCase):
         node._adcCallback(newest)
         self.send_status_joy(node, (8,))
         report = self.status_reports(ros)[-1]
-        self.assertRegex(report, r'Calibrated / fallback\s*\|\s*4.00000\s*\|\s*2.00000\s*\|\s*1.00000')
-        self.assertRegex(report, r'Previous cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000')
-        self.assertRegex(report, r'L-R \[V\]\s*:\s*\+1.00000')
-        self.assertRegex(report, r'Diff / T \[%\]\s*:\s*\+66.67 / 10.00')
+        self.assertRegex(report, r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000')
+        self.assertRegex(report, r'Diff after/T \[%\]\s*:\s*\+66.67 / 10.00')
         self.assertRegex(report, r'Direction\s*:\s*LEFT')
         self.assertIn('(+256.0/1024.0)', report)
         self.assertNotIn('\033[', report)
@@ -656,7 +656,7 @@ class RosAdapterTests(unittest.TestCase):
         report = self.status_reports(ros)[-1]
         self.assertIn('HISTORICAL', report)
         self.assertRegex(report, r'Direction\s*:\s*STOPPED')
-        self.assertRegex(report, r'Last decision\s*:\s*LEFT')
+        self.assertRegex(report, r'Reason\s*:\s*stop_button')
         self.assertIn('(+0.0/1024.0)', report)
         self.assertEqual([message for message in published if hasattr(message, 'cmd')][-1].cmd, [2048])
 
@@ -702,7 +702,6 @@ class RosAdapterTests(unittest.TestCase):
         report = self.status_reports(ros)[-1]
         self.assertRegex(report, r'ADC quality\s*:\s*calibration_fallback')
         self.assertRegex(report, r'Direction\s*:\s*HOLDING')
-        self.assertRegex(report, r'Last decision\s*:\s*UNAVAILABLE')
 
     def test_share_can_be_remapped_and_handles_incomplete_adc_groups(self):
         module, ros, _, _ = self.make_node({'~status_button': 10, '~status_local_echo': True})
