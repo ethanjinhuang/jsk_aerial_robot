@@ -11,7 +11,7 @@
   <arg name="acoustic_steering" default="true"/>
   <arg name="acoustic_threshold" default="0.1"/>
   <arg name="acoustic_bias" default="256.0"/>
-  <arg name="acoustic_lr_offset" default="0.0"/>
+  <arg name="acoustic_lr_voltage_offset_v" default="0.0"/>
   <arg name="acoustic_max_age_s" default="0.5"/>
   <arg name="acoustic_future_tolerance_s" default="0.05"/>
   <arg name="left_bias_sign" default="1"/>
@@ -34,7 +34,7 @@
     <arg name="acoustic_steering" value="$(arg acoustic_steering)"/>
     <arg name="acoustic_threshold" value="$(arg acoustic_threshold)"/>
     <arg name="acoustic_bias" value="$(arg acoustic_bias)"/>
-    <arg name="acoustic_lr_offset" value="$(arg acoustic_lr_offset)"/>
+    <arg name="acoustic_lr_voltage_offset_v" value="$(arg acoustic_lr_voltage_offset_v)"/>
     <arg name="acoustic_max_age_s" value="$(arg acoustic_max_age_s)"/>
     <arg name="acoustic_future_tolerance_s" value="$(arg acoustic_future_tolerance_s)"/>
     <arg name="left_bias_sign" value="$(arg left_bias_sign)"/>

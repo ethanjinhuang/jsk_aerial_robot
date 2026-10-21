@@ -1,13 +1,17 @@
 # Applied together at the next valid positive-going gait zero crossing.
+# Inclusive fraction of channel arithmetic mean, [0,2]: 0.15 means 15%.
+# Equal channels select straight even when threshold=0.
 float64 threshold
 float64 bias
-# Dimensionless baseline subtracted from (left_mean-right_mean)/(left_mean+right_mean).
-float64 lr_offset
+# Volts: left_mean += value, right_mean -= value before normalization.
+# Must be finite; a cycle producing a negative compensated mean waits without applying.
+float64 lr_voltage_offset_v
 ---
 bool success
 string message
 # Snapshot at request processing time; success means accepted, not yet applied.
 uint64 request_id
+string difference_reference
 string motion_mode
 string status
 string reason
@@ -17,10 +21,10 @@ float64 command_bias
 # Currently effective settings, even when this request is rejected.
 float64 active_threshold
 float64 active_bias
-float64 active_lr_offset
+float64 active_lr_voltage_offset_v
 bool parameters_pending
 # Zero ID and NaN values when no request is pending.
 uint64 pending_request_id
 float64 pending_threshold
 float64 pending_bias
-float64 pending_lr_offset
+float64 pending_lr_voltage_offset_v

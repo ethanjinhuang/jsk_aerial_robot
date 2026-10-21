@@ -479,16 +479,33 @@ roslaunch robotic_fish sonic_teleop.launch enable_joy:=false \
 默认仍是手动模式。按圆圈 `○`（`buttons[2]`）进入声源跟踪后，使用同方向的正向过零点
 （相位 `2*pi*k`）判断，首个完整周期内偏置为零。
 直接订阅 `/robotic_fish/adc/samples`，按 `W=1/f` 统计上一完整周期的
-校准左右电压均值，再计算 `(L-R)/(L+R)`。无需另启 `quadrant.launch`；
+校准左右电压均值，施加电压补偿后再归一化。无需另启 `quadrant.launch`；
 它原有的固定窗口比较与本功能相互独立。
 本次硬件前端已确认输出整流／检波后的包络或幅值电压，周期均值用于比较
 平均声学响应幅值，不是物理声强。更换为原始交流波形输入时需重新设计特征提取。
 
-先计算 `d=(L-R)/(L+R)`，再使用 `d_corrected=d-acoustic_lr_offset` 比较阈值。
-补偿默认为零，范围 `[-1,1]`，无电压单位。例如声源居中且采样稳定时测得
-`d=0.08`，可设置 `acoustic_lr_offset:=0.08`，使此基线对应补偿后的零点。
-左右通道同比例放大时归一化差值不变；实际更改增益后仍需复核基线。
-补偿后的差值大于阈值取左转偏置，小于负阈值取右转偏置，其余取零。
+令 `delta=acoustic_lr_voltage_offset_v`（单位 V，默认 0），对上一完整周期均值计算：
+
+```text
+L_corrected = L + delta
+R_corrected = R - delta
+mean = (L_corrected + R_corrected) / 2 = (L + R) / 2
+d_corrected = (L_corrected - R_corrected) / mean
+```
+
+`threshold=0.15` 表示左右补偿电压差达到两侧平均值的 **15%** 时转向，
+按 `d_corrected>=threshold` 左转、`d_corrected<=-threshold` 右转，其余直行。
+例如 `L_corrected=1.075 V`、`R_corrected=0.925 V`，平均值为 `1 V`，差值为 `0.15 V`，
+恰好达到 15% 时也左转。这里的百分比以两侧平均值为基准；此时强侧约为弱侧的 1.162 倍。
+左右完全相等时始终直行，包括 `threshold=0`。
+相同阈值下，新公式比原来的除以 `L+R` 更灵敏；若要保持原来 `0.15` 的转向边界，改用 `0.30`。
+
+正值使判断偏向左侧，负值使判断偏向右侧；左右电压差总共改变 `2*delta`。
+仅在声源居中、左右应相等的条件下，用多个稳定周期估计 `delta=(R-L)/2`。
+例如居中时 `L=0.07145 V`、`R=0.04772 V`，对应 `delta=-0.011865 V`。
+这是固定电压差补偿；更换 DAC 增益或工作条件后应重新检查基线。
+原始／校准 ADC 电压与测得周期均值继续保存，补偿均值和差值单独显示、记录。
+补偿后的相对差值达到正／负阈值时取左／右转偏置，其余取零。
 每次取固定 `-C/0/+C`，不累加；整个周期保持该偏置，不重置摆尾相位。
 目标按原控制循环约 50 Hz 发布，决策频率为摆频 `f`，实际过零处理发生在
 边界后的首个控制周期。接受中心偏置跳变。
@@ -501,7 +518,7 @@ roslaunch robotic_fish sonic_teleop.launch enable_joy:=false \
 
 ```bash
 rosservice call /sonic_teleop_node/set_acoustic_steering \
-  "{threshold: 0.15, bias: 128.0, lr_offset: 0.08}"
+  "{threshold: 0.15, bias: 128.0, lr_voltage_offset_v: -0.01}"
 ```
 
 命令终端直接返回请求处理时的状态快照。例如当前正使用阈值 0.1、偏置 256、无补偿，
@@ -511,6 +528,7 @@ rosservice call /sonic_teleop_node/set_acoustic_steering \
 success: True
 message: "accepted; applies at next valid full-cycle decision"
 request_id: 1
+difference_reference: channel_mean
 motion_mode: tracking
 status: active
 reason: tracking_button
@@ -519,12 +537,12 @@ adc_quality: valid
 command_bias: 256.0
 active_threshold: 0.1
 active_bias: 256.0
-active_lr_offset: 0.0
+active_lr_voltage_offset_v: 0.0
 parameters_pending: True
 pending_request_id: 1
 pending_threshold: 0.15
 pending_bias: 128.0
-pending_lr_offset: 0.08
+pending_lr_voltage_offset_v: -0.01
 ```
 
 `success` 表示请求被接受；`active_*` 是正在使用的参数，`pending_*` 是等待生效的参数，
@@ -534,14 +552,19 @@ pending_lr_offset: 0.08
 以及本次生效的三项参数，可用请求编号与调用返回、录包事件对应。
 拒绝请求时也返回当前状态和此前保留的待生效参数；没有待生效请求时，
 `parameters_pending=false`、`pending_request_id=0`，三个 `pending_*` 数值为 NaN。
-本次扩展了服务响应，两端需重新编译两包、source 并重启运动节点后使用。
+本次替换了服务补偿字段并扩展状态消息，两端需重新编译两包、source 并重启相关节点后使用。
+旧的无量纲 `lr_offset` 和启动参数 `acoustic_lr_offset` 已移除，旧数值不能直接沿用为伏特。
 
-每次调用请同时填写三项：阈值范围 `[0,1]`，偏置范围 `[0,servo_range]`，
-补偿范围 `[-1,1]`。`lr_offset: 0.0` 表示取消左右补偿。
+每次调用请同时填写三项：阈值范围 `[0,2]`（0%～200%），偏置范围 `[0,servo_range]`，
+电压补偿须为有限有符号数，`lr_voltage_offset_v: 0.0` 表示取消补偿。
 整组校验通过后，在下一有效周期决策一起应用；任何一项无效都不覆盖此前已接受的配置。
 多次有效请求以最新一组为准；`parameters_pending` 表示等待生效，预热或质量等待期间继续暂存。
-补偿不会修改三通道电压、原始差值、摆尾相位或转向偏置上限。
-重启后使用启动参数；例如在 VIM4 的启动命令中增加 `acoustic_lr_offset:=0.08`。
+每个周期还要求 `L+delta>=0`、`R-delta>=0`，即 `delta` 位于该周期的 `[-L,R]` 内。
+补偿越界时显示 `voltage_compensation_out_of_range`／`HOLDING`，保持摆尾和上一偏置，
+整组三项待生效参数继续暂存；后续完整周期恢复有效或替换参数后自动继续判断。
+不会把负电压截成零。尚无有效判断时保持零偏置；Cross、Joy／ADC 超时及饱和等检查继续生效。
+补偿保持摆尾相位和转向偏置上限，头部电压保持原值。
+重启后使用启动参数；例如在 VIM4 的启动命令中增加 `acoustic_lr_voltage_offset_v:=-0.01`。
 这三项支持运行时服务；`rosparam set` 不会更新控制器，
 摆频和方向符号通过 launch 设置，修改后重启并重新积累周期数据。
 
@@ -586,8 +609,12 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 状态中的 `motion_mode` 分别为 `manual`、`auto`、`tracking`、`stopped`。
 
 状态话题包含模式／原因、周期序号、实际窗口、左右均值、差值、参数及输出偏置；
-`normalized_difference` 保留补偿前的归一化差值，`lr_offset` 为已生效补偿，
-`compensated_difference` 为最近决策使用的补偿后差值。
+`normalized_difference` 保留补偿前的归一化差值，`lr_voltage_offset_v` 为已生效电压补偿，
+`compensated_left_mean`／`compensated_right_mean` 保存补偿后的均值，
+`compensated_voltage_difference` 保存补偿后的电压差，
+`compensated_difference` 为最近决策使用的补偿后相对差值，两个差值均以两侧平均值为分母。
+消息和服务反馈通过 `difference_reference=channel_mean` 标明基准；数值仍为比例，`0.15` 表示 15%。
+锁存配置 `schema_version=3`，保存相同基准和 `threshold_inclusive=true`。
 `decision_updated` 仅在新决策时为真。停止后可保留上一决策的数值和窗口时间，
 必须结合 `motion_mode`、`status` 和 `sample_stamp` 解读。
 `record.launch` 已包含该状态话题。详细软件验证见
@@ -605,7 +632,9 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 - 当前运动模式、声学状态和停止原因。
 - ADC0／ADC1／ADC2（头／左／右）的最新原始电压、校准／回退电压，以及数据质量和年龄。
 - 上一完整摆尾周期内三个通道的校准电压均值、周期长度及样本数。
-- 左右均值的电压差 `L-R`、原始归一化差值、补偿值、判定使用的补偿后差值和实际阈值。
+- `Compensated mean` 为补偿后的上一周期均值，头部列不参与左右补偿。
+- 原始与补偿后电压差、`Raw diff [%]` 原始相对差、伏特单位的 `LR offset [V]` 和 `Pending LR [V]`。
+- `Diff / T [%]` 为补偿后相对差百分数／阈值百分数，例如 `+18.00 / 15.00` 表示左侧达到判据。
 - 判断方向 `left`／`right`／`straight`，以及 `(当前输出偏置/修改上限)`。
 
 例如，进入跟踪并完成一个周期后：
@@ -624,14 +653,17 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 | Raw instant            |         0.50000 |         0.70000 |       0.40000 |
 | Calibrated / fallback  |         0.51000 |         0.72000 |       0.42000 |
 | Previous cycle mean    |         0.50000 |         0.70000 |       0.40000 |
+| Compensated mean       |         0.50000 |         0.69000 |       0.41000 |
 +----------------------------------------------------------------------------+
 | ADC quality     : valid                                                    |
 | Source / Rx age : 0.020 / 0.015 s                                          |
 | Cycle           : #3 CURRENT; W=0.667 s; N=13                              |
 | L-R [V]         : +0.30000                                                 |
-| Normalized raw  : +0.2727                                                  |
-| LR offset       : +0.0000                                                  |
-| Compensated / T : +0.2727 / 0.1000                                         |
+| Comp. L-R [V]   : +0.28000                                                 |
+| Raw diff [%]    : +54.55                                                   |
+| LR offset [V]   : -0.01000                                                 |
+| Pending LR [V]  : --                                                       |
+| Diff / T [%]    : +50.91 / 10.00                                           |
 | Last decision   : LEFT                                                     |
 +----------------------------------------------------------------------------+
 ```

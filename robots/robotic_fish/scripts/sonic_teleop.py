@@ -13,7 +13,7 @@ from std_msgs.msg import String
 
 from robotic_fish.sonic_motion import SonicController
 from robotic_fish_sonic.acoustic_core import adapt, Status
-from robotic_fish_sonic.cycle_steering import SteeringSettings
+from robotic_fish_sonic.cycle_steering import DIFFERENCE_REFERENCE, SteeringSettings, steering_direction
 from robotic_fish_sonic.msg import AdcSampleArray, SonicMotionState, RuntimeConfig, AcousticSteeringEvent
 from robotic_fish_sonic.status_display import format_status, write_snapshot
 
@@ -103,7 +103,7 @@ class Teleop:
                 frequency=self.controller.frequency, max_bias=self.controller.motion.servo_range,
                 threshold=rospy.get_param('~acoustic_steering/threshold', .1),
                 bias=rospy.get_param('~acoustic_steering/bias', 256.),
-                lr_offset=rospy.get_param('~acoustic_steering/lr_offset', 0.),
+                lr_voltage_offset_v=rospy.get_param('~acoustic_steering/lr_voltage_offset_v', 0.),
                 left_bias_sign=rospy.get_param('~acoustic_steering/left_bias_sign', 1),
                 gap_s=rospy.get_param('~acoustic_steering/gap_s', .2),
                 max_age_s=self._status_max_age,
@@ -166,12 +166,13 @@ class Teleop:
                         status_button=self.status_button, status_local_echo=self.status_local_echo,
                         initial_servo_cmd=self._initial_servo_cmd,
                         acoustic_steering=dict(enabled=self.acoustic is not None,
+                            difference_reference=DIFFERENCE_REFERENCE, threshold_inclusive=True,
                             max_age_s=self._status_max_age, future_tolerance_s=self._status_future_tolerance))
         if self.acoustic is not None:
             a = self.acoustic
             settings['acoustic_steering'].update(vars(a.settings), left_bias_sign=a.left_bias_sign,
                 gap_s=a.gap_s, low_signal_v=a.low_signal_v, max_bias=a.max_bias)
-        payload = json.dumps(dict(schema_version=1, host=socket.gethostname(),
+        payload = json.dumps(dict(schema_version=3, host=socket.gethostname(),
             started_ros_s=self._started_ros, started_monotonic_s=self._started_monotonic,
             settings=settings, applied_request_id=self._applied_request_id,
             pending_request=None if self._pending_request is None else dict(
@@ -188,7 +189,8 @@ class Teleop:
         msg.header.stamp = rospy.Time.now()
         msg.header.frame_id = 'fish_base_link'
         msg.request_id, msg.event, msg.detail = request_id, event, detail
-        msg.threshold, msg.turn_bias, msg.lr_offset = values.threshold, values.bias, values.lr_offset
+        msg.difference_reference = DIFFERENCE_REFERENCE
+        msg.threshold, msg.turn_bias, msg.lr_voltage_offset_v = values.threshold, values.bias, values.lr_voltage_offset_v
         msg.cycle_index = cycle
         self.event_pub.publish(msg)
 
@@ -197,12 +199,12 @@ class Teleop:
             self._request_id += 1
             request_id = self._request_id
             # ROS service fields are float64; retain even a rejected NaN/Inf request.
-            values = SteeringSettings(request.threshold, request.bias, request.lr_offset)
+            values = SteeringSettings(request.threshold, request.bias, request.lr_voltage_offset_v)
             if self._stopping.is_set():
                 self._publishEvent(request_id, 'rejected', values, 'motion node is shutting down')
                 return self._steeringResponse(False, 'motion node is shutting down', request_id)
             try:
-                self.acoustic.configure(request.threshold, request.bias, request.lr_offset)
+                self.acoustic.configure(request.threshold, request.bias, request.lr_voltage_offset_v)
             except ValueError as exc:
                 self._publishEvent(request_id, 'rejected', values, str(exc))
                 return self._steeringResponse(False, str(exc), request_id)
@@ -218,19 +220,20 @@ class Teleop:
         """Report the current controller state without advancing it or commanding motion."""
         response = self._SteeringResponse(success=success, message=message)
         response.request_id = request_id
+        response.difference_reference = DIFFERENCE_REFERENCE
         response.motion_mode = self.controller.mode
         response.status, response.reason = self._acoustic_status, self.controller.reason
         response.direction = self._directions(self.controller)[2]
         response.adc_quality = self._adcStatus(time.monotonic(), rospy.Time.now().to_sec())['quality']
         response.command_bias = self.controller.applied_bias
         active, pending = self.acoustic.settings, self.acoustic.pending
-        response.active_threshold, response.active_bias, response.active_lr_offset = (
-            active.threshold, active.bias, active.lr_offset)
+        response.active_threshold, response.active_bias, response.active_lr_voltage_offset_v = (
+            active.threshold, active.bias, active.lr_voltage_offset_v)
         response.parameters_pending = pending is not None
         response.pending_request_id = 0 if self._pending_request is None else self._pending_request[0]
         response.pending_threshold = float('nan') if pending is None else pending.threshold
         response.pending_bias = float('nan') if pending is None else pending.bias
-        response.pending_lr_offset = float('nan') if pending is None else pending.lr_offset
+        response.pending_lr_voltage_offset_v = float('nan') if pending is None else pending.lr_voltage_offset_v
         return response
 
     def _joyCallback(self, msg):
@@ -272,8 +275,8 @@ class Teleop:
         current = (decision is not None and state is not None and
                    state.mode == 'tracking' and self._acoustic_status == 'active')
         judged = ('unavailable' if decision is None else
-                  'left' if decision.compensated_difference > self.acoustic.settings.threshold else
-                  'right' if decision.compensated_difference < -self.acoustic.settings.threshold else 'straight')
+                  {1: 'left', -1: 'right', 0: 'straight'}[steering_direction(
+                      decision.compensated_difference, self.acoustic.settings.threshold)])
         direction = (judged if current else 'idle' if state is None else
                      'holding' if state.mode == 'tracking' and self.acoustic.waiting_status else
                      'warmup' if state.mode == 'tracking' else 'stopped' if state.mode == 'stopped' else
@@ -324,7 +327,8 @@ class Teleop:
                     stamp=rospy.Time.now().to_sec(), raw=None, calibrated=None, means=None,
                     quality='no_data', sample_age=None, receipt_age=None, cycle=0,
                     historical=False, window=1. / self.controller.frequency, count=0,
-                    delta=None, difference=None, compensated_difference=None, lr_offset=0.,
+                    delta=None, difference=None, compensated_difference=None, lr_voltage_offset_v=0.,
+                    compensated_means=None, compensated_delta=None, pending_lr_voltage_offset_v=None,
                     threshold=None, judged='unavailable',
                     bias=state.applied_bias, bias_limit=self.controller.motion.servo_range)
         adc = self._adcStatus(now, data['stamp'])
@@ -339,14 +343,20 @@ class Teleop:
         active, judged, direction = self._directions(state)
         if self.acoustic is not None:
             data['threshold'] = self.acoustic.settings.threshold
-            data['lr_offset'] = self.acoustic.settings.lr_offset
+            data['lr_voltage_offset_v'] = self.acoustic.settings.lr_voltage_offset_v
+            if self.acoustic.pending is not None:
+                data['pending_lr_voltage_offset_v'] = self.acoustic.pending.lr_voltage_offset_v
         if decision is not None:
             data.update(judged=judged,
                         means=(decision.head_mean, decision.left_mean, decision.right_mean),
                         cycle=decision.cycle, historical=not active,
                         window=decision.end - decision.start, count=decision.sample_count,
                         delta=decision.left_mean - decision.right_mean, difference=decision.difference,
-                        lr_offset=decision.lr_offset, compensated_difference=decision.compensated_difference)
+                        lr_voltage_offset_v=decision.lr_voltage_offset_v,
+                        compensated_means=(decision.head_mean, decision.compensated_left_mean,
+                                           decision.compensated_right_mean),
+                        compensated_delta=decision.compensated_left_mean - decision.compensated_right_mean,
+                        compensated_difference=decision.compensated_difference)
         data['direction'] = direction
         return format_status(data)
 
@@ -383,8 +393,8 @@ class Teleop:
                                            'effective at full-cycle decision', decision.cycle)
                         self._publishConfig()
                         rospy.loginfo('Acoustic steering applied: request=%d cycle=%d '
-                                      'threshold=%.4f bias=%.1f lr_offset=%+.4f',
-                                      request_id, decision.cycle, values.threshold, values.bias, values.lr_offset)
+                                      'threshold=%.4f bias=%.1f lr_voltage_offset_v=%+.6f V',
+                                      request_id, decision.cycle, values.threshold, values.bias, values.lr_voltage_offset_v)
                     rospy.logdebug('Acoustic cycle=%d, L/R=%.5f/%.5f, difference=%.3f, bias=%.1f',
                                   decision.cycle, decision.left_mean, decision.right_mean,
                                   decision.difference, decision.bias)
@@ -409,12 +419,15 @@ class Teleop:
         msg.parameters_pending = self.acoustic.pending is not None
         msg.frequency, msg.window_s = self.acoustic.frequency, self.acoustic.period
         msg.threshold, msg.turn_bias = self.acoustic.settings.threshold, self.acoustic.settings.bias
-        msg.lr_offset = self.acoustic.settings.lr_offset
+        msg.difference_reference = DIFFERENCE_REFERENCE
+        msg.lr_voltage_offset_v = self.acoustic.settings.lr_voltage_offset_v
         msg.left_bias_sign = self.acoustic.left_bias_sign
         msg.command_bias = 0. if state is None else state.applied_bias
         msg.left_mean = msg.right_mean = msg.normalized_difference = float('nan')
         msg.compensated_difference = float('nan')
         msg.head_mean = msg.voltage_difference = float('nan')
+        msg.compensated_left_mean = msg.compensated_right_mean = float('nan')
+        msg.compensated_voltage_difference = float('nan')
         if self.acoustic.latest_stamp is not None:
             msg.sample_stamp = rospy.Time.from_sec(self.acoustic.latest_stamp)
         decision = self.acoustic.last_decision
@@ -429,6 +442,9 @@ class Teleop:
             msg.left_mean, msg.right_mean = decision.left_mean, decision.right_mean
             msg.head_mean = decision.head_mean
             msg.voltage_difference = decision.left_mean - decision.right_mean
+            msg.compensated_left_mean, msg.compensated_right_mean = (
+                decision.compensated_left_mean, decision.compensated_right_mean)
+            msg.compensated_voltage_difference = decision.compensated_left_mean - decision.compensated_right_mean
             msg.normalized_difference = decision.difference
             msg.compensated_difference = decision.compensated_difference
         self.acoustic_pub.publish(msg)

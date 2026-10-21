@@ -128,8 +128,16 @@ rostopic echo /robotic_fish/acoustic/channel_comparison
 每次同方向过零时读取上一完整 `1/f` 周期的校准 ADC 数据，比较左右
 电压均值，选取 `-C/0/+C`，保持一周期。该路径直接使用 ADC 数据，
 不经过 `quadrant_node` 的固定窗口，不需要方向训练模型。
-归一化差值判据支持 `d_corrected=(L-R)/(L+R)-lr_offset`，补偿初值为零。
-补偿只平移判断基线，原始电压和归一化差值保持原值；Share 同时显示补偿前后结果。
+电压补偿 `delta=lr_voltage_offset_v` 单位为 V、默认零，使用 `L'=L+delta`、`R'=R-delta`，
+再以 `d=(L'-R')/((L'+R')/2)` 与阈值比较，即差值相对两侧平均值的比例。
+`threshold=0.15` 表示差异达到平均值的 15%：正向达到阈值左转，负向达到阈值右转，其余直行。
+左右相等时始终直行，包括阈值为零。阈值允许 `[0,2]`（0%～200%）；
+旧的除以 `L+R` 的阈值乘 2 可保留相同转向边界，例如旧 `0.15` 对应新 `0.30`。
+正的电压补偿偏向左、负值偏向右；原始电压和周期均值保持原值。
+Share 和状态话题单独保存补偿均值、电压差、相对差判据及待生效电压补偿；
+Share 的 `Raw diff [%]` 和 `Diff / T [%]` 使用百分数，消息和服务仍使用比例数值。
+补偿使任一侧均值变成负数或非有限值时，显示 `voltage_compensation_out_of_range`／`HOLDING`，
+继续摆尾并保持上一偏置，暂存整组待生效设置，在后续有效完整周期恢复；不截断负值。
 输入应为整流／检波后的包络或幅值电压；当前硬件前端已由用户确认符合此条件。
 周期均值表示平均响应幅值，不是物理声强，也不能直接用于原始交流声波电压。
 跟踪中调整已确认的 DAC 增益不再停止运动：保持摆尾相位和上一偏置，清空旧窗口，
@@ -148,8 +156,8 @@ VIM4 运动节点按 Share 发布纯文本快照，组合入口及 `io.launch` �
 
 新增接口：
 
-- `srv/SetAcousticSteering`：统一接收 `threshold`、`bias` 和 `lr_offset`，
-  三项整组验证、暂存，在下一有效周期一起生效；补偿范围 `[-1,1]`，无单位。
+- `srv/SetAcousticSteering`：统一接收 `threshold`、`bias` 和 `lr_voltage_offset_v`，
+  三项整组验证、暂存，在下一有效周期一起生效；补偿为有限有符号伏特值，周期内须满足 `-L<=delta<=R`。
 - `msg/AcousticSteeringState`：记录周期窗口、方向差值、偏置、参数及模式状态。
 - `msg/SonicMotionState`：记录每个控制周期的运动输出、摆幅／相位、输入年龄及 ADC 质量。
 - `msg/AcousticSteeringEvent`：记录调参请求接受／拒绝／替换、实际生效周期及关机取消。
@@ -159,11 +167,14 @@ VIM4 运动节点按 Share 发布纯文本快照，组合入口及 `io.launch` �
 目前摆频由 VIM4 运动启动参数指定，窗口自动取倒数；更换摆频后重启并重新积累完整周期。
 ADC 年龄、未来时间戳检查均在 VIM4 本机进行，未来容差继续默认 0.05 秒；
 `acoustic_future_tolerance_s` 在启动时显式设置，启动日志显示主机名和实际时间限值。
-补偿可通过运动 launch 的 `acoustic_lr_offset` 设置初值，运行时调用
+补偿可通过运动 launch 的 `acoustic_lr_voltage_offset_v` 设置初值，运行时调用
 `/sonic_teleop_node/set_acoustic_steering` 并填写三项；具体命令见运动包说明。
 调用后直接返回当前模式、数据质量、方向、控制偏置、正在使用及待生效参数；
 真正生效时 VIM4 运动终端打印请求编号、周期和参数。服务成功表示接受请求，仍等待有效周期。
-本次扩展了周期状态消息及服务请求／响应，两端需重新编译并 source 两包后重启相关节点。
+旧无量纲 `lr_offset` 及其启动参数已移除，新补偿名称同时用于配置、事件和服务响应。
+锁存运动配置的 `schema_version` 更新为 3，包含 `difference_reference=channel_mean` 和包含等号的判定规则。
+状态、参数事件和服务反馈也标记差值基准，避免与旧 bag 的总和归一化含义混淆。消息及服务定义已改变，
+两端需重新编译并 source 两包后重启相关节点，旧 bag 仍可用嵌入式定义离线读取。
 不会在运动底层加入通用偏置限速。验证边界见
 [周期趋声验证记录](docs/cycle_steering_validation.md)。
 

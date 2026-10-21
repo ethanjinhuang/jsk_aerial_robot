@@ -15,8 +15,9 @@ def snapshot(**changes):
                 direction='left', bias=128., bias_limit=1024., raw=(.5, .7, .4),
                 calibrated=(.51, .72, .42), means=(.5, .7, .4), quality='valid',
                 sample_age=.02, receipt_age=.015, cycle=3, historical=False,
-                window=2/3, count=13, delta=.3, difference=3/11, lr_offset=0.,
-                compensated_difference=3/11, threshold=.1, judged='left')
+                window=2/3, count=13, delta=.3, difference=6/11, lr_voltage_offset_v=0.,
+                compensated_means=(.5, .7, .4), compensated_delta=.3, pending_lr_voltage_offset_v=None,
+                compensated_difference=6/11, threshold=.1, judged='left')
     data.update(changes)
     return data
 
@@ -40,13 +41,18 @@ class DisplayTests(unittest.TestCase):
         self.assertNotIn('\033[', plain)
 
     def test_compensation_is_visible_without_replacing_raw_differences(self):
-        plain = format_status(snapshot(lr_offset=.3, compensated_difference=-.0272727,
+        plain = format_status(snapshot(lr_voltage_offset_v=-.165, compensated_difference=-.05454545,
+                                        compensated_means=(.5, .535, .565), compensated_delta=-.03,
+                                        pending_lr_voltage_offset_v=-.1,
                                         direction='straight', judged='straight'))
         self.assertEqual(set(map(len, plain.splitlines())), {78})
         self.assertRegex(plain, r'L-R \[V\]\s*:\s*\+0.30000')
-        self.assertRegex(plain, r'Normalized raw\s*:\s*\+0.2727')
-        self.assertRegex(plain, r'LR offset\s*:\s*\+0.3000')
-        self.assertRegex(plain, r'Compensated / T\s*:\s*-0.0273 / 0.1000')
+        self.assertRegex(plain, r'Raw diff \[%\]\s*:\s*\+54.55')
+        self.assertRegex(plain, r'LR offset \[V\]\s*:\s*-0.16500')
+        self.assertRegex(plain, r'Pending LR \[V\]\s*:\s*-0.10000')
+        self.assertRegex(plain, r'Compensated mean\s*\|\s*0.50000\s*\|\s*0.53500\s*\|\s*0.56500')
+        self.assertRegex(plain, r'Comp. L-R \[V\]\s*:\s*-0.03000')
+        self.assertRegex(plain, r'Diff / T \[%\]\s*:\s*-5.45 / 10.00')
 
     def test_long_quality_and_reason_wrap_inside_table(self):
         plain = format_status(snapshot(reason='fault_' * 40,
@@ -57,8 +63,10 @@ class DisplayTests(unittest.TestCase):
     def test_unavailable_values_and_historical_direction_are_explicit(self):
         plain = format_status(snapshot(raw=None, calibrated=None, means=None, quality='no_data',
                                        direction='warmup', delta=None, difference=None,
-                                       compensated_difference=None))
+                                       compensated_difference=None, compensated_means=None, compensated_delta=None))
         self.assertIn('no completed tracking cycle', plain)
+        self.assertRegex(plain, r'Raw diff \[%\]\s*:\s*--')
+        self.assertRegex(plain, r'Diff / T \[%\]\s*:\s*-- / 10.00')
         self.assertRegex(plain, r'Previous cycle mean\s*\|\s*--\s*\|\s*--\s*\|\s*--')
         held = format_status(snapshot(direction='stopped', historical=True, bias=0.))
         self.assertIn('HISTORICAL', held)

@@ -5,8 +5,11 @@ uint64 request_id
 string event
 string detail
 # Requested values; rejected non-finite values are retained as NaN/Inf.
+# Inclusive fraction of the channel arithmetic mean: 0.15 = 15%.
 float64 threshold
+string difference_reference
 float64 turn_bias
-float64 lr_offset
+# Volts, positive increases left and decreases right.
+float64 lr_voltage_offset_v
 # Nonzero only for an applied request: the cycle where it took effect.
 uint64 cycle_index

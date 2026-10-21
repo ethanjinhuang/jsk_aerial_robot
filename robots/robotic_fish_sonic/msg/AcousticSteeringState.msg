@@ -7,9 +7,13 @@ bool parameters_pending
 uint64 cycle_index
 float64 frequency
 float64 window_s
+# Difference divided by channel arithmetic mean; 0.15 means 15%, inclusive.
+# Range [0,2]; equal channels always select straight, including threshold=0.
 float64 threshold
+string difference_reference
 float64 turn_bias
-float64 lr_offset
+# Volts: add to the left cycle mean and subtract from the right cycle mean.
+float64 lr_voltage_offset_v
 int8 left_bias_sign
 # These stamps describe the last decision, retained between updates.
 time window_start
@@ -19,13 +23,17 @@ time sample_stamp
 uint32 sample_count
 float64 left_mean
 float64 right_mean
+# (left_mean-right_mean)/((left_mean+right_mean)/2), a fraction, not percent.
 float64 normalized_difference
-# normalized_difference - lr_offset used by the retained decision.
+# Normalized difference after voltage compensation, from the retained decision.
 float64 compensated_difference
 float64 command_bias
 # Retained previous-cycle values, not instantaneous voltages.
 float64 head_mean
 float64 voltage_difference
+float64 compensated_left_mean
+float64 compensated_right_mean
+float64 compensated_voltage_difference
 bool has_decision
 # False while stopped, outside tracking, or holding / warming up.
 bool decision_current

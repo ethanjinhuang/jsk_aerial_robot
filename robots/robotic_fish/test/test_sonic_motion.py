@@ -360,7 +360,7 @@ class RosAdapterTests(unittest.TestCase):
         with patch.dict(sys.modules, module._mock_modules):
             node = module.Teleop()
         self.send_status_joy(node, (3,), steering=-.25)
-        self.assertTrue(node._setAcousticSteering(NS(threshold=.15, bias=128., lr_offset=.08)).success)
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.15, bias=128., lr_voltage_offset_v=.08)).success)
         node.event_pub = NS(publish=Mock(side_effect=ros.ROSException('event transport closed')))
         node._shutdown()
         self.assertEqual(node.controller.reason, 'shutdown')
@@ -388,8 +388,8 @@ class RosAdapterTests(unittest.TestCase):
             node._controlLoop()
             if i<10:self.assertEqual(node.controller.applied_bias,0.)
         self.assertEqual((node.controller.mode,node.controller.applied_bias),('tracking',256.))
-        self.assertTrue(node._setAcousticSteering(NS(threshold=.7,bias=128.,lr_offset=0.)).success)
-        self.assertFalse(node._setAcousticSteering(NS(threshold=.2,bias=1025.,lr_offset=0.)).success)
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.7,bias=128.,lr_voltage_offset_v=0.)).success)
+        self.assertFalse(node._setAcousticSteering(NS(threshold=.2,bias=1025.,lr_voltage_offset_v=0.)).success)
         self.assertEqual(node.acoustic.settings.bias,256.)
         for i in range(11,21):
             clock[0]=i*.05
@@ -405,9 +405,37 @@ class RosAdapterTests(unittest.TestCase):
         node._shutdown()
         node.settings_service.shutdown.assert_called_once()
 
+    def test_mean_percentage_boundary_matches_motion_share_service_and_recording(self):
+        for left, right, threshold, direction, bias in (
+                (1.075, .925, .15, 'left', 256.),
+                (.925, 1.075, .15, 'right', -256.),
+                (1.074, .926, .15, 'straight', 0.),
+                (1., 1., 0., 'straight', 0.)):
+            with self.subTest(left=left, right=right, threshold=threshold):
+                module, ros, clock, published = self.make_node({
+                    '~acoustic_steering/enabled': True, '~acoustic_steering/threshold': threshold})
+                with patch.dict(sys.modules, module._mock_modules):
+                    node = module.Teleop()
+                for i in range(11):
+                    clock[0] = i * .05
+                    frame = self.adc(clock[0])
+                    frame.samples[1].volt_cali = left
+                    frame.samples[2].volt_cali = right
+                    node._adcCallback(frame)
+                    self.send_status_joy(node, (2,) if i == 0 else ())
+                self.assertEqual(node.controller.applied_bias, bias)
+                state = [m for m in published if hasattr(m, 'decision_updated')][-1]
+                self.assertEqual((state.direction, state.decision_direction), (direction, direction))
+                self.assertEqual(state.difference_reference, 'channel_mean')
+                response = node._setAcousticSteering(NS(threshold=threshold, bias=256., lr_voltage_offset_v=0.))
+                self.assertEqual(response.direction, direction)
+                self.assertEqual(response.difference_reference, 'channel_mean')
+                self.send_status_joy(node, (8,))
+                self.assertRegex(self.status_reports(ros)[-1], r'Direction\s*:\s*' + direction.upper())
+
     def test_three_field_service_changes_judgment_and_snapshot_at_next_cycle(self):
         module, ros, clock, published = self.make_node({'~acoustic_steering/enabled': True,
-                                                       '~acoustic_steering/lr_offset': .1})
+                                                       '~acoustic_steering/lr_voltage_offset_v': .1})
         with patch.dict(sys.modules, module._mock_modules):
             node = module.Teleop()
         node._adcCallback(self.adc(0.))
@@ -418,12 +446,12 @@ class RosAdapterTests(unittest.TestCase):
             self.send_status_joy(node)
         previous = node.acoustic.last_decision
         self.assertEqual(ros.Service.call_count, 1)
-        self.assertTrue(node._setAcousticSteering(NS(threshold=.1, bias=128., lr_offset=.5)).success)
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.1, bias=128., lr_voltage_offset_v=-.75)).success)
         pending = node.acoustic.pending
-        self.assertFalse(node._setAcousticSteering(NS(threshold=.8, bias=64., lr_offset=float('nan'))).success)
+        self.assertFalse(node._setAcousticSteering(NS(threshold=.8, bias=64., lr_voltage_offset_v=float('nan'))).success)
         self.assertIs(node.acoustic.pending, pending)
         self.send_status_joy(node, (8,))
-        self.assertIn('+0.1000', self.status_reports(ros)[-1])
+        self.assertIn('+0.10000', self.status_reports(ros)[-1])
         self.assertIs(node.acoustic.last_decision, previous)
         for i in range(11, 21):
             clock[0] = i * .05
@@ -431,20 +459,23 @@ class RosAdapterTests(unittest.TestCase):
             self.send_status_joy(node)
         self.send_status_joy(node, (8,))
         report = self.status_reports(ros)[-1]
-        self.assertRegex(report, r'Normalized raw\s*:\s*\+0.3333')
-        self.assertRegex(report, r'LR offset\s*:\s*\+0.5000')
-        self.assertRegex(report, r'Compensated / T\s*:\s*-0.1667 / 0.1000')
+        self.assertRegex(report, r'Raw diff \[%\]\s*:\s*\+66.67')
+        self.assertRegex(report, r'LR offset \[V\]\s*:\s*-0.75000')
+        self.assertRegex(report, r'Compensated mean\s*\|\s*1.00000\s*\|\s*1.25000\s*\|\s*1.75000')
+        self.assertRegex(report, r'Diff / T \[%\]\s*:\s*-33.33 / 10.00')
         self.assertRegex(report, r'Direction\s*:\s*RIGHT')
         self.assertEqual(node.controller.applied_bias, -128.)
         state = [m for m in published if hasattr(m, 'normalized_difference')][-1]
-        self.assertAlmostEqual(state.normalized_difference, 1 / 3)
-        self.assertAlmostEqual(state.compensated_difference, -1 / 6)
-        self.assertEqual(state.lr_offset, .5)
+        self.assertAlmostEqual(state.normalized_difference, 2 / 3)
+        self.assertAlmostEqual(state.compensated_difference, -1 / 3)
+        self.assertEqual(state.lr_voltage_offset_v, -.75)
+        self.assertEqual((state.compensated_left_mean, state.compensated_right_mean), (1.25, 1.75))
+        self.assertEqual(state.compensated_voltage_difference, -.5)
         self.assertEqual(node.controller.auto_epoch, 0.)
         self.send_status_joy(node, (1, 8))
         self.assertEqual(node.controller.mode, 'stopped')
         node._shutdown()
-        self.assertFalse(node._setAcousticSteering(NS(threshold=.1, bias=128., lr_offset=0.)).success)
+        self.assertFalse(node._setAcousticSteering(NS(threshold=.1, bias=128., lr_voltage_offset_v=0.)).success)
 
     def test_acoustic_missing_data_cannot_start_tracking_but_manual_works(self):
         module,_,clock,_=self.make_node({'~acoustic_steering/enabled':True})
@@ -609,7 +640,7 @@ class RosAdapterTests(unittest.TestCase):
         self.assertRegex(report, r'Calibrated / fallback\s*\|\s*4.00000\s*\|\s*2.00000\s*\|\s*1.00000')
         self.assertRegex(report, r'Previous cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000')
         self.assertRegex(report, r'L-R \[V\]\s*:\s*\+1.00000')
-        self.assertRegex(report, r'Compensated / T\s*:\s*\+0.3333 / 0.1000')
+        self.assertRegex(report, r'Diff / T \[%\]\s*:\s*\+66.67 / 10.00')
         self.assertRegex(report, r'Direction\s*:\s*LEFT')
         self.assertIn('(+256.0/1024.0)', report)
         self.assertNotIn('\033[', report)
@@ -704,6 +735,9 @@ class RosAdapterTests(unittest.TestCase):
         configs = [m for m in published if hasattr(m, 'config_json')]
         self.assertEqual(len(configs), 1)
         values = json.loads(configs[0].config_json)
+        self.assertEqual(values['schema_version'], 3)
+        self.assertEqual(values['settings']['acoustic_steering']['difference_reference'], 'channel_mean')
+        self.assertTrue(values['settings']['acoustic_steering']['threshold_inclusive'])
         self.assertEqual(values['settings']['servo_center'], 2000.)
         self.assertEqual(values['settings']['auto_amplitude'], 400.)
         self.assertEqual(values['settings']['initial_servo_cmd'], 2000.)
@@ -816,13 +850,14 @@ class RosAdapterTests(unittest.TestCase):
             node = module.Teleop()
         node._adcCallback(self.adc(0.))
         self.send_status_joy(node, (2,))
-        self.assertTrue(node._setAcousticSteering(NS(threshold=.2, bias=128., lr_offset=.08)).success)
-        self.assertFalse(node._setAcousticSteering(NS(threshold=float('nan'), bias=64., lr_offset=0.)).success)
-        self.assertTrue(node._setAcousticSteering(NS(threshold=.7, bias=64., lr_offset=.1)).success)
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.2, bias=128., lr_voltage_offset_v=.08)).success)
+        self.assertFalse(node._setAcousticSteering(NS(threshold=float('nan'), bias=64., lr_voltage_offset_v=0.)).success)
+        self.assertTrue(node._setAcousticSteering(NS(threshold=1.4, bias=64., lr_voltage_offset_v=.1)).success)
         events = [m for m in published if hasattr(m, 'event')]
         self.assertEqual([(m.request_id, m.event) for m in events],
                          [(1, 'accepted'), (2, 'rejected'), (1, 'superseded'), (3, 'accepted')])
         self.assertTrue(math.isnan(events[1].threshold))
+        self.assertTrue(all(m.difference_reference == 'channel_mean' for m in events))
         pending = json.loads([m for m in published if hasattr(m, 'config_json')][-1].config_json)
         self.assertEqual(pending['pending_request']['request_id'], 3)
         self.assertEqual(pending['settings']['acoustic_steering']['threshold'], .1)
@@ -835,18 +870,18 @@ class RosAdapterTests(unittest.TestCase):
         config = json.loads([m for m in published if hasattr(m, 'config_json')][-1].config_json)
         self.assertIsNone(config['pending_request'])
         self.assertEqual(config['applied_request_id'], 3)
-        self.assertEqual(config['settings']['acoustic_steering']['threshold'], .7)
+        self.assertEqual(config['settings']['acoustic_steering']['threshold'], 1.4)
         self.assertEqual(config['settings']['initial_servo_cmd'], 2048.)
         self.assertEqual(node.controller.applied_bias, 0.)
         # Repeating the active values is still a distinct request and application.
-        self.assertTrue(node._setAcousticSteering(NS(threshold=.7, bias=64., lr_offset=.1)).success)
+        self.assertTrue(node._setAcousticSteering(NS(threshold=1.4, bias=64., lr_voltage_offset_v=.1)).success)
         for i in range(11, 21):
             clock[0] = i * .05
             node._adcCallback(self.adc(clock[0]))
             self.send_status_joy(node)
         repeated = [m for m in published if hasattr(m, 'event')][-1]
         self.assertEqual((repeated.request_id, repeated.event, repeated.cycle_index), (4, 'applied', 2))
-        self.assertTrue(node._setAcousticSteering(NS(threshold=.1, bias=32., lr_offset=0.)).success)
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.1, bias=32., lr_voltage_offset_v=0.)).success)
         node._shutdown()
         cancelled = [m for m in published if hasattr(m, 'event')][-1]
         self.assertEqual((cancelled.request_id, cancelled.event), (5, 'cancelled'))
@@ -858,15 +893,15 @@ class RosAdapterTests(unittest.TestCase):
         with patch.dict(sys.modules, module._mock_modules):
             node = module.Teleop()
         # A configuration call before Joy remains read-only with respect to motion.
-        accepted = node._setAcousticSteering(NS(threshold=.15, bias=128., lr_offset=.08))
+        accepted = node._setAcousticSteering(NS(threshold=.15, bias=128., lr_voltage_offset_v=.08))
         self.assertEqual((accepted.success, accepted.request_id, accepted.motion_mode), (True, 1, 'manual'))
         self.assertEqual((accepted.adc_quality, accepted.direction, accepted.command_bias),
                          ('no_data', 'not_tracking', 0.))
-        self.assertEqual((accepted.active_threshold, accepted.active_bias, accepted.active_lr_offset),
+        self.assertEqual((accepted.active_threshold, accepted.active_bias, accepted.active_lr_voltage_offset_v),
                          (.1, 256., 0.))
         self.assertTrue(accepted.parameters_pending)
         self.assertEqual((accepted.pending_request_id, accepted.pending_threshold,
-                          accepted.pending_bias, accepted.pending_lr_offset), (1, .15, 128., .08))
+                          accepted.pending_bias, accepted.pending_lr_voltage_offset_v), (1, .15, 128., .08))
         self.assertFalse(any(hasattr(m, 'cmd') for m in published))
         node._adcCallback(self.adc(0.))
         self.send_status_joy(node, (2,))
@@ -876,24 +911,83 @@ class RosAdapterTests(unittest.TestCase):
             self.send_status_joy(node)
         decision, epoch = node.acoustic.last_decision, node.controller.auto_epoch
         commands = len([m for m in published if hasattr(m, 'cmd')])
-        rejected = node._setAcousticSteering(NS(threshold=-1., bias=64., lr_offset=0.))
+        rejected = node._setAcousticSteering(NS(threshold=-1., bias=64., lr_voltage_offset_v=0.))
         self.assertFalse(rejected.success)
         self.assertEqual((rejected.motion_mode, rejected.status, rejected.direction, rejected.adc_quality),
                          ('tracking', 'active', 'left', 'valid'))
         self.assertEqual((rejected.command_bias, rejected.active_threshold,
-                          rejected.active_bias, rejected.active_lr_offset), (128., .15, 128., .08))
+                          rejected.active_bias, rejected.active_lr_voltage_offset_v), (128., .15, 128., .08))
         self.assertFalse(rejected.parameters_pending)
         self.assertEqual(rejected.pending_request_id, 0)
         self.assertTrue(all(math.isnan(value) for value in
-                            (rejected.pending_threshold, rejected.pending_bias, rejected.pending_lr_offset)))
-        accepted = node._setAcousticSteering(NS(threshold=.3, bias=64., lr_offset=.1))
-        rejected = node._setAcousticSteering(NS(threshold=.4, bias=1025., lr_offset=.2))
+                            (rejected.pending_threshold, rejected.pending_bias, rejected.pending_lr_voltage_offset_v)))
+        accepted = node._setAcousticSteering(NS(threshold=.3, bias=64., lr_voltage_offset_v=.1))
+        rejected = node._setAcousticSteering(NS(threshold=.4, bias=1025., lr_voltage_offset_v=.2))
         self.assertEqual((rejected.request_id, rejected.pending_request_id), (4, accepted.request_id))
-        self.assertEqual((rejected.pending_threshold, rejected.pending_bias, rejected.pending_lr_offset),
+        self.assertEqual((rejected.pending_threshold, rejected.pending_bias, rejected.pending_lr_voltage_offset_v),
                          (.3, 64., .1))
         self.assertEqual(len([m for m in published if hasattr(m, 'cmd')]), commands)
         self.assertIs(node.acoustic.last_decision, decision)
         self.assertEqual(node.controller.auto_epoch, epoch)
+
+    def test_voltage_compensation_hold_preserves_gait_pending_request_and_feedback(self):
+        module, ros, clock, published = self.make_node({'~acoustic_steering/enabled': True})
+        with patch.dict(sys.modules, module._mock_modules):
+            node = module.Teleop()
+        node._adcCallback(self.adc(0.))
+        self.send_status_joy(node, (2,))
+        for i in range(1, 11):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            self.send_status_joy(node)
+        previous = node.acoustic.last_decision
+        request = node._setAcousticSteering(NS(threshold=.2, bias=64., lr_voltage_offset_v=-3.))
+        self.assertTrue(request.success and request.parameters_pending)
+        for i in range(11, 31):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            self.send_status_joy(node, (8,) if i == 21 else ())
+            self.assertEqual((node.controller.mode, node.controller.auto_epoch, node.controller.applied_bias),
+                             ('tracking', 0., 256.))
+            if i >= 20:
+                self.assertEqual(node._acoustic_status, 'voltage_compensation_out_of_range')
+                self.assertIs(node.acoustic.last_decision, previous)
+        report = self.status_reports(ros)[-1]
+        self.assertIn('voltage_compensation_out_of_range', report)
+        self.assertIn('HISTORICAL', report)
+        self.assertRegex(report, r'Pending LR \[V\]\s*:\s*-3.00000')
+        self.assertFalse(any(m.event == 'applied' for m in published if hasattr(m, 'event')))
+        replacement = node._setAcousticSteering(NS(threshold=.1, bias=128., lr_voltage_offset_v=-.75))
+        self.assertEqual((replacement.direction, replacement.adc_quality), ('holding', 'valid'))
+        for i in range(31, 41):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            self.send_status_joy(node)
+        self.assertEqual((node._acoustic_status, node.controller.applied_bias), ('active', -128.))
+        self.assertEqual(node.acoustic.last_decision.cycle, 4)
+        events = [m for m in published if hasattr(m, 'event')]
+        self.assertEqual([(m.request_id, m.event) for m in events],
+                         [(1, 'accepted'), (1, 'superseded'), (2, 'accepted'), (2, 'applied')])
+
+    def test_cross_and_joy_timeout_still_stop_during_voltage_compensation_hold(self):
+        for reason in ('stop_button', 'joy_timeout'):
+            module, _, clock, published = self.make_node({'~acoustic_steering/enabled': True})
+            with patch.dict(sys.modules, module._mock_modules):
+                node = module.Teleop()
+            node._adcCallback(self.adc(0.))
+            self.send_status_joy(node, (2,))
+            node._setAcousticSteering(NS(threshold=.1, bias=128., lr_voltage_offset_v=-3.))
+            for i in range(1, 32):
+                clock[0] = i * .05
+                node._adcCallback(self.adc(clock[0]))
+                if reason == 'stop_button':
+                    self.send_status_joy(node, (1,) if i == 21 else ())
+                elif i <= 20:
+                    self.send_status_joy(node)
+                else:
+                    node._controlLoop()
+            self.assertEqual((node.controller.mode, node.controller.reason), ('stopped', reason))
+            self.assertEqual([m for m in published if hasattr(m, 'cmd')][-1].cmd, [2048])
 
 
 if __name__ == '__main__':

@@ -17,6 +17,10 @@ def numeric(value, precision=5, signed=False):
     return format(value, ('+' if signed else '') + '.' + str(precision) + 'f')
 
 
+def percent(value, signed=False):
+    return numeric(None if value is None else value * 100., 2, signed)
+
+
 def format_status(data):
     """Render a snapshot captured by the motion node, without recalculating it."""
     border = '+' + '-' * (WIDTH - 2) + '+'
@@ -44,6 +48,7 @@ def format_status(data):
     voltages('Raw instant', data['raw'])
     voltages('Calibrated / fallback', data['calibrated'])
     voltages('Previous cycle mean', data['means'])
+    voltages('Compensated mean', data['compensated_means'])
     lines.append(border)
     row('ADC quality', data['quality'])
     row('Source / Rx age', '%s / %s s' % (numeric(data['sample_age'], 3), numeric(data['receipt_age'], 3)))
@@ -53,10 +58,12 @@ def format_status(data):
         row('Cycle', '#%d %s; W=%.3f s; N=%d' %
             (data['cycle'], 'HISTORICAL' if data['historical'] else 'CURRENT', data['window'], data['count']))
     row('L-R [V]', numeric(data['delta'], 5, True))
-    row('Normalized raw', numeric(data['difference'], 4, True))
-    row('LR offset', numeric(data['lr_offset'], 4, True))
-    row('Compensated / T', '%s / %s' % (numeric(data['compensated_difference'], 4, True),
-                                        numeric(data['threshold'], 4)))
+    row('Comp. L-R [V]', numeric(data['compensated_delta'], 5, True))
+    row('Raw diff [%]', percent(data['difference'], True))
+    row('LR offset [V]', numeric(data['lr_voltage_offset_v'], 5, True))
+    row('Pending LR [V]', numeric(data['pending_lr_voltage_offset_v'], 5, True))
+    row('Diff / T [%]', '%s / %s' % (percent(data['compensated_difference'], True),
+                                     percent(data['threshold'])))
     row('Last decision', data['judged'].upper())
     lines.append(border)
     return '\n'.join(lines)
@@ -73,7 +80,8 @@ def use_color(mode, stream, environ):
 
 _TOKEN = re.compile(r'\b(?:left|right|straight|stopped|tracking|active|valid|warmup|unavailable|'
                     r'historical|current|disabled|not_tracking|invalid_input|no_data|holding|gain_warmup|data_warmup|'
-                    r'calibration_fallback|stale_sample|future_sample|gain_unknown|saturated)\b'
+                    r'calibration_fallback|stale_sample|future_sample|gain_unknown|saturated|'
+                    r'voltage_compensation_out_of_range)\b'
                     r'|(?<![\w.])[+-]?\d+(?:\.\d+)?', re.IGNORECASE)
 
 
@@ -84,7 +92,7 @@ def colorize_status(plain):
                     'future_sample', 'gain_unknown', 'saturated', 'no_data'):
             code = '91'
         elif word in ('warmup', 'gain_warmup', 'data_warmup', 'holding', 'unavailable', 'historical',
-                      'disabled', 'not_tracking', 'left'):
+                      'disabled', 'not_tracking', 'left', 'voltage_compensation_out_of_range'):
             code = '93'
         elif word == 'right':
             code = '95'

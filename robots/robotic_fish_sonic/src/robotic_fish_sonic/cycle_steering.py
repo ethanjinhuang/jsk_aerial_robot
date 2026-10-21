@@ -6,6 +6,20 @@ import math
 from robotic_fish_sonic.acoustic_core import adapt, Status
 
 
+DIFFERENCE_REFERENCE = 'channel_mean'
+
+
+def steering_direction(difference, threshold):
+    """Inclusive symmetric threshold; equality of channels always means straight.
+
+    Decimal voltage inputs may round just below an exact threshold (e.g. 15%).
+    The relative tolerance only absorbs floating-point arithmetic at that edge.
+    """
+    reached = abs(difference) >= threshold or math.isclose(
+        abs(difference), threshold, rel_tol=1e-12, abs_tol=0.)
+    return (1 if difference > 0 else -1) if difference != 0 and reached else 0
+
+
 def number(value, name):
     if isinstance(value, bool):
         raise ValueError(name + ' must be finite')
@@ -26,7 +40,7 @@ class SteeringFault(ValueError):
 class SteeringSettings:
     threshold: float
     bias: float
-    lr_offset: float
+    lr_voltage_offset_v: float
 
 
 @dataclass(frozen=True)
@@ -40,7 +54,9 @@ class CycleDecision:
     difference: float
     bias: float
     sample_count: int
-    lr_offset: float
+    lr_voltage_offset_v: float
+    compensated_left_mean: float
+    compensated_right_mean: float
     compensated_difference: float
 
 
@@ -56,7 +72,7 @@ class CycleSteering:
     """
     def __init__(self, frequency, max_bias=1024., threshold=.1, bias=256.,
                  left_bias_sign=1, gap_s=.2, max_age_s=.2,
-                 future_tolerance_s=.05, low_signal_v=.001, lr_offset=0.):
+                 future_tolerance_s=.05, low_signal_v=.001, lr_voltage_offset_v=0.):
         self.max_bias = number(max_bias, 'max_bias')
         self.gap_s = number(gap_s, 'gap_s')
         self.max_age_s = number(max_age_s, 'max_age_s')
@@ -67,7 +83,7 @@ class CycleSteering:
         if isinstance(left_bias_sign, bool) or left_bias_sign not in (-1, 1):
             raise ValueError('left_bias_sign must be -1 or 1')
         self.left_bias_sign = int(left_bias_sign)
-        self.settings = self._settings(threshold, bias, lr_offset)
+        self.settings = self._settings(threshold, bias, lr_voltage_offset_v)
         self.pending = None
         self._set_frequency(frequency)
         self.rows = deque()
@@ -86,18 +102,16 @@ class CycleSteering:
     def gain_warmup(self):
         return self.waiting_status == 'gain_warmup'
 
-    def _settings(self, threshold, bias, lr_offset):
+    def _settings(self, threshold, bias, lr_voltage_offset_v):
         threshold, bias = number(threshold, 'threshold'), number(bias, 'bias')
-        lr_offset = number(lr_offset, 'lr_offset')
-        if not 0 <= threshold <= 1 or not 0 <= bias <= self.max_bias:
-            raise ValueError('threshold must be in [0,1] and bias in [0,max_bias]')
-        if not -1 <= lr_offset <= 1:
-            raise ValueError('lr_offset must be in [-1,1]')
-        return SteeringSettings(threshold, bias, lr_offset)
+        lr_voltage_offset_v = number(lr_voltage_offset_v, 'lr_voltage_offset_v')
+        if not 0 <= threshold <= 2 or not 0 <= bias <= self.max_bias:
+            raise ValueError('threshold must be in [0,2] and bias in [0,max_bias]')
+        return SteeringSettings(threshold, bias, lr_voltage_offset_v)
 
-    def configure(self, threshold, bias, lr_offset):
+    def configure(self, threshold, bias, lr_voltage_offset_v):
         """Validate the entire triplet now; apply it at the next valid decision."""
-        self.pending = self._settings(threshold, bias, lr_offset)
+        self.pending = self._settings(threshold, bias, lr_voltage_offset_v)
 
     def _set_frequency(self, frequency):
         frequency = number(frequency, 'frequency')
@@ -243,8 +257,8 @@ class CycleSteering:
         if cycle != self.cycle + 1:
             raise SteeringFault('missed_cycle')
         start, end = self.epoch + (cycle - 1) * self.period, self.epoch + cycle * self.period
-        if self.waiting_status and (self._stable_since is None or
-                                    start < self._stable_since - 1e-9):
+        if (self.waiting_status and self.waiting_status != 'voltage_compensation_out_of_range'
+                and (self._stable_since is None or start < self._stable_since - 1e-9)):
             # Advance the cycle counter without resetting the oscillator epoch.
             # Keep the held decision until an entire aligned cycle is usable.
             self.cycle = cycle
@@ -258,14 +272,26 @@ class CycleSteering:
             raise SteeringFault('invalid_signal_sum')
         if left + right < self.low_signal_v:
             raise SteeringFault('low_signal')
-        difference = (left - right) / (left + right)
-        if self.pending is not None:
-            self.settings, self.pending = self.pending, None
-        compensated = difference - self.settings.lr_offset
-        direction = 1 if compensated > self.settings.threshold else -1 if compensated < -self.settings.threshold else 0
+        # Symmetric voltage compensation preserves the channel mean.
+        mean = (left + right) / 2.
+        difference = (left - right) / mean
+        candidate = self.settings if self.pending is None else self.pending
+        compensated_left = left + candidate.lr_voltage_offset_v
+        compensated_right = right - candidate.lr_voltage_offset_v
+        if (not all(math.isfinite(v) and v >= 0 for v in (compensated_left, compensated_right))):
+            # A voltage correction may not invent a negative envelope. Retry at
+            # the next full cycle, keeping the last bias, gait epoch and pending
+            # triplet. Fresh ADC / Joy health checks continue during this hold.
+            self.cycle = cycle
+            self.waiting_status = 'voltage_compensation_out_of_range'
+            return None
+        compensated = (compensated_left - compensated_right) / mean
+        self.settings, self.pending = candidate, None
+        direction = steering_direction(compensated, self.settings.threshold)
         self.cycle = cycle
         self.last_decision = CycleDecision(cycle, start, end, head, left, right, difference,
                                            direction * self.left_bias_sign * self.settings.bias, len(rows),
-                                           self.settings.lr_offset, compensated)
+                                           self.settings.lr_voltage_offset_v,
+                                           compensated_left, compensated_right, compensated)
         self.waiting_status, self._stable_since = '', None
         return self.last_decision

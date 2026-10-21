@@ -78,7 +78,7 @@ class SonicLaunchTests(unittest.TestCase):
 
     def test_vim4_entry_forwards_control_gain_and_display_options(self):
         values = {'auto_frequency': 2., 'acoustic_threshold': .15, 'acoustic_bias': 128.,
-                  'acoustic_lr_offset': .08, 'acoustic_max_age_s': .7,
+                  'acoustic_lr_voltage_offset_v': -.01, 'acoustic_max_age_s': .7,
                   'acoustic_future_tolerance_s': .025, 'left_bias_sign': -1,
                   'joy_timeout_s': .6, 'update_rate': 60., 'manual_gain_voltage': 1.7}
         config = self.load('sonic_vim4.launch', 'status_color:=never',
@@ -86,7 +86,7 @@ class SonicLaunchTests(unittest.TestCase):
         for argument, parameter in [('auto_frequency','auto_frequency'),
                 ('acoustic_threshold','acoustic_steering/threshold'),
                 ('acoustic_bias','acoustic_steering/bias'),
-                ('acoustic_lr_offset','acoustic_steering/lr_offset'),
+                ('acoustic_lr_voltage_offset_v','acoustic_steering/lr_voltage_offset_v'),
                 ('acoustic_max_age_s','acoustic_steering/max_age_s'),
                 ('acoustic_future_tolerance_s','acoustic_steering/future_tolerance_s'),
                 ('left_bias_sign','acoustic_steering/left_bias_sign'),
