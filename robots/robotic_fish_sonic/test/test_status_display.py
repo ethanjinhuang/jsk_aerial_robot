@@ -55,13 +55,21 @@ class DisplayTests(unittest.TestCase):
         self.assertRegex(held, r'Last decision\s*:\s*LEFT')
 
     def test_color_changes_no_visible_text_or_alignment(self):
-        for direction in ('left', 'right', 'straight', 'warmup', 'stopped'):
-            plain = format_status(snapshot(direction=direction))
+        for direction in ('left', 'right', 'straight', 'warmup', 'holding', 'stopped'):
+            plain = format_status(snapshot(direction=direction,
+                                           status='gain_warmup' if direction == 'holding' else 'active'))
             stream = Stream()
             write_snapshot(plain, 'always', stream, {})
             colored = stream.getvalue()
             self.assertIn('\033[', colored)
             self.assertEqual(re.sub(r'\033\[[0-9;]*m', '', colored), '\n' + plain + '\n')
+            if direction == 'holding':
+                self.assertIn('\033[93mHOLDING\033[0m', colored)
+                self.assertIn('\033[93mgain_warmup\033[0m', colored)
+                recovery = Stream()
+                write_snapshot(format_status(snapshot(direction='holding', status='data_warmup')),
+                               'always', recovery, {})
+                self.assertIn('\033[93mdata_warmup\033[0m', recovery.getvalue())
         self.assertIn('\033[91mSTOPPED\033[0m', colored)
 
     def test_color_auto_tty_no_color_and_dumb_terminal(self):

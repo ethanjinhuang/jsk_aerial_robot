@@ -405,6 +405,113 @@ class RosAdapterTests(unittest.TestCase):
         node._controlLoop()
         self.assertEqual(node.controller.mode,'stopped')
 
+    def test_gain_warmup_keeps_motion_and_share_marks_held_decision(self):
+        module, ros, clock, published = self.make_node({'~acoustic_steering/enabled': True})
+        with patch.dict(sys.modules, module._mock_modules):
+            node = module.Teleop()
+        node._adcCallback(self.adc(0.))
+        self.send_status_joy(node, (2,))
+        for i in range(1, 11):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            self.send_status_joy(node)
+        epoch = node.controller.auto_epoch
+        for i in range(11, 31):
+            clock[0] = i * .05
+            frame = self.adc(clock[0])
+            for s in frame.samples:
+                s.dac_volt = 1.
+                s.volt_cali = (1., 1., 3.)[s.channel_id]
+            if i == 11:
+                frame.samples[0].dac_volt = .9  # Change part way through a group.
+            node._adcCallback(frame)
+            self.send_status_joy(node, (8,) if i == 12 else ())
+            self.assertEqual((node.controller.mode, node.controller.auto_epoch), ('tracking', epoch))
+            if i < 30:
+                self.assertEqual(node._acoustic_status, 'gain_warmup')
+                self.assertEqual(node.controller.applied_bias, 256.)
+                expected, _ = node.controller.motion.sample(clock[0] - epoch, 256., 512., 2.)
+                self.assertEqual([m for m in published if hasattr(m, 'cmd')][-1].cmd, [int(expected)])
+        report = self.status_reports(ros)[-1]
+        self.assertIn('tracking / gain_warmup', report)
+        self.assertRegex(report, r'Direction\s*:\s*HOLDING')
+        self.assertIn('HISTORICAL', report)
+        self.assertIn('(+256.0/1024.0)', report)
+        self.assertEqual((node._acoustic_status, node.controller.applied_bias), ('active', -256.))
+        self.assertEqual(node.acoustic.last_decision.cycle, 3)
+
+    def test_cross_and_joy_timeout_still_stop_during_quality_or_gain_wait(self):
+        for quality, reason in ((q, r) for q in ('gain', 'calibration', 'unknown')
+                                for r in ('stop_button', 'joy_timeout')):
+            with self.subTest(reason=reason, quality=quality):
+                module, _, clock, published = self.make_node({'~acoustic_steering/enabled': True})
+                with patch.dict(sys.modules, module._mock_modules):
+                    node = module.Teleop()
+                node._adcCallback(self.adc(0.))
+                self.send_status_joy(node, (2,))
+                for i in range(1, 13):
+                    clock[0] = i * .05
+                    frame = self.adc(clock[0])
+                    for s in frame.samples:
+                        s.dac_volt = 1. + i * .01
+                        s.status_cali = quality != 'calibration'
+                        s.status_dac_feedback = quality != 'unknown'
+                    node._adcCallback(frame)
+                    if reason == 'stop_button':
+                        self.send_status_joy(node, (1,) if i == 3 else ())
+                    else:
+                        node._controlLoop()
+                self.assertEqual((node.controller.mode, node.controller.reason), ('stopped', reason))
+                self.assertEqual([m for m in published if hasattr(m, 'cmd')][-1].cmd, [2048])
+
+    def test_unusable_quality_keeps_tracking_bias_and_resumes_automatically(self):
+        for quality, expected in [('calibration', 'calibration_fallback'), ('unknown', 'gain_unknown')]:
+            with self.subTest(quality=quality):
+                module, ros, clock, _ = self.make_node({'~acoustic_steering/enabled': True})
+                with patch.dict(sys.modules, module._mock_modules):
+                    node = module.Teleop()
+                node._adcCallback(self.adc(0.))
+                self.send_status_joy(node, (2,))
+                for i in range(1, 51):
+                    clock[0] = i * .05
+                    frame = self.adc(clock[0])
+                    if 11 <= i <= 30:
+                        for s in frame.samples:
+                            if quality == 'calibration':
+                                s.status_cali, s.cali_id = False, ''
+                            else:
+                                s.status_dac_feedback, s.dac_volt = False, float('nan')
+                    elif i >= 31:
+                        for s in frame.samples:
+                            s.volt_cali = (1., 1., 3.)[s.channel_id]
+                    node._adcCallback(frame)
+                    self.send_status_joy(node, (8,) if i in (12, 32) else ())
+                    self.assertEqual((node.controller.mode, node.controller.auto_epoch), ('tracking', 0.))
+                    if 11 <= i <= 30:
+                        self.assertEqual(node._acoustic_status, expected)
+                    if 11 <= i < 50:
+                        self.assertEqual(node.controller.applied_bias, 256.)
+                for report in self.status_reports(ros):
+                    self.assertRegex(report, r'Direction\s*:\s*HOLDING')
+                    self.assertIn('HISTORICAL', report)
+                self.assertIn('data_warmup', self.status_reports(ros)[-1])
+                self.assertEqual((node._acoustic_status, node.controller.applied_bias), ('active', -256.))
+
+    def test_tracking_can_start_with_quality_hold_and_zero_bias(self):
+        for quality in ('calibration', 'unknown'):
+            module, ros, _, _ = self.make_node({'~acoustic_steering/enabled': True})
+            with patch.dict(sys.modules, module._mock_modules):
+                node = module.Teleop()
+            frame = self.adc(0.)
+            for s in frame.samples:
+                s.status_cali = quality != 'calibration'
+                s.status_dac_feedback = quality != 'unknown'
+            node._adcCallback(frame)
+            self.send_status_joy(node, (2, 8))
+            self.assertEqual((node.controller.mode, node.controller.applied_bias), ('tracking', 0.))
+            self.assertRegex(self.status_reports(ros)[-1], r'Direction\s*:\s*HOLDING')
+            self.assertIn('no completed tracking cycle', self.status_reports(ros)[-1])
+
     def test_triangle_ordinary_auto_ignores_acoustic_faults_and_uses_joystick(self):
         module,_,clock,_=self.make_node({'~acoustic_steering/enabled':True})
         with patch.dict(sys.modules,module._mock_modules):
@@ -507,7 +614,7 @@ class RosAdapterTests(unittest.TestCase):
         self.send_status_joy(node, (8,))
         report = self.status_reports(ros)[-1]
         self.assertRegex(report, r'ADC quality\s*:\s*calibration_fallback')
-        self.assertRegex(report, r'Direction\s*:\s*STOPPED')
+        self.assertRegex(report, r'Direction\s*:\s*HOLDING')
         self.assertRegex(report, r'Last decision\s*:\s*UNAVAILABLE')
 
     def test_share_can_be_remapped_and_handles_incomplete_adc_groups(self):

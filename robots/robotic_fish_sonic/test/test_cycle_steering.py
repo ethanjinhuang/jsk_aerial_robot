@@ -25,9 +25,9 @@ class CycleTests(unittest.TestCase):
         self.push(engine, 0.)
         engine.begin(100., engine.frequency, 100.)
 
-    def fill(self, engine, start=0., end=.5, left=2., right=1.):
+    def fill(self, engine, start=0., end=.5, left=2., right=1., **changes):
         for i in range(1, 11):
-            self.push(engine, start + (end - start) * i / 10., left=left, right=right)
+            self.push(engine, start + (end - start) * i / 10., left=left, right=right, **changes)
 
     def test_full_period_and_same_direction_crossing_only(self):
         for frequency in (1., 1.5, 2.):
@@ -113,8 +113,7 @@ class CycleTests(unittest.TestCase):
             e.evaluate(100.21)
 
     def test_invalid_frames_and_quality_are_rejected(self):
-        cases=[NS(samples=[]), batch(0.,status_cali=False), batch(0.,status_dac_feedback=False),
-               batch(0.,adc_code=32767), batch(0.,left=0.,right=0.),
+        cases=[NS(samples=[]), batch(0.,adc_code=32767), batch(0.,left=0.,right=0.),
                batch(0.,left=float('nan')),batch(0.,left=-1.)]
         for msg in cases:
             with self.subTest(msg=msg):
@@ -125,9 +124,9 @@ class CycleTests(unittest.TestCase):
     def test_transient_fault_cannot_be_hidden_by_later_valid_frame(self):
         e=CycleSteering(2.)
         self.start(e)
-        self.push(e,.05,status_cali=False)
+        self.push(e,.05,adc_code=32767)
         self.push(e,.1)
-        with self.assertRaisesRegex(SteeringFault,'calibration_fallback'):
+        with self.assertRaisesRegex(SteeringFault,'saturated'):
             e.evaluate(100.1)
         e.deactivate()
         e.begin(100.1,2.,100.1)
@@ -151,14 +150,187 @@ class CycleTests(unittest.TestCase):
                 e.begin(recovered, 2., recovered)
                 self.assertIsNone(e.evaluate(recovered))
 
-    def test_gain_or_calibration_change_requires_new_cycle(self):
-        for change in ({'dac_volt':1.}, {'cali_id':'new'}):
-            with self.subTest(change=change):
-                e=CycleSteering(2.)
+    def test_gain_change_holds_decision_until_a_full_aligned_cycle(self):
+        e = CycleSteering(2.)
+        self.start(e)
+        self.fill(e)
+        previous = e.evaluate(100.5)
+        e.configure(.1, 128.)
+        self.push(e, .55, left=1., right=3., dac_volt=1.)
+        for i in range(12, 30):
+            t = i * .05
+            self.push(e, t, left=1., right=3., dac_volt=1.)
+            self.assertIsNone(e.evaluate(100. + t))
+            self.assertIs(e.last_decision, previous)
+            self.assertTrue(e.gain_warmup)
+            self.assertIsNotNone(e.pending)
+        self.push(e, 1.5, left=1., right=3., dac_volt=1.)
+        result = e.evaluate(101.5)
+        self.assertEqual((e.epoch, result.cycle, result.start, result.end), (100., 3, 101., 101.5))
+        self.assertAlmostEqual(result.left_mean, 1.)
+        self.assertAlmostEqual(result.right_mean, 3.)
+        self.assertEqual(result.bias, -128.)
+        self.assertFalse(e.gain_warmup)
+        self.assertIsNone(e.pending)
+
+    def test_mixed_gain_groups_refresh_timing_but_never_enter_means(self):
+        e = CycleSteering(2.)
+        self.start(e)
+        self.fill(e)
+        previous = e.evaluate(100.5)
+        for t in (.55, .6, .65):
+            mixed = batch(t, left=100.)
+            mixed.samples[0].dac_volt = 1.
+            self.assertTrue(e.push(mixed, 100. + t, t))
+            self.assertIsNone(e.evaluate(100. + t))
+            self.assertIs(e.last_decision, previous)
+            self.assertFalse(e.rows)
+        for i in range(14, 31):
+            t = i * .05
+            self.push(e, t, left=1., right=3., dac_volt=1.)
+            result = e.evaluate(100. + t)
+            if i < 30:
+                self.assertIsNone(result)
+        self.assertAlmostEqual(result.left_mean, 1.)
+        self.assertAlmostEqual(result.right_mean, 3.)
+        self.assertEqual(result.bias, -256.)
+        # Entering tracking with mixed gain waits without inventing a mean.
+        e.deactivate()
+        mixed = batch(1.55)
+        mixed.samples[0].dac_volt = 1.
+        e.push(mixed, 101.55, 1.55)
+        e.begin(101.55, 2., 101.55)
+        self.assertIsNone(e.evaluate(101.55))
+        self.assertTrue(e.gain_warmup)
+        self.assertIsNone(e.last_decision)
+
+    def test_continuous_gain_ramp_skips_cycles_without_resetting_phase(self):
+        e = CycleSteering(2.)
+        self.start(e)
+        for i in range(1, 31):
+            t = i * .05
+            self.push(e, t, dac_volt=1. + i * .01)
+            self.assertIsNone(e.evaluate(100. + t))
+        self.assertEqual((e.epoch, e.cycle), (100., 3))
+        self.assertIsNone(e.last_decision)
+        self.fill(e, 1.5, 2., dac_volt=1.3)
+        self.assertEqual(e.evaluate(102.).cycle, 4)
+
+    def test_gain_change_at_crossing_resumes_at_the_next_full_cycle(self):
+        for frequency in (1.5, 2.):
+            e = CycleSteering(frequency)
+            self.start(e)
+            for i in range(1, 20):
+                self.push(e, e.period * i / 20.)
+            self.push(e, e.period, dac_volt=1.)
+            self.assertIsNone(e.evaluate(100. + e.period))
+            for i in range(21, 41):
+                self.push(e, e.period * i / 20., dac_volt=1.)
+            self.assertEqual(e.evaluate(100. + 2 * e.period).cycle, 2)
+
+    def test_gain_warmup_does_not_hide_faults(self):
+        for changes, reason in [({'adc_code': 32767}, 'saturated'),
+                                ({'cali_id': 'new'}, 'gain_or_calibration_changed')]:
+            with self.subTest(reason=reason):
+                e = CycleSteering(2.)
                 self.start(e)
-                self.push(e,.05,**change)
-                with self.assertRaisesRegex(SteeringFault,'gain_or_calibration_changed'):
-                    e.evaluate(100.05)
+                self.push(e, .05, dac_volt=1.)
+                self.push(e, .1, dac_volt=1., **changes)
+                self.push(e, .15, dac_volt=1.1)
+                with self.assertRaisesRegex(SteeringFault, reason):
+                    e.evaluate(100.15)
+        e = CycleSteering(2.)
+        self.start(e)
+        self.push(e, .21, dac_volt=1.)
+        with self.assertRaisesRegex(SteeringFault, 'adc_timeout'):
+            e.evaluate(100.21)
+        e = CycleSteering(2.)
+        self.start(e)
+        mixed = batch(.05)
+        mixed.samples[0].dac_volt = 1.
+        e.push(mixed, 100.05, .05)
+        with self.assertRaisesRegex(SteeringFault, 'adc_timeout'):
+            e.evaluate(100.26)
+
+    def test_unusable_quality_holds_until_a_new_complete_valid_cycle(self):
+        cases = [({'status_cali': False, 'cali_id': ''}, 'calibration_fallback'),
+                 ({'status_dac_feedback': False, 'dac_volt': float('nan')}, 'gain_unknown'),
+                 ({'status_cali': False, 'cali_id': '', 'status_dac_feedback': False,
+                   'dac_volt': float('nan')}, 'calibration_fallback|gain_unknown')]
+        for changes, reason in cases:
+            with self.subTest(reason=reason):
+                e = CycleSteering(2.)
+                self.start(e)
+                self.fill(e)
+                previous = e.evaluate(100.5)
+                e.configure(.1, 128.)
+                for i in range(11, 31):
+                    t = i * .05
+                    self.assertTrue(self.push(e, t, left=0., right=0., **changes))
+                    self.assertIsNone(e.evaluate(100. + t))
+                    self.assertEqual(e.waiting_status, reason)
+                    self.assertIs(e.last_decision, previous)
+                    self.assertFalse(e.rows)
+                    self.assertIsNotNone(e.pending)
+                for i in range(31, 51):
+                    t = i * .05
+                    self.push(e, t, left=1., right=3.)
+                    result = e.evaluate(100. + t)
+                    if i < 50:
+                        self.assertIsNone(result)
+                        self.assertEqual(e.waiting_status, 'data_warmup')
+                self.assertEqual((e.epoch, result.cycle, result.bias), (100., 5, -128.))
+                self.assertAlmostEqual(result.left_mean, 1.)
+                self.assertAlmostEqual(result.right_mean, 3.)
+                self.assertFalse(e.waiting_status)
+
+    def test_entering_tracking_with_unusable_quality_waits_for_valid_data(self):
+        for changes in ({'status_cali': False, 'cali_id': ''},
+                        {'status_dac_feedback': False, 'dac_volt': float('nan')}):
+            with self.subTest(changes=changes):
+                e = CycleSteering(2.)
+                self.push(e, 0., **changes)
+                e.begin(100., 2., 100.)
+                for i in range(1, 11):
+                    t = i * .05
+                    self.push(e, t, **changes)
+                    self.assertIsNone(e.evaluate(100. + t))
+                self.assertIsNone(e.last_decision)
+                self.assertTrue(e.waiting_status)
+                for i in range(11, 31):
+                    t = i * .05
+                    self.push(e, t)
+                    result = e.evaluate(100. + t)
+                self.assertEqual(result.cycle, 3)
+
+    def test_quality_hold_still_checks_timestamps_and_latches_hard_faults(self):
+        for quality in ({'status_cali': False}, {'status_dac_feedback': False}):
+            with self.subTest(quality=quality):
+                e = CycleSteering(2.)
+                self.start(e)
+                self.push(e, .05, **quality)
+                with self.assertRaisesRegex(SteeringFault, 'adc_timeout'):
+                    e.evaluate(100.26)
+                e = CycleSteering(2.)
+                self.start(e)
+                self.push(e, .05, adc_code=32767, **quality)
+                self.push(e, .1, **quality)
+                self.push(e, .15)
+                with self.assertRaisesRegex(SteeringFault, 'saturated'):
+                    e.evaluate(100.15)
+                e = CycleSteering(2.)
+                self.start(e)
+                self.assertFalse(e.push(batch(0., **quality), 100.3, .3))
+                with self.assertRaisesRegex(SteeringFault, 'stale_sample'):
+                    e.evaluate(100.3)
+
+    def test_quality_recovery_does_not_hide_a_changed_valid_calibration(self):
+        e = CycleSteering(2.)
+        self.start(e)
+        self.push(e, .05, status_cali=False, cali_id='')
+        self.push(e, .1, cali_id='new')
+        with self.assertRaisesRegex(SteeringFault, 'gain_or_calibration_changed'):
+            e.evaluate(100.1)
 
     def test_future_old_duplicate_and_ros_clock_change(self):
         for msg,received,ros_now,reason in [(batch(1.),100.,0.,'future_sample'),

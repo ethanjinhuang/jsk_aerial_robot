@@ -69,7 +69,7 @@ def use_color(mode, stream, environ):
 
 
 _TOKEN = re.compile(r'\b(?:left|right|straight|stopped|tracking|active|valid|warmup|unavailable|'
-                    r'historical|current|disabled|not_tracking|invalid_input|no_data|'
+                    r'historical|current|disabled|not_tracking|invalid_input|no_data|holding|gain_warmup|data_warmup|'
                     r'calibration_fallback|stale_sample|future_sample|gain_unknown|saturated)\b'
                     r'|(?<![\w.])[+-]?\d+(?:\.\d+)?', re.IGNORECASE)
 
@@ -80,7 +80,8 @@ def colorize_status(plain):
         if word in ('stopped', 'invalid_input', 'calibration_fallback', 'stale_sample',
                     'future_sample', 'gain_unknown', 'saturated', 'no_data'):
             code = '91'
-        elif word in ('warmup', 'unavailable', 'historical', 'disabled', 'not_tracking', 'left'):
+        elif word in ('warmup', 'gain_warmup', 'data_warmup', 'holding', 'unavailable', 'historical',
+                      'disabled', 'not_tracking', 'left'):
             code = '93'
         elif word == 'right':
             code = '95'

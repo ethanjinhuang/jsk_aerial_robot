@@ -96,7 +96,9 @@ def main():
                  '_color:=' + ('auto' if case == 0 else 'always')],
                 stdout=console_log, stderr=subprocess.STDOUT)
             processes.append(console)
-            driving = {'button': None, 'axis': 0., 'left': 2., 'right': 1., 'valid': True, 'adc': True}
+            driving = {'button': None, 'axis': 0., 'left': 2., 'right': 1., 'valid': True,
+                       'adc': True, 'gain': .9, 'mixed_gain': False,
+                       'gain_known': True, 'saturated': False}
             finish = threading.Event()
 
             def drive():
@@ -108,9 +110,13 @@ def main():
                     joy_pub.publish(joy)
                     if values['adc']:
                         stamp = rospy.Time.now()
-                        samples = [AdcSample(channel_id=i, timestamp=stamp, adc_code=100,
+                        samples = [AdcSample(channel_id=i, timestamp=stamp,
+                                             adc_code=32767 if values['saturated'] else 100,
                                              volt_raw=v, volt_cali=v, status_cali=values['valid'],
-                                             cali_id='synthetic', status_dac_feedback=True, dac_volt=.9)
+                                             cali_id='synthetic' if values['valid'] else '',
+                                             status_dac_feedback=values['gain_known'],
+                                             dac_volt=(values['gain'] + (.05 if values['mixed_gain'] and i == 0 else 0.)
+                                                       if values['gain_known'] else float('nan')))
                                    for i, v in enumerate((1., values['left'], values['right']))]
                         adc_pub.publish(AdcSampleArray(samples=samples))
                     finish.wait(.025)
@@ -235,6 +241,31 @@ def main():
                 for before, after in zip(updates, updates[1:]):
                     assert after.cycle_index == before.cycle_index + 1
                     assert abs((after.window_end - before.window_end).to_sec() - 1. / frequency) < 1e-6
+                # Changing gain preserves motion/phase and holds the last bias.
+                # Mixed groups are excluded; stable data must fill an aligned cycle.
+                with lock:
+                    before_gain = states[-1][1]
+                    held_bias = before_gain.command_bias
+                    target_start = len(targets)
+                set_input(gain=1., mixed_gain=True, left=3., right=1.)
+                wait_state(lambda s: s.motion_mode == 'tracking' and s.status == 'gain_warmup')
+                report = share_report()
+                assert re.search(r'Direction\s*:\s*HOLDING', report)
+                assert 'HISTORICAL' in report
+                with lock:
+                    assert states[-1][1].command_bias == held_bias
+                    assert len(set(targets[target_start:])) > 2, 'gait stopped during gain adjustment'
+                stable_at = rospy.Time.now().to_sec()
+                set_input(mixed_gain=False)
+                state = wait_state(lambda s: s.status == 'active' and s.command_bias == polarity * 64.)
+                assert state.window_start.to_sec() >= stable_at - .01
+                assert abs(state.left_mean - 3.) < 1e-9 and abs(state.right_mean - 1.) < 1e-9
+                elapsed_cycles = (state.window_end - before_gain.window_end).to_sec() * frequency
+                assert abs(elapsed_cycles - round(elapsed_cycles)) < 1e-6, 'gain adjustment reset gait phase'
+                with lock:
+                    gain_states = [s for _, s in states if s.header.stamp >= before_gain.header.stamp]
+                assert all(s.motion_mode == 'tracking' for s in gain_states)
+                assert not any(s.decision_updated for s in gain_states if s.status == 'gain_warmup')
                 set_input(left=1., right=1.)
                 wait_state(lambda s: s.command_bias == 0. and s.status == 'active')
                 set_input(button=1)
@@ -248,13 +279,38 @@ def main():
                 wait_state(lambda s: s.motion_mode == 'tracking' and s.status == 'warmup')
                 set_input(button=None)
                 wait_state(lambda s: s.cycle_index == 1 and s.status == 'active')
+                set_input(left=3., right=1.)
+                wait_state(lambda s: s.status == 'active' and s.command_bias == polarity * 64.)
+                for change, waiting in [({'valid': False}, 'calibration_fallback'),
+                                        ({'gain_known': False}, 'gain_unknown')]:
+                    with lock:
+                        before_quality = states[-1][1]
+                        target_start = len(targets)
+                    set_input(**change)
+                    wait_state(lambda s: s.motion_mode == 'tracking' and s.status == waiting)
+                    report = share_report()
+                    assert re.search(r'Direction\s*:\s*HOLDING', report)
+                    assert re.search(r'ADC quality\s*:\s*' + waiting, report)
+                    time.sleep(1. / frequency + .1)
+                    with lock:
+                        assert states[-1][1].motion_mode == 'tracking'
+                        assert states[-1][1].command_bias == before_quality.command_bias
+                        assert len(set(targets[target_start:])) > 2
+                        assert states[-1][1].cycle_index == before_quality.cycle_index
+                    recovered_at = rospy.Time.now().to_sec()
+                    set_input(valid=True, gain_known=True)
+                    wait_state(lambda s: s.motion_mode == 'tracking' and s.status == 'data_warmup')
+                    state = wait_state(lambda s: s.status == 'active' and s.cycle_index > before_quality.cycle_index)
+                    assert state.window_start.to_sec() >= recovered_at - .01
+                    phase_cycles = (state.window_end - before_quality.window_end).to_sec() * frequency
+                    assert abs(phase_cycles - round(phase_cycles)) < 1e-6
                 # Hold Circle before the fault: a released frame followed by
                 # a new press after stopping would be legitimate recovery.
                 set_input(button=2)
                 time.sleep(.1)
-                set_input(valid=False)
-                wait_state(lambda s: s.motion_mode == 'stopped' and 'calibration_fallback' in s.status)
-                set_input(valid=True)
+                set_input(saturated=True)
+                wait_state(lambda s: s.motion_mode == 'stopped' and 'saturated' in s.status)
+                set_input(saturated=False)
                 time.sleep(.15)
                 with lock:
                     assert states[-1][1].motion_mode == 'stopped'
@@ -278,7 +334,9 @@ def main():
                 wait_state(lambda s: s.motion_mode == 'stopped' and s.status == 'stop_button')
                 print('PASS: f=%.1f Hz, W=1/f, one decision/cycle, polarity=%d, '
                       'Circle tracking, Triangle ordinary auto, Cross stop, '
-                      'remote aligned/color Share snapshots, live settings and fault recovery' % (frequency, polarity), flush=True)
+                      'gain adjustment and unusable quality hold without stopping, '
+                      'remote aligned/color Share snapshots, '
+                      'live settings and fault recovery' % (frequency, polarity), flush=True)
             finally:
                 finish.set()
                 if thread.is_alive(): thread.join(timeout=2)

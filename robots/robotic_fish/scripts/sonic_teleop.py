@@ -177,7 +177,9 @@ class Teleop:
                         cycle=decision.cycle, historical=not active,
                         window=decision.end - decision.start, count=decision.sample_count,
                         delta=decision.left_mean - decision.right_mean, difference=decision.difference)
-        data['direction'] = data['judged'] if active else ('warmup' if state.mode == 'tracking' else
+        data['direction'] = data['judged'] if active else (
+                            'holding' if state.mode == 'tracking' and self.acoustic.waiting_status else
+                            'warmup' if state.mode == 'tracking' else
                             'stopped' if state.mode == 'stopped' else
                             'disabled' if self.acoustic is None else 'not_tracking')
         return format_status(data)
@@ -210,6 +212,8 @@ class Teleop:
                     rospy.logdebug('Acoustic cycle=%d, L/R=%.5f/%.5f, difference=%.3f, bias=%.1f',
                                   decision.cycle, decision.left_mean, decision.right_mean,
                                   decision.difference, decision.bias)
+                elif self.acoustic.waiting_status:
+                    self._acoustic_status = self.acoustic.waiting_status
             except self._SteeringFault as exc:
                 self._acoustic_status = 'acoustic_' + str(exc)
                 self.controller.stop(self._acoustic_status)

@@ -1,4 +1,4 @@
-"""One acoustic decision per complete gait cycle; no ROS or hardware access."""
+"""At most one decision per complete stable-gain cycle; no ROS or hardware access."""
 from collections import deque
 from dataclasses import dataclass
 import math
@@ -48,6 +48,8 @@ class CycleSteering:
     Acquisition stamps are mapped from ROS time at reception, with bounded
     clock skew/age. A full elapsed period is required, not 80% window warmup.
     Edge gaps and internal gaps must fit gap_s; samples need not hit endpoints.
+    Gain changes, calibration fallback and unknown gain hold the last decision
+    until a complete aligned cycle is usable, without changing the gait epoch.
     """
     def __init__(self, frequency, max_bias=1024., threshold=.1, bias=256.,
                  left_bias_sign=1, gap_s=.2, max_age_s=.2,
@@ -74,6 +76,12 @@ class CycleSteering:
         self.latest_error = 'no_data'
         self.fault = ''
         self.signature = self.clock_offset = None
+        self.waiting_status = self._unusable_reason = ''
+        self._stable_since = None
+
+    @property
+    def gain_warmup(self):
+        return self.waiting_status == 'gain_warmup'
 
     def _settings(self, threshold, bias):
         threshold, bias = number(threshold, 'threshold'), number(bias, 'bias')
@@ -99,12 +107,17 @@ class CycleSteering:
         return False
 
     def push(self, message, received, ros_now):
-        """Ingest one sequential ADC group; invalid frames never refresh health."""
+        """Check timing on every group; only usable groups enter a decision."""
         try:
             received, ros_now = number(received, 'receipt'), number(ros_now, 'ROS time')
             g = adapt(message)
-            if g['status']:
-                return self._reject('|'.join(flag.name.lower() for flag in Status if flag & g['status']))
+            # These quality states pause decisions while fresh timing still
+            # distinguishes incoming unusable data from a disconnected ADC.
+            waiting = g['status'] & (Status.GAIN_TRANSITION |
+                                     Status.CALIBRATION_FALLBACK | Status.GAIN_UNKNOWN)
+            invalid = g['status'] & ~waiting
+            if invalid:
+                return self._reject('|'.join(flag.name.lower() for flag in Status if flag & invalid))
             age = ros_now - g['t']
             if age < -self.future_tolerance_s:
                 return self._reject('future_sample')
@@ -122,11 +135,12 @@ class CycleSteering:
             if self.latest_time is not None and acquisition <= self.latest_time:
                 self.latest_time = None
                 return self._reject('receipt_time_reset')
-            total = g['volts'][1] + g['volts'][2]
-            if not math.isfinite(total):
-                return self._reject('invalid_signal_sum')
-            if total < self.low_signal_v:
-                return self._reject('low_signal')
+            if not waiting:
+                total = g['volts'][1] + g['volts'][2]
+                if not math.isfinite(total):
+                    return self._reject('invalid_signal_sum')
+                if total < self.low_signal_v:
+                    return self._reject('low_signal')
         except (ValueError, TypeError, AttributeError, OverflowError) as exc:
             return self._reject('invalid_input: ' + str(exc))
         # A fresh frame must not hide a missed health deadline between ticks.
@@ -141,15 +155,36 @@ class CycleSteering:
             self.rows.clear()
             if self.epoch is not None:
                 self.fault = continuity_error
-        if self.signature is not None and g['signature'] != self.signature:
+        # Compare usable signatures only: fallback IDs and unknown DAC values
+        # must not turn normal quality recovery into a calibration-change fault.
+        calibration_changed = (not waiting and self.signature is not None and
+                               g['signature'][0] != self.signature[0])
+        gain_changed = (not waiting and self.signature is not None and
+                        g['signature'][1] != self.signature[1])
+        recovering = self._unusable_reason
+        if calibration_changed:
             self.rows.clear()
             if self.epoch is not None:
                 self.fault = 'gain_or_calibration_changed'
-        self.signature = g['signature']
+        if waiting or gain_changed or recovering:
+            self.rows.clear()
+            if self.epoch is not None:
+                if waiting:
+                    self.waiting_status = ('gain_warmup' if waiting == Status.GAIN_TRANSITION else
+                                           '|'.join(flag.name.lower() for flag in Status if flag & waiting))
+                else:
+                    self.waiting_status = ('data_warmup' if recovering and recovering != 'gain_transition'
+                                           else 'gain_warmup')
+                self._stable_since = None if waiting else acquisition
+        self._unusable_reason = '|'.join(flag.name.lower() for flag in Status if flag & waiting)
+        if not waiting:
+            self.signature = g['signature']
         self.clock_offset = offset
         self.last_sensor_stamp = self.latest_stamp = g['t']
-        self.latest_time, self.latest_error = acquisition, ''
-        self.rows.append((acquisition, *g['volts']))
+        self.latest_time = acquisition
+        self.latest_error = ''
+        if not waiting:
+            self.rows.append((acquisition, *g['volts']))
         while self.rows and acquisition - self.rows[0][0] > self.period + 2. * self.gap_s:
             self.rows.popleft()
         if len(self.rows) > 10000:
@@ -173,10 +208,14 @@ class CycleSteering:
             raise SteeringFault('invalid_epoch')
         self.epoch_clock_offset = self.clock_offset
         self.cycle, self.last_decision, self.fault = 0, None, ''
+        self.waiting_status = ('gain_warmup' if self._unusable_reason == 'gain_transition'
+                               else self._unusable_reason)
+        self._stable_since = None
 
     def deactivate(self):
         self.epoch = None
         self.fault = ''
+        self.waiting_status, self._stable_since = '', None
 
     def evaluate(self, now):
         """Detect the next positive-going crossing and decide exactly once."""
@@ -198,6 +237,12 @@ class CycleSteering:
         if cycle != self.cycle + 1:
             raise SteeringFault('missed_cycle')
         start, end = self.epoch + (cycle - 1) * self.period, self.epoch + cycle * self.period
+        if self.waiting_status and (self._stable_since is None or
+                                    start < self._stable_since - 1e-9):
+            # Advance the cycle counter without resetting the oscillator epoch.
+            # Keep the held decision until an entire aligned cycle is usable.
+            self.cycle = cycle
+            return None
         rows = [row for row in self.rows if start <= row[0] < end]
         times = [start] + [row[0] for row in rows] + [end]
         if len(rows) < 2 or max(b - a for a, b in zip(times, times[1:])) > self.gap_s + 1e-9:
@@ -214,4 +259,5 @@ class CycleSteering:
         self.cycle = cycle
         self.last_decision = CycleDecision(cycle, start, end, head, left, right, difference,
                                            direction * self.left_bias_sign * self.settings.bias, len(rows))
+        self.waiting_status, self._stable_since = '', None
         return self.last_decision
