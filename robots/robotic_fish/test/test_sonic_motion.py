@@ -446,7 +446,7 @@ class RosAdapterTests(unittest.TestCase):
             self.send_status_joy(node)
         previous = node.acoustic.last_decision
         self.assertEqual(ros.Service.call_count, 1)
-        self.assertTrue(node._setAcousticSteering(NS(threshold=.1, bias=128., lr_voltage_offset_v=-.75)).success)
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.1, bias=128., lr_voltage_offset_v=-1.5)).success)
         pending = node.acoustic.pending
         self.assertFalse(node._setAcousticSteering(NS(threshold=.8, bias=64., lr_voltage_offset_v=float('nan'))).success)
         self.assertIs(node.acoustic.pending, pending)
@@ -459,18 +459,18 @@ class RosAdapterTests(unittest.TestCase):
             self.send_status_joy(node)
         self.send_status_joy(node, (8,))
         report = self.status_reports(ros)[-1]
-        self.assertRegex(report, r'LR offset \[V\]\s*:\s*-0.75000')
+        self.assertRegex(report, r'LR offset \[V\]\s*:\s*-1.50000')
         self.assertRegex(report, r'Raw cycle mean\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000')
         self.assertRegex(report, r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000')
-        self.assertRegex(report, r'Diff before \[%\]\s*:\s*\+66.67')
+        self.assertRegex(report, r'Diff before \[%\]\s*:\s*\(2.00000-1.00000\)/AVG = \+66.67%')
         self.assertNotIn('Compensated mean', report)
-        self.assertRegex(report, r'Diff after/T \[%\]\s*:\s*-33.33 / 10.00')
+        self.assertRegex(report, r'Diff after/T \[%\]\s*:\s*\(2.00000-1.00000\+\(-1.50000\)\)/AVG = -33.33% / 10.00%')
         self.assertRegex(report, r'Direction\s*:\s*RIGHT')
         self.assertEqual(node.controller.applied_bias, -128.)
         state = [m for m in published if hasattr(m, 'normalized_difference')][-1]
         self.assertAlmostEqual(state.normalized_difference, 2 / 3)
         self.assertAlmostEqual(state.compensated_difference, -1 / 3)
-        self.assertEqual(state.lr_voltage_offset_v, -.75)
+        self.assertEqual(state.lr_voltage_offset_v, -1.5)
         self.assertEqual((state.compensated_left_mean, state.compensated_right_mean), (1.25, 1.75))
         self.assertEqual(state.compensated_voltage_difference, -.5)
         self.assertEqual(node.controller.auto_epoch, 0.)
@@ -640,7 +640,7 @@ class RosAdapterTests(unittest.TestCase):
         self.send_status_joy(node, (8,))
         report = self.status_reports(ros)[-1]
         self.assertRegex(report, r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000')
-        self.assertRegex(report, r'Diff after/T \[%\]\s*:\s*\+66.67 / 10.00')
+        self.assertRegex(report, r'Diff after/T \[%\]\s*:\s*\(2.00000-1.00000\+\(\+0.00000\)\)/AVG = \+66.67% / 10.00%')
         self.assertRegex(report, r'Direction\s*:\s*LEFT')
         self.assertIn('(+256.0/1024.0)', report)
         self.assertNotIn('\033[', report)
@@ -734,8 +734,9 @@ class RosAdapterTests(unittest.TestCase):
         configs = [m for m in published if hasattr(m, 'config_json')]
         self.assertEqual(len(configs), 1)
         values = json.loads(configs[0].config_json)
-        self.assertEqual(values['schema_version'], 3)
+        self.assertEqual(values['schema_version'], 4)
         self.assertEqual(values['settings']['acoustic_steering']['difference_reference'], 'channel_mean')
+        self.assertEqual(values['settings']['acoustic_steering']['voltage_offset_reference'], 'left_minus_right')
         self.assertTrue(values['settings']['acoustic_steering']['threshold_inclusive'])
         self.assertEqual(values['settings']['servo_center'], 2000.)
         self.assertEqual(values['settings']['auto_amplitude'], 400.)
@@ -940,7 +941,7 @@ class RosAdapterTests(unittest.TestCase):
             node._adcCallback(self.adc(clock[0]))
             self.send_status_joy(node)
         previous = node.acoustic.last_decision
-        request = node._setAcousticSteering(NS(threshold=.2, bias=64., lr_voltage_offset_v=-3.))
+        request = node._setAcousticSteering(NS(threshold=.2, bias=64., lr_voltage_offset_v=-6.))
         self.assertTrue(request.success and request.parameters_pending)
         for i in range(11, 31):
             clock[0] = i * .05
@@ -954,9 +955,9 @@ class RosAdapterTests(unittest.TestCase):
         report = self.status_reports(ros)[-1]
         self.assertIn('voltage_compensation_out_of_range', report)
         self.assertIn('HISTORICAL', report)
-        self.assertRegex(report, r'Pending LR \[V\]\s*:\s*-3.00000')
+        self.assertRegex(report, r'Pending LR \[V\]\s*:\s*-6.00000')
         self.assertFalse(any(m.event == 'applied' for m in published if hasattr(m, 'event')))
-        replacement = node._setAcousticSteering(NS(threshold=.1, bias=128., lr_voltage_offset_v=-.75))
+        replacement = node._setAcousticSteering(NS(threshold=.1, bias=128., lr_voltage_offset_v=-1.5))
         self.assertEqual((replacement.direction, replacement.adc_quality), ('holding', 'valid'))
         for i in range(31, 41):
             clock[0] = i * .05
@@ -975,7 +976,7 @@ class RosAdapterTests(unittest.TestCase):
                 node = module.Teleop()
             node._adcCallback(self.adc(0.))
             self.send_status_joy(node, (2,))
-            node._setAcousticSteering(NS(threshold=.1, bias=128., lr_voltage_offset_v=-3.))
+            node._setAcousticSteering(NS(threshold=.1, bias=128., lr_voltage_offset_v=-6.))
             for i in range(1, 32):
                 clock[0] = i * .05
                 node._adcCallback(self.adc(clock[0]))

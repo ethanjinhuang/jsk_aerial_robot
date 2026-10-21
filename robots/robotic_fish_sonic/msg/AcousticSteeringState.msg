@@ -12,7 +12,7 @@ float64 window_s
 float64 threshold
 string difference_reference
 float64 turn_bias
-# Volts: add to the left cycle mean and subtract from the right cycle mean.
+# Volts: add once to left_mean-right_mean, keeping the denominator unchanged.
 float64 lr_voltage_offset_v
 int8 left_bias_sign
 # These stamps describe the last decision, retained between updates.
@@ -31,6 +31,8 @@ float64 command_bias
 # Retained previous-cycle values, not instantaneous voltages.
 float64 head_mean
 float64 voltage_difference
+# Diagnostic channels: left_mean+offset/2 and right_mean-offset/2.
+# These do not replace the measured/calibrated means above.
 float64 compensated_left_mean
 float64 compensated_right_mean
 float64 compensated_voltage_difference

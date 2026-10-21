@@ -41,8 +41,9 @@ def verify_recording(directory):
         assert recorded[topic], 'missing recording: ' + topic
     assert recorded['/rosout'], 'record.launch did not record ROS logs'
     configs = [json.loads(m.config_json) for m in recorded['config']]
-    assert all(c['schema_version'] == 3 and
+    assert all(c['schema_version'] == 4 and
                c['settings']['acoustic_steering']['difference_reference'] == 'channel_mean' and
+               c['settings']['acoustic_steering']['voltage_offset_reference'] == 'left_minus_right' and
                c['settings']['acoustic_steering']['threshold_inclusive'] for c in configs)
     assert configs[0]['settings']['acoustic_steering']['bias'] == 128., 'late startup config lost'
     assert configs[0]['pending_request'] is None
@@ -69,8 +70,9 @@ def verify_recording(directory):
     assert decisions and all(m.has_decision and m.decision_current and m.head_mean == 1. for m in decisions)
     assert all(m.voltage_difference == m.left_mean - m.right_mean for m in decisions)
     for m in decisions:
-        assert abs(m.compensated_left_mean - (m.left_mean + m.lr_voltage_offset_v)) < 1e-9
-        assert abs(m.compensated_right_mean - (m.right_mean - m.lr_voltage_offset_v)) < 1e-9
+        assert abs(m.compensated_voltage_difference - (m.voltage_difference + m.lr_voltage_offset_v)) < 1e-9
+        assert abs(m.compensated_left_mean - (m.left_mean + m.lr_voltage_offset_v / 2.)) < 1e-9
+        assert abs(m.compensated_right_mean - (m.right_mean - m.lr_voltage_offset_v / 2.)) < 1e-9
         assert abs(m.compensated_voltage_difference -
                    (m.compensated_left_mean - m.compensated_right_mean)) < 1e-9
         assert abs(m.compensated_difference - m.compensated_voltage_difference / ((m.left_mean + m.right_mean) / 2)) < 1e-9
@@ -318,10 +320,10 @@ def main():
                 assert re.search(r'Raw instant\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000', report)
                 assert re.search(r'Raw cycle mean\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000', report)
                 assert re.search(r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
-                assert re.search(r'Diff after/T \[%\]\s*:\s*\+66.67 / 10.00', report)
+                assert re.search(r'Diff after/T \[%\]\s*:\s*\(2.00000-1.00000\+\(\+0.00000\)\)/AVG = \+66.67% / 10.00%', report)
                 assert re.search(r'Direction\s*:\s*LEFT', report)
                 assert set(map(len, report.splitlines())) == {78}
-                assert len(report.splitlines()) == 16
+                assert len(report.splitlines()) == 17
                 # Re-press Circle: keep tracking and the existing phase/window.
                 set_input(button=2)
                 time.sleep(.1)
@@ -350,7 +352,7 @@ def main():
                 request_time = rospy.Time.now()
                 command = subprocess.run(
                     ['rosservice', 'call', '/' + name + '/set_acoustic_steering',
-                     '{threshold: 0.15, bias: 96.0, lr_voltage_offset_v: -0.75}'],
+                     '{threshold: 0.15, bias: 96.0, lr_voltage_offset_v: -1.50}'],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=5)
                 assert command.returncode == 0 and 'success: True' in command.stdout, command.stdout
                 (output / (name + '_steering_response.yaml')).write_text(command.stdout)
@@ -359,30 +361,30 @@ def main():
                 assert feedback['motion_mode'] == 'tracking' and feedback['adc_quality'] == 'valid'
                 assert feedback['parameters_pending'] and feedback['pending_bias'] == 96.
                 assert (feedback['active_threshold'], feedback['active_bias'], feedback['active_lr_voltage_offset_v']) == (.1, 64., 0.)
-                assert feedback['pending_threshold'] == .15 and feedback['pending_lr_voltage_offset_v'] == -.75
+                assert feedback['pending_threshold'] == .15 and feedback['pending_lr_voltage_offset_v'] == -1.5
                 assert feedback['difference_reference'] == 'channel_mean'
-                state = wait_state(lambda s: s.lr_voltage_offset_v == -.75 and s.command_bias == -polarity * 96.)
-                assert (state.threshold, state.turn_bias, state.lr_voltage_offset_v) == (.15, 96., -.75)
+                state = wait_state(lambda s: s.lr_voltage_offset_v == -1.5 and s.command_bias == -polarity * 96.)
+                assert (state.threshold, state.turn_bias, state.lr_voltage_offset_v) == (.15, 96., -1.5)
                 with lock:
                     settings = {(s.threshold, s.turn_bias, s.lr_voltage_offset_v)
                                 for _, s in states if s.header.stamp >= request_time}
-                assert settings <= {(.1, 64., 0.), (.15, 96., -.75)}, settings
+                assert settings <= {(.1, 64., 0.), (.15, 96., -1.5)}, settings
                 assert abs(state.normalized_difference - 2 / 3) < 1e-9
                 assert abs(state.compensated_difference + 1 / 3) < 1e-9
                 phase_cycles = (state.window_end - previous_end).to_sec() * frequency
                 assert abs(phase_cycles - round(phase_cycles)) < 1e-6
                 report = share_report()
-                assert re.search(r'LR offset \[V\]\s*:\s*-0.75000', report)
+                assert re.search(r'LR offset \[V\]\s*:\s*-1.50000', report)
                 assert re.search(r'Raw cycle mean\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000', report)
                 assert re.search(r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
-                assert re.search(r'Diff before \[%\]\s*:\s*\+66.67', report)
-                assert re.search(r'Diff after/T \[%\]\s*:\s*-33.33 / 15.00', report)
+                assert re.search(r'Diff before \[%\]\s*:\s*\(2.00000-1.00000\)/AVG = \+66.67%', report)
+                assert re.search(r'Diff after/T \[%\]\s*:\s*\(2.00000-1.00000\+\(-1.50000\)\)/AVG = -33.33% / 15.00%', report)
                 assert re.search(r'Direction\s*:\s*RIGHT', report)
                 previous_cycle = state.cycle_index
-                assert configure(.1, 64., -.75).success
+                assert configure(.1, 64., -1.5).success
                 state = wait_state(lambda s: s.cycle_index > previous_cycle and not s.parameters_pending
-                                   and (s.threshold, s.turn_bias, s.lr_voltage_offset_v) == (.1, 64., -.75))
-                assert state.lr_voltage_offset_v == -.75 and state.command_bias == -polarity * 64.
+                                   and (s.threshold, s.turn_bias, s.lr_voltage_offset_v) == (.1, 64., -1.5))
+                assert state.lr_voltage_offset_v == -1.5 and state.command_bias == -polarity * 64.
                 assert configure(.1, 64., 0.).success
                 wait_state(lambda s: s.lr_voltage_offset_v == 0. and s.command_bias == polarity * 64.)
                 set_input(left=1., right=3.)
@@ -520,7 +522,7 @@ def main():
                 node_output = (output / (name + '.log')).read_text()
                 assert 'SONIC STATUS / SHARE' not in node_output
                 assert 'Sonic manual: bias' not in node_output
-                assert 'threshold=0.1500 bias=96.0 lr_voltage_offset_v=-0.750000 V' in node_output
+                assert 'threshold=0.1500 bias=96.0 lr_voltage_offset_v=-1.500000 V' in node_output
             if recorder is not None:
                 verify_recording(output)
         rospy.signal_shutdown('cycle steering smoke complete')

@@ -487,22 +487,22 @@ roslaunch robotic_fish sonic_teleop.launch enable_joy:=false \
 令 `delta=acoustic_lr_voltage_offset_v`（单位 V，默认 0），对上一完整周期均值计算：
 
 ```text
-L_corrected = L + delta
-R_corrected = R - delta
-mean = (L_corrected + R_corrected) / 2 = (L + R) / 2
-d_corrected = (L_corrected - R_corrected) / mean
+mean = (L + R) / 2
+d_corrected = (L - R + delta) / mean
 ```
 
 `threshold=0.15` 表示左右补偿电压差达到两侧平均值的 **15%** 时转向，
 按 `d_corrected>=threshold` 左转、`d_corrected<=-threshold` 右转，其余直行。
-例如 `L_corrected=1.075 V`、`R_corrected=0.925 V`，平均值为 `1 V`，差值为 `0.15 V`，
+例如无补偿时 `L=1.075 V`、`R=0.925 V`，平均值为 `1 V`，差值为 `0.15 V`，
 恰好达到 15% 时也左转。这里的百分比以两侧平均值为基准；此时强侧约为弱侧的 1.162 倍。
-左右完全相等时始终直行，包括 `threshold=0`。
+补偿后的差值为零时始终直行，包括 `threshold=0`。
 相同阈值下，新公式比原来的除以 `L+R` 更灵敏；若要保持原来 `0.15` 的转向边界，改用 `0.30`。
 
-正值使判断偏向左侧，负值使判断偏向右侧；左右电压差总共改变 `2*delta`。
-仅在声源居中、左右应相等的条件下，用多个稳定周期估计 `delta=(R-L)/2`。
-例如居中时 `L=0.07145 V`、`R=0.04772 V`，对应 `delta=-0.011865 V`。
+正值使判断偏向左侧，负值使判断偏向右侧；`delta` 直接加到 `L-R` 上一次。
+仅在声源居中、左右应相等的条件下，用多个稳定周期估计 `delta=R-L`。
+例如居中时 `L=0.07145 V`、`R=0.04772 V`，对应 `delta=-0.02373 V`。
+旧版本采用左加、右减同一个值；现在相同数值的补偿作用减半。
+若需保留旧补偿效果，新值取旧值的两倍，例如旧 `-0.01 V` 对应新 `-0.02 V`；不自动转换配置。
 这是固定电压差补偿；更换 DAC 增益或工作条件后应重新检查基线。
 原始／校准 ADC 电压与测得周期均值保持原值；左右电压补偿只用于判据计算，
 派生结果单独记录，Share 在判据区显示补偿前后的差异。
@@ -560,7 +560,9 @@ pending_lr_voltage_offset_v: -0.01
 电压补偿须为有限有符号数，`lr_voltage_offset_v: 0.0` 表示取消补偿。
 整组校验通过后，在下一有效周期决策一起应用；任何一项无效都不覆盖此前已接受的配置。
 多次有效请求以最新一组为准；`parameters_pending` 表示等待生效，预热或质量等待期间继续暂存。
-每个周期还要求 `L+delta>=0`、`R-delta>=0`，即 `delta` 位于该周期的 `[-L,R]` 内。
+为保留非负包络检查，诊断中间量定义为 `Lc=L+delta/2`、`Rc=R-delta/2`；
+其差值等于 `L-R+delta`，平均值仍为 `(L+R)/2`。每个周期要求这两个量非负，
+即 `delta` 位于该周期的 `[-2L,2R]` 内。
 补偿越界时显示 `voltage_compensation_out_of_range`／`HOLDING`，保持摆尾和上一偏置，
 整组三项待生效参数继续暂存；后续完整周期恢复有效或替换参数后自动继续判断。
 不会把负电压截成零。尚无有效判断时保持零偏置；Cross、Joy／ADC 超时及饱和等检查继续生效。
@@ -611,11 +613,13 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 
 状态话题包含模式／原因、周期序号、实际窗口、左右均值、差值、参数及输出偏置；
 `normalized_difference` 保留补偿前的归一化差值，`lr_voltage_offset_v` 为已生效电压补偿，
-`compensated_left_mean`／`compensated_right_mean` 保存补偿后的均值，
+`compensated_left_mean`／`compensated_right_mean` 保存诊断中间量 `L+delta/2`／`R-delta/2`，
 `compensated_voltage_difference` 保存补偿后的电压差，
 `compensated_difference` 为最近决策使用的补偿后相对差值，两个差值均以两侧平均值为分母。
 消息和服务反馈通过 `difference_reference=channel_mean` 标明基准；数值仍为比例，`0.15` 表示 15%。
-锁存配置 `schema_version=3`，保存相同基准和 `threshold_inclusive=true`。
+锁存配置 `schema_version=4`，保存相同基准和 `threshold_inclusive=true`，
+并以 `voltage_offset_reference=left_minus_right` 标明补偿直接作用于电压差。
+旧版配置版本 3 的同名补偿字段表示每个通道的调整量，分析旧 bag 时应区分。
 `decision_updated` 仅在新决策时为真。停止后可保留上一决策的数值和窗口时间，
 必须结合 `motion_mode`、`status` 和 `sample_stamp` 解读。
 `record.launch` 已包含该状态话题。详细软件验证见
@@ -635,13 +639,15 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 - `Raw cycle mean` 为上一完整摆尾周期内三个通道的原始电压均值。
 - `Calibrated cycle mean` 为同一批采样经校准文件处理后的电压均值，先校准每次采样再平均。
 - `LR offset [V]` 为最近决策使用的电压补偿；有待生效补偿时才增加 `Pending LR [V]`。
-- `Diff before [%]` 为左右电压补偿前的相对差，已经使用上述校准文件后的左右周期均值。
-- `Diff after/T [%]` 为左右电压补偿后的相对差／阈值百分数，例如 `+18.00 / 15.00` 表示左侧达到判据。
+- `AVG [V]` 展开显示 `(L+R)/2` 及计算出的平均电压；L、R 来自上一完整周期的文件校准均值。
+- `Diff before [%]` 展开显示 `(L-R)/AVG = 补偿前百分比`。
+- `Diff after/T [%]` 展开显示 `(L-R+offset)/AVG = 补偿后百分比 / 阈值百分比`。
+  补偿只加一次；表达式代入 L、R 和本次判据使用的补偿值。
 
 校准文件修正通道测量值；`lr_voltage_offset_v` 仅调整左右差异判据，不写回 ADC 数据，
 也不改变电压表里的三行数据。原始与校准周期均值使用同一窗口、同一批有效采样；
 若历史消息没有原始电压，原始均值显示 `--`，不会用校准值冒充原始值。
-正常跟踪输出 16 行。停止时额外显示 `Reason`；无完整周期或保留历史结果时显示 `Cycle` 提示。
+正常跟踪输出 17 行。停止时额外显示 `Reason`；无完整周期或保留历史结果时显示 `Cycle` 提示。
 时间戳、数据年龄、周期编号／窗口／样本数和上次方向移出终端显示，
 原有 ADC、周期状态、连续运动状态、配置与事件话题仍完整录包。
 
@@ -660,13 +666,16 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 | Raw cycle mean         |         0.49000 |         0.68000 |       0.38000 |
 | Calibrated cycle mean  |         0.50000 |         0.70000 |       0.40000 |
 +----------------------------------------------------------------------------+
-| Diff before [%] : +54.55                                                   |
-| Diff after/T [%]: +50.91 / 15.00                                           |
+| AVG [V]         : (0.70000+0.40000)/2 = 0.55000                            |
+| Diff before [%] : (0.70000-0.40000)/AVG = +54.55%                          |
+| Diff after/T [%]: (0.70000-0.40000+(-0.01000))/AVG = +52.73% / 15.00%      |
 | LR offset [V]   : -0.01000                                                 |
 +----------------------------------------------------------------------------+
 ```
 
-表格宽 78 列，电压统一保留 5 位小数。颜色用于辅助识别：数值青色，
+表格宽 78 列，电压统一保留 5 位小数。
+公式右侧使用控制器记录的未舍入判据结果，代入数值仅按显示精度舍入。
+颜色用于辅助识别：数值青色，
 `LEFT` 黄色、`RIGHT` 洋红色、`STRAIGHT` 绿色，异常／停止红色，预热／历史结果黄色。
 `io.launch` 默认 `enable_status_console:=true status_color:=auto`：
 交互终端启用颜色；重定向输出、`TERM=dumb` 或设置了 `NO_COLOR` 时输出纯文本。

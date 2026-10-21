@@ -167,12 +167,13 @@ class Teleop:
                         initial_servo_cmd=self._initial_servo_cmd,
                         acoustic_steering=dict(enabled=self.acoustic is not None,
                             difference_reference=DIFFERENCE_REFERENCE, threshold_inclusive=True,
+                            voltage_offset_reference='left_minus_right',
                             max_age_s=self._status_max_age, future_tolerance_s=self._status_future_tolerance))
         if self.acoustic is not None:
             a = self.acoustic
             settings['acoustic_steering'].update(vars(a.settings), left_bias_sign=a.left_bias_sign,
                 gap_s=a.gap_s, low_signal_v=a.low_signal_v, max_bias=a.max_bias)
-        payload = json.dumps(dict(schema_version=3, host=socket.gethostname(),
+        payload = json.dumps(dict(schema_version=4, host=socket.gethostname(),
             started_ros_s=self._started_ros, started_monotonic_s=self._started_monotonic,
             settings=settings, applied_request_id=self._applied_request_id,
             pending_request=None if self._pending_request is None else dict(
@@ -434,7 +435,8 @@ class Teleop:
             msg.voltage_difference = decision.left_mean - decision.right_mean
             msg.compensated_left_mean, msg.compensated_right_mean = (
                 decision.compensated_left_mean, decision.compensated_right_mean)
-            msg.compensated_voltage_difference = decision.compensated_left_mean - decision.compensated_right_mean
+            msg.compensated_voltage_difference = (decision.left_mean - decision.right_mean
+                                                  + decision.lr_voltage_offset_v)
             msg.normalized_difference = decision.difference
             msg.compensated_difference = decision.compensated_difference
         self.acoustic_pub.publish(msg)

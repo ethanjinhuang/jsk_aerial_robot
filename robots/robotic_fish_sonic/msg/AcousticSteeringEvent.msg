@@ -9,7 +9,7 @@ string detail
 float64 threshold
 string difference_reference
 float64 turn_bias
-# Volts, positive increases left and decreases right.
+# Volts: add once to L-R; positive favors left, negative favors right.
 float64 lr_voltage_offset_v
 # Nonzero only for an applied request: the cycle where it took effect.
 uint64 cycle_index

@@ -283,12 +283,14 @@ class CycleSteering:
             raise SteeringFault('invalid_signal_sum')
         if left + right < self.low_signal_v:
             raise SteeringFault('low_signal')
-        # Symmetric voltage compensation preserves the channel mean.
+        # Offset compensates L-R once; it does not alter the measured means.
         mean = (left + right) / 2.
         difference = (left - right) / mean
         candidate = self.settings if self.pending is None else self.pending
-        compensated_left = left + candidate.lr_voltage_offset_v
-        compensated_right = right - candidate.lr_voltage_offset_v
+        # Retain symmetric diagnostic channels and their nonnegative-envelope
+        # check. Half on each side changes their difference by exactly offset.
+        compensated_left = left + candidate.lr_voltage_offset_v / 2.
+        compensated_right = right - candidate.lr_voltage_offset_v / 2.
         if (not all(math.isfinite(v) and v >= 0 for v in (compensated_left, compensated_right))):
             # A voltage correction may not invent a negative envelope. Retry at
             # the next full cycle, keeping the last bias, gait epoch and pending
@@ -296,7 +298,7 @@ class CycleSteering:
             self.cycle = cycle
             self.waiting_status = 'voltage_compensation_out_of_range'
             return None
-        compensated = (compensated_left - compensated_right) / mean
+        compensated = (left - right + candidate.lr_voltage_offset_v) / mean
         self.settings, self.pending = candidate, None
         direction = steering_direction(compensated, self.settings.threshold)
         self.cycle = cycle

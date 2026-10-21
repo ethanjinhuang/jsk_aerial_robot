@@ -33,7 +33,7 @@ class DisplayTests(unittest.TestCase):
     def test_aligned_columns_precision_and_previous_cycle_values(self):
         plain = format_status(snapshot())
         self.assertEqual(set(map(len, plain.splitlines())), {78})
-        self.assertEqual(len(plain.splitlines()), 16)
+        self.assertEqual(len(plain.splitlines()), 17)
         self.assertRegex(plain, r'Raw instant\s*\|\s*0.50000\s*\|\s*0.70000\s*\|\s*0.40000')
         self.assertRegex(plain, r'Raw cycle mean\s*\|\s*0.49000\s*\|\s*0.68000\s*\|\s*0.38000')
         self.assertRegex(plain, r'Calibrated cycle mean\s*\|\s*0.50000\s*\|\s*0.70000\s*\|\s*0.40000')
@@ -43,16 +43,18 @@ class DisplayTests(unittest.TestCase):
         self.assertNotIn('\033[', plain)
 
     def test_compensation_and_pending_value_are_visible_without_replacing_measured_means(self):
-        plain = format_status(snapshot(lr_voltage_offset_v=-.165, compensated_difference=-.05454545,
+        plain = format_status(snapshot(lr_voltage_offset_v=-.330, compensated_difference=-.05454545,
                                         pending_lr_voltage_offset_v=-.1,
                                         direction='straight'))
         self.assertEqual(set(map(len, plain.splitlines())), {78})
         self.assertRegex(plain, r'Calibrated cycle mean\s*\|\s*0.50000\s*\|\s*0.70000\s*\|\s*0.40000')
-        self.assertRegex(plain, r'LR offset \[V\]\s*:\s*-0.16500')
+        self.assertRegex(plain, r'LR offset \[V\]\s*:\s*-0.33000')
         self.assertRegex(plain, r'Pending LR \[V\]\s*:\s*-0.10000')
         self.assertNotIn('Compensated mean', plain)
-        self.assertRegex(plain, r'Diff before \[%\]\s*:\s*\+54.55')
-        self.assertRegex(plain, r'Diff after/T \[%\]\s*:\s*-5.45 / 10.00')
+        self.assertRegex(plain, r'AVG \[V\]\s*:\s*\(0.70000\+0.40000\)/2 = 0.55000')
+        self.assertRegex(plain, r'Diff before \[%\]\s*:\s*\(0.70000-0.40000\)/AVG = \+54.55%')
+        self.assertRegex(plain, r'Diff after/T \[%\]\s*:\s*\(0.70000-0.40000\+\(-0.33000\)\)/AVG = -5.45% / 10.00%')
+        self.assertNotIn('+(-0.10000)', plain)  # Pending offset is not in the held equation.
 
     def test_long_quality_and_reason_wrap_inside_table(self):
         plain = format_status(snapshot(mode='stopped', direction='stopped', reason='fault_' * 40,
@@ -67,7 +69,8 @@ class DisplayTests(unittest.TestCase):
                                        difference=None, compensated_difference=None))
         self.assertIn('no completed tracking cycle', plain)
         self.assertRegex(plain, r'Diff before \[%\]\s*:\s*--')
-        self.assertRegex(plain, r'Diff after/T \[%\]\s*:\s*-- / 10.00')
+        self.assertRegex(plain, r'Diff after/T \[%\]\s*:\s*-- / 10.00%')
+        self.assertRegex(plain, r'AVG \[V\]\s*:\s*--')
         self.assertRegex(plain, r'Calibrated cycle mean\s*\|\s*--\s*\|\s*--\s*\|\s*--')
         held = format_status(snapshot(mode='stopped', direction='stopped', reason='acoustic_adc_timeout',
                                       historical=True, bias=0.))

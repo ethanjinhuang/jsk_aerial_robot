@@ -79,7 +79,7 @@ class CycleTests(unittest.TestCase):
         self.start(e)
         self.fill(e)
         before = e.evaluate(100.5)
-        e.configure(.1, 128., -.75)
+        e.configure(.1, 128., -1.5)
         self.fill(e, .5, 1.)
         after = e.evaluate(101.)
         self.assertEqual(before.raw_means, (.5, 1., .5))
@@ -172,10 +172,10 @@ class CycleTests(unittest.TestCase):
         self.assertIsNone(e.pending)
 
     def test_compensation_shifts_the_decision_without_changing_measured_means(self):
-        cases = [(3., 1., -1., .1, 0.), (3., 1., -.5, .1, 128.),
-                 (3., 1., -1.5, .1, -128.), (1., 3., 1., .1, 0.),
-                 (1., 3., 1.5, .1, 128.), (1., 3., .5, .1, -128.),
-                 (3., 1., -.5, .5, 128.), (3., 1., -1.5, .5, -128.)]
+        cases = [(3., 1., -2., .1, 0.), (3., 1., -1., .1, 128.),
+                 (3., 1., -3., .1, -128.), (1., 3., 2., .1, 0.),
+                 (1., 3., 3., .1, 128.), (1., 3., 1., .1, -128.),
+                 (3., 1., -1., .5, 128.), (3., 1., -3., .5, -128.)]
         for left, right, offset, threshold, bias in cases:
             for polarity in (-1, 1):
                 with self.subTest(left=left, offset=offset, polarity=polarity):
@@ -188,15 +188,27 @@ class CycleTests(unittest.TestCase):
                     self.assertAlmostEqual(result.left_mean, left)
                     self.assertAlmostEqual(result.right_mean, right)
                     self.assertAlmostEqual(result.difference, (left - right) / ((left + right) / 2))
-                    self.assertAlmostEqual(result.compensated_left_mean, left + offset)
-                    self.assertAlmostEqual(result.compensated_right_mean, right - offset)
-                    self.assertAlmostEqual(result.compensated_difference, (left - right + 2 * offset) / ((left + right) / 2))
+                    self.assertAlmostEqual(result.compensated_left_mean, left + offset / 2.)
+                    self.assertAlmostEqual(result.compensated_right_mean, right - offset / 2.)
+                    self.assertAlmostEqual(result.compensated_difference, (left - right + offset) / ((left + right) / 2))
                     self.assertEqual(result.lr_voltage_offset_v, offset)
                     self.assertEqual(result.bias, polarity * bias)
 
+    def test_offset_is_added_once_to_voltage_difference(self):
+        for offset, expected in ((-.01, 5/12), (0., .5), (.01, 7/12)):
+            with self.subTest(offset=offset):
+                e = CycleSteering(2., lr_voltage_offset_v=offset)
+                self.push(e, 0., left=.15, right=.09)
+                e.begin(100., 2., 100.)
+                self.fill(e, left=.15, right=.09)
+                result = e.evaluate(100.5)
+                self.assertAlmostEqual(result.compensated_difference, expected)
+                self.assertAlmostEqual(result.compensated_difference * .12, .06 + offset)
+                self.assertAlmostEqual(result.compensated_left_mean + result.compensated_right_mean, .24)
+
     def test_fixed_voltage_difference_is_balanced_at_different_signal_levels(self):
         for level in (.03, .1, 1.):
-            e = CycleSteering(2., lr_voltage_offset_v=-.01)
+            e = CycleSteering(2., lr_voltage_offset_v=-.02)
             self.push(e, 0., left=level + .02, right=level)
             e.begin(100., 2., 100.)
             self.fill(e, left=level + .02, right=level)
@@ -205,7 +217,7 @@ class CycleTests(unittest.TestCase):
             self.assertEqual(result.bias, 0.)
 
     def test_voltage_correction_is_not_a_dimensionless_offset(self):
-        for scale, expected in ((.5, -1.), (1., 0.), (2., .5)):
+        for scale, expected in ((.5, 0.), (1., .5), (2., .75)):
             e = CycleSteering(2., lr_voltage_offset_v=-1.)
             self.push(e, 0., left=3. * scale, right=scale)
             e.begin(100., 2., 100.)
@@ -215,9 +227,9 @@ class CycleTests(unittest.TestCase):
     def test_three_settings_are_validated_and_applied_as_one_update(self):
         e = CycleSteering(2., lr_voltage_offset_v=.1)
         self.start(e)
-        e.configure(.1, 128., -1.)
+        e.configure(.1, 128., -2.)
         self.assertEqual((e.settings.threshold, e.settings.bias, e.settings.lr_voltage_offset_v), (.1, 256., .1))
-        self.assertEqual((e.pending.threshold, e.pending.bias, e.pending.lr_voltage_offset_v), (.1, 128., -1.))
+        self.assertEqual((e.pending.threshold, e.pending.bias, e.pending.lr_voltage_offset_v), (.1, 128., -2.))
         pending = e.pending
         for value in (float('nan'), float('inf'), -float('inf'), True):
             with self.assertRaises(ValueError):
@@ -243,7 +255,7 @@ class CycleTests(unittest.TestCase):
         self.start(e)
         self.fill(e)
         previous = e.evaluate(100.5)
-        e.configure(.1, 256., -.75)
+        e.configure(.1, 256., -1.5)
         for i in range(11, 22):
             t = i * .05
             self.push(e, t, status_cali=False, cali_id='')
@@ -257,14 +269,14 @@ class CycleTests(unittest.TestCase):
             result = e.evaluate(100. + t)
             if i < 40:
                 self.assertIsNone(result)
-        self.assertEqual((e.epoch, result.cycle, result.lr_voltage_offset_v, result.bias), (100., 4, -.75, -256.))
+        self.assertEqual((e.epoch, result.cycle, result.lr_voltage_offset_v, result.bias), (100., 4, -1.5, -256.))
 
     def test_out_of_range_pending_triplet_holds_previous_decision_and_can_be_replaced(self):
         e = CycleSteering(2.)
         self.start(e)
         self.fill(e)
         previous = e.evaluate(100.5)
-        e.configure(.2, 128., -3.)
+        e.configure(.2, 128., -6.)
         pending = e.pending
         for start in (.5, 1.):
             self.fill(e, start, start + .5)
@@ -273,7 +285,7 @@ class CycleTests(unittest.TestCase):
             self.assertIs(e.pending, pending)
             self.assertEqual((e.settings.threshold, e.settings.bias, e.settings.lr_voltage_offset_v), (.1, 256., 0.))
             self.assertEqual(e.waiting_status, 'voltage_compensation_out_of_range')
-        e.configure(.1, 64., -.75)
+        e.configure(.1, 64., -1.5)
         self.fill(e, 1.5, 2.)
         result = e.evaluate(102.)
         self.assertEqual((e.epoch, result.cycle, result.bias), (100., 4, -64.))
@@ -292,11 +304,11 @@ class CycleTests(unittest.TestCase):
         self.assertIsNone(e.last_decision)
         self.fill(e, .5, 1., left=1., right=1.)
         result = e.evaluate(101.)
-        self.assertEqual((result.cycle, result.compensated_left_mean, result.compensated_right_mean), (2, .5, 1.5))
+        self.assertEqual((result.cycle, result.compensated_left_mean, result.compensated_right_mean), (2, .75, 1.25))
         self.assertEqual(result.bias, -256.)
 
     def test_zero_compensated_channel_is_valid_and_overflow_is_not_clamped(self):
-        for offset, expected in ((-3., -2.), (1., 2.)):
+        for offset, expected in ((-6., -2.), (2., 2.)):
             e = CycleSteering(2., lr_voltage_offset_v=offset)
             self.push(e, 0., left=3., right=1.)
             e.begin(100., 2., 100.)
@@ -311,7 +323,7 @@ class CycleTests(unittest.TestCase):
 
     def test_compensation_hold_does_not_hide_timeout_or_saturation(self):
         for fault in ('timeout', 'saturation'):
-            e = CycleSteering(2., lr_voltage_offset_v=-3.)
+            e = CycleSteering(2., lr_voltage_offset_v=-6.)
             self.start(e)
             self.fill(e)
             self.assertIsNone(e.evaluate(100.5))

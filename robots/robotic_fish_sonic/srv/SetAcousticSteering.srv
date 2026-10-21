@@ -3,8 +3,8 @@
 # Equal channels select straight even when threshold=0.
 float64 threshold
 float64 bias
-# Volts: left_mean += value, right_mean -= value before normalization.
-# Must be finite; a cycle producing a negative compensated mean waits without applying.
+# Volts: (left_mean-right_mean+value)/((left_mean+right_mean)/2).
+# Must be finite; if left+value/2 or right-value/2 is negative, wait without applying.
 float64 lr_voltage_offset_v
 ---
 bool success

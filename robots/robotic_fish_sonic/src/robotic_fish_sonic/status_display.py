@@ -18,11 +18,12 @@ def numeric(value, precision=5, signed=False):
 
 
 def percent(value, signed=False):
-    return numeric(None if value is None else value * 100., 2, signed)
+    result = numeric(None if value is None else value * 100., 2, signed)
+    return result if result == '--' else result + '%'
 
 
 def format_status(data):
-    """Render a snapshot captured by the motion node, without recalculating it."""
+    """Expand arithmetic from captured means; display the recorded decision result."""
     border = '+' + '-' * (WIDTH - 2) + '+'
     lines = [border, '| ' + TITLE.center(WIDTH - 4) + ' |', border]
 
@@ -54,9 +55,19 @@ def format_status(data):
         row('Cycle', 'UNAVAILABLE (no completed tracking cycle)')
     elif data['historical']:
         row('Cycle', 'HISTORICAL (held means and difference)')
-    row('Diff before [%]', percent(data['difference'], True))
-    row('Diff after/T [%]', '%s / %s' % (percent(data['compensated_difference'], True),
-                                     percent(data['threshold'])))
+    before = percent(data['difference'], True)
+    after = '%s / %s' % (percent(data['compensated_difference'], True), percent(data['threshold']))
+    average = '--'
+    if data['means'] is not None:
+        left, right = data['means'][1:]
+        l_text, r_text = numeric(left), numeric(right)
+        average = '(%s+%s)/2 = %s' % (l_text, r_text, numeric((left + right) / 2.))
+        before = '(%s-%s)/AVG = %s' % (l_text, r_text, before)
+        after = '(%s-%s+(%s))/AVG = %s' % (
+            l_text, r_text, numeric(data['lr_voltage_offset_v'], 5, True), after)
+    row('AVG [V]', average)
+    row('Diff before [%]', before)
+    row('Diff after/T [%]', after)
     row('LR offset [V]', numeric(data['lr_voltage_offset_v'], 5, True))
     if data['pending_lr_voltage_offset_v'] is not None:
         row('Pending LR [V]', numeric(data['pending_lr_voltage_offset_v'], 5, True))
