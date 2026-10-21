@@ -446,7 +446,16 @@ rostopic echo /robotic_fish/acoustic/steering_state
 进入声源跟踪模式前需要已有新鲜、结构有效且未饱和的三通道数据。
 校准或 DAC 状态尚未就绪时，可以进入跟踪并以零偏置摆尾等待；
 只有校准成功、DAC 增益已确认的数据才用于声学方向判断。
-默认最大数据年龄／采样间隔均为 0.2 秒，未来时间戳容差为 0.05 秒，
+`sonic_teleop.launch` 默认最大数据年龄为 0.5 秒，通过 `acoustic_max_age_s` 设置；
+启动时显式写入节点参数，无需先单独执行 `rosparam set`。例如沿用本次现场设置：
+
+```bash
+roslaunch robotic_fish sonic_teleop.launch acoustic_steering:=true \
+  acoustic_bias:=128 acoustic_max_age_s:=0.5
+```
+
+该值仅在启动时读取，修改后需重启运动 launch。直接运行脚本而未设置私有参数时，
+仍沿用 0.2 秒初值。最大采样间隔为 0.2 秒，未来时间戳容差为 0.05 秒，
 左右电压和的低信号阈值为 0.001 V。
 采样不必恰好命中周期端点，但两端及内部的间隔均不得超过允许间隔，
 且至少有两组数据。启动时等待完整 `1/f` 周期，不采用原比较节点的 80% 预热规则。
