@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Single-servo ROS adapter, with optional complete-cycle acoustic steering."""
 import math
+import sys
 import threading
 import time
 
@@ -9,6 +10,8 @@ from sensor_msgs.msg import Joy
 from spinal.msg import ServoControlCmd
 
 from robotic_fish.sonic_motion import SonicController
+from robotic_fish_sonic.acoustic_core import adapt, Status
+from robotic_fish_sonic.msg import AdcSampleArray
 
 
 class Teleop:
@@ -30,6 +33,23 @@ class Teleop:
                               ('amplitude_buttons', [6, 7])]:
             parameters[name] = rospy.get_param('~' + name, default)
         self.controller = SonicController(**parameters)
+        self.status_button = rospy.get_param('~status_button', 8)
+        if (isinstance(self.status_button, bool) or not isinstance(self.status_button, int)
+                or self.status_button < 0):
+            raise ValueError('status_button must be a nonnegative integer')
+        if self.status_button in (self.controller.stop_button, self.controller.auto_button,
+                                  self.controller.manual_button, self.controller.tracking_button,
+                                  *self.controller.amplitude_buttons):
+            raise ValueError('status_button must not overlap motion buttons')
+        max_age = rospy.get_param('~acoustic_steering/max_age_s', .2)
+        future_tolerance = rospy.get_param('~acoustic_steering/future_tolerance_s', .05)
+        if isinstance(max_age, bool) or isinstance(future_tolerance, bool):
+            raise ValueError('ADC timing limits must be numbers, not booleans')
+        self._status_max_age = float(max_age)
+        self._status_future_tolerance = float(future_tolerance)
+        if (not math.isfinite(self._status_max_age) or self._status_max_age <= 0
+                or not math.isfinite(self._status_future_tolerance) or self._status_future_tolerance < 0):
+            raise ValueError('ADC age limit must be positive and future tolerance nonnegative')
         self.update_rate = rospy.get_param('~update_rate', 50.)
         if isinstance(self.update_rate, bool):
             raise ValueError('update_rate must be a positive finite number')
@@ -49,12 +69,14 @@ class Teleop:
         self.lock = threading.RLock()
         self._stopping = threading.Event()
         self._last_transition = None
+        self._status_button_prev = self._status_requested = False
+        self._latest_adc = self._latest_adc_receipt = None
         self.acoustic = None
         self._acoustic_token = None
         self._acoustic_status = 'disabled'
         if self.controller.tracking_enabled:
             from robotic_fish_sonic.cycle_steering import CycleSteering, SteeringFault
-            from robotic_fish_sonic.msg import AdcSampleArray, AcousticSteeringState
+            from robotic_fish_sonic.msg import AcousticSteeringState
             from robotic_fish_sonic.srv import SetAcousticSteering, SetAcousticSteeringResponse
             self._SteeringFault = SteeringFault
             self._AcousticState = AcousticSteeringState
@@ -65,15 +87,16 @@ class Teleop:
                 bias=rospy.get_param('~acoustic_steering/bias', 256.),
                 left_bias_sign=rospy.get_param('~acoustic_steering/left_bias_sign', 1),
                 gap_s=rospy.get_param('~acoustic_steering/gap_s', .2),
-                max_age_s=rospy.get_param('~acoustic_steering/max_age_s', .2),
-                future_tolerance_s=rospy.get_param('~acoustic_steering/future_tolerance_s', .05),
+                max_age_s=self._status_max_age,
+                future_tolerance_s=self._status_future_tolerance,
                 low_signal_v=rospy.get_param('~acoustic_steering/low_signal_v', .001))
             self.acoustic_pub = rospy.Publisher('/robotic_fish/acoustic/steering_state',
                                                AcousticSteeringState, queue_size=1)
-            self.adc_sub = rospy.Subscriber('/robotic_fish/adc/samples', AdcSampleArray,
-                                            self._adcCallback, queue_size=100)
             self.settings_service = rospy.Service('~set_acoustic_steering', SetAcousticSteering,
                                                    self._setAcousticSteering)
+        # Keep instant readings available to Share even when tracking is disabled.
+        self.adc_sub = rospy.Subscriber('/robotic_fish/adc/samples', AdcSampleArray,
+                                        self._adcCallback, queue_size=100)
         self.servo_cmd_pub = rospy.Publisher('/servo/target_states', ServoControlCmd, queue_size=1)
         self.joy_sub = rospy.Subscriber('/joy', Joy, self._joyCallback, queue_size=1)
         self._thread = threading.Thread(target=self._run, name='sonic-motion', daemon=True)
@@ -85,7 +108,9 @@ class Teleop:
     def _adcCallback(self, msg):
         with self.lock:
             if not self._stopping.is_set():
-                self.acoustic.push(msg, time.monotonic(), rospy.Time.now().to_sec())
+                self._latest_adc, self._latest_adc_receipt = msg, time.monotonic()
+                if self.acoustic is not None:
+                    self.acoustic.push(msg, self._latest_adc_receipt, rospy.Time.now().to_sec())
 
     def _setAcousticSteering(self, request):
         with self.lock:
@@ -101,6 +126,63 @@ class Teleop:
         with self.lock:
             if not self._stopping.is_set():
                 self.controller.handle_joy(msg.axes, msg.buttons, time.monotonic())
+                try:
+                    pressed = len(msg.buttons) > self.status_button and msg.buttons[self.status_button] == 1
+                except TypeError:
+                    pressed = False
+                if pressed and not self._status_button_prev:
+                    self._status_requested = True
+                self._status_button_prev = pressed
+
+    def _formatStatus(self, state, now):
+        """Describe the actual held decision; never run a new steering decision."""
+        lines = ['Sonic status (Share): mode=%s status=%s reason=%s' %
+                 (state.mode, self._acoustic_status, state.reason)]
+        if self._latest_adc is None:
+            lines.append('  ADC instant: unavailable (no ADC data)')
+        else:
+            samples = sorted(self._latest_adc.samples, key=lambda s: s.channel_id)
+            if [s.channel_id for s in samples] != [0, 1, 2]:
+                lines.append('  ADC instant: unavailable (expected channels 0,1,2)')
+            else:
+                for label, field in [('raw', 'volt_raw'), ('calibrated/fallback', 'volt_cali')]:
+                    values = ['%s=%.5f' % (name, getattr(sample, field, float('nan')))
+                              for name, sample in zip(('head', 'left', 'right'), samples)]
+                    lines.append('  ADC instant %s [V]: %s' % (label, ' '.join(values)))
+                try:
+                    group = adapt(self._latest_adc)
+                    age = rospy.Time.now().to_sec() - group['t']
+                    quality = '|'.join(flag.name.lower() for flag in Status if flag & group['status']) or 'valid'
+                    if age > self._status_max_age or now - self._latest_adc_receipt > self._status_max_age:
+                        quality = 'stale_sample'
+                    elif age < -self._status_future_tolerance:
+                        quality = 'future_sample'
+                    lines.append('  ADC quality=%s sample_age=%.3fs receipt_age=%.3fs' %
+                                 (quality, age, now - self._latest_adc_receipt))
+                except (ValueError, TypeError, AttributeError, OverflowError) as exc:
+                    lines.append('  ADC quality=invalid_input (%s)' % exc)
+        decision = None if self.acoustic is None else self.acoustic.last_decision
+        active = state.mode == 'tracking' and self._acoustic_status == 'active'
+        if decision is None:
+            lines.append('  Cycle mean [V] / left-right difference: unavailable (no completed tracking cycle)')
+            judged = 'unavailable'
+        else:
+            judged = ('left' if decision.difference > self.acoustic.settings.threshold else
+                      'right' if decision.difference < -self.acoustic.settings.threshold else 'straight')
+            lines.append('  Last completed cycle=%d window=%.3fs samples=%d historical=%s' %
+                         (decision.cycle, decision.end - decision.start, decision.sample_count, not active))
+            lines.append('  Cycle calibrated mean [V]: head=%.5f left=%.5f right=%.5f' %
+                         (decision.head_mean, decision.left_mean, decision.right_mean))
+            lines.append('  Left-right delta [V]=%+.5f normalized=%+.4f threshold=%.4f' %
+                         (decision.left_mean - decision.right_mean, decision.difference,
+                          self.acoustic.settings.threshold))
+        direction = judged if active else ('warmup' if state.mode == 'tracking' else
+                    'stopped' if state.mode == 'stopped' else
+                    'disabled' if self.acoustic is None else 'not_tracking')
+        bias_limit = self.controller.motion.servo_range
+        lines.append('  Direction=%s last_decision=%s command_bias=(%+.1f/%.1f)' %
+                     (direction, judged, state.applied_bias, bias_limit))
+        return '\n'.join(lines)
 
     def publish_cmd(self, state):
         self.servo_cmd[0] = state.target
@@ -166,6 +248,7 @@ class Teleop:
         self.acoustic_pub.publish(msg)
 
     def _controlLoop(self):
+        report = None
         with self.lock:
             now = time.monotonic()
             state = self.controller.tick(now)
@@ -183,6 +266,12 @@ class Teleop:
                                    'amplitude requested/effective=%.1f/%.1f, target=%.1f',
                                    state.mode, state.requested_bias, state.applied_bias,
                                    state.requested_amplitude, state.effective_amplitude, state.target)
+            if self._status_requested:
+                self._status_requested = False
+                report = self._formatStatus(state, now)
+        if report is not None:
+            rospy.loginfo('%s', report)
+            sys.stdout.flush()
 
     def _run(self):
         period = 1. / self.update_rate
@@ -198,8 +287,8 @@ class Teleop:
     def _shutdown(self):
         self._stopping.set()
         self.joy_sub.unregister()
+        self.adc_sub.unregister()
         if self.acoustic is not None:
-            self.adc_sub.unregister()
             self.settings_service.shutdown()
         if self._thread.is_alive() and threading.current_thread() is not self._thread:
             self._thread.join(timeout=1.)

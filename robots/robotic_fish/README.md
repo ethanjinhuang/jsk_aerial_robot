@@ -328,6 +328,7 @@ IMU 名称、平面和范围按本次提供的映射记录。
 | `buttons[2]` 的新按下 | 圆圈 `○` | 进入声源跟踪模式；已在跟踪时再次按下保持模式和相位，不执行开关切换 |
 | `buttons[0]` 的新按下 | 方块 `□` | 进入手动位置模式，或从停止恢复手动 |
 | `buttons[1]` | 叉号 `×` | 停止摆尾、回中并锁存；优先于其他输入 |
+| `buttons[8]` 的新按下 | Share | 在运动节点终端打印声学与控制状态；长按只打印一次 |
 | `buttons[6]` 或 `buttons[7]` 按住 | L2 或 R2 | 用 R2 模拟轴 `axes[4]` 增幅、L2 模拟轴 `axes[3]` 减幅，沿用原映射 |
 
 各模式通过独立按键选择：方块手动、三角普通自动、圆圈声源跟踪；
@@ -362,6 +363,7 @@ ROS 仿真时钟暂停或回拨不会暂停运动或手柄超时检查。
 | `amplitude_decrease_axis` / `amplitude_increase_axis` | 3 / 4 | 调幅轴索引 |
 | `stop_button` / `auto_button` / `manual_button` | 1 / 3 / 0 | 模式按键索引 |
 | `tracking_button` | 2 | 声源跟踪模式按键索引，默认圆圈 |
+| `status_button` | 8 | 状态查看按键索引，默认 Share；不能与运动按键重叠 |
 | `amplitude_buttons` | `[6, 7]` | 调幅使能按键列表 |
 
 中心 2048、软件范围 ±1024、启动文件摆频 1.5 Hz、默认摆幅 512 和
@@ -458,6 +460,40 @@ rostopic echo /robotic_fish/acoustic/steering_state
 必须结合 `motion_mode`、`status` 和 `sample_stamp` 解读。
 `record.launch` 已包含该状态话题。详细软件验证见
 [周期趋声验证](../robotic_fish_sonic/docs/cycle_steering_validation.md)。
+
+### 6.6 Share 查看系统状态
+
+按一下 **Share（`buttons[8]`）**，在运行 `sonic_teleop.launch` 的终端打印一组快照。
+长按不重复打印，松开后再按可再次查看。输出包括：
+
+- 当前运动模式、声学状态和停止原因。
+- ADC0／ADC1／ADC2（头／左／右）的最新原始电压、校准／回退电压，以及数据质量和年龄。
+- 上一完整摆尾周期内三个通道的校准电压均值、周期长度及样本数。
+- 左右均值的电压差 `L-R`、控制使用的归一化差值 `(L-R)/(L+R)` 和实际阈值。
+- 判断方向 `left`／`right`／`straight`，以及 `(当前输出偏置/修改上限)`。
+
+例如，进入跟踪并完成一个周期后：
+
+```text
+Sonic status (Share): mode=tracking status=active reason=tracking_button
+  ADC instant raw [V]: head=0.50000 left=0.70000 right=0.40000
+  ADC instant calibrated/fallback [V]: head=0.51000 left=0.72000 right=0.42000
+  ADC quality=valid sample_age=0.020s receipt_age=0.015s
+  Last completed cycle=3 window=0.667s samples=13 historical=False
+  Cycle calibrated mean [V]: head=0.50000 left=0.70000 right=0.40000
+  Left-right delta [V]=+0.30000 normalized=+0.2727 threshold=0.1000
+  Direction=left last_decision=left command_bias=(+256.0/1024.0)
+```
+
+周期均值与控制判断使用同一批数据，不是 ADC 的 `volt_raw_mean_1s`，也不会因查看而重算或重置相位。
+偏置分子为当前实际输出偏置；分母为允许设置的偏置绝对值上限 `servo_range`（默认 1024），
+各模式使用同一上限。在线调整声学 `bias` 不会改变分母。
+停止时显示 `(+0.0/1024.0)`（默认配置）。
+首次进入跟踪尚未完成周期时显示 `unavailable` 和 `warmup`。
+停止后保留的周期结果标为 `historical=True`，当前方向为 `stopped`；
+手动／普通自动时为 `not_tracking`。`last_decision` 仅表示最近一次声学判断。
+声学功能未启用时，Share 仍可查看瞬时电压，方向为 `disabled`，不产生周期判断。
+无 ADC、校准回退、数据过期等情况会明确标出；瞬时回退电压不作为有效校准均值使用。
 
 ## 7. ROS 话题与参数
 

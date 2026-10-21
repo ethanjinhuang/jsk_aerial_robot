@@ -88,7 +88,7 @@ def main():
                     with lock:
                         values = dict(driving)
                     joy = Joy(axes=[0., 0., values['axis'], 1., 1.],
-                              buttons=[int(i == values['button']) for i in range(8)])
+                              buttons=[int(i == values['button']) for i in range(14)])
                     joy_pub.publish(joy)
                     if values['adc']:
                         stamp = rospy.Time.now()
@@ -123,6 +123,27 @@ def main():
                             return
                     time.sleep(.01)
                 raise AssertionError('target timeout; expected ' + str(value))
+
+            def share_report():
+                path = output / (name + '.log')
+                marker = 'Sonic status (Share):'
+                before = path.read_text().count(marker)
+                set_input(button=8)
+                deadline = time.monotonic() + 2.
+                while time.monotonic() < deadline:
+                    content = path.read_text()
+                    if content.count(marker) == before + 1:
+                        break
+                    if node.poll() is not None:
+                        raise RuntimeError('node exited during Share report; see ' + str(output))
+                    time.sleep(.01)
+                else:
+                    raise AssertionError('Share did not print status; see ' + str(output))
+                time.sleep(.12)
+                content = path.read_text()
+                assert content.count(marker) == before + 1, 'held Share printed repeatedly'
+                set_input(button=None)
+                return content.rsplit(marker, 1)[1]
 
             thread = threading.Thread(target=drive, daemon=True)
             try:
@@ -159,6 +180,11 @@ def main():
                 with lock:
                     updates = [s for _, s in states if s.decision_updated]
                 assert len(updates) == 1, updates
+                report = share_report()
+                assert 'ADC instant raw [V]: head=1.00000 left=2.00000 right=1.00000' in report
+                assert 'Cycle calibrated mean [V]: head=1.00000 left=2.00000 right=1.00000' in report
+                assert 'delta [V]=+1.00000 normalized=+0.3333' in report
+                assert 'Direction=left last_decision=left' in report
                 # Re-press Circle: keep tracking and the existing phase/window.
                 set_input(button=2)
                 time.sleep(.1)
@@ -187,6 +213,8 @@ def main():
                 set_input(button=1)
                 wait_state(lambda s: s.motion_mode == 'stopped' and s.status == 'stop_button')
                 wait_target(2048)
+                report = share_report()
+                assert 'historical=True' in report and 'Direction=stopped' in report
                 set_input(button=None)
                 time.sleep(.1)
                 set_input(button=2)
@@ -223,7 +251,7 @@ def main():
                 wait_state(lambda s: s.motion_mode == 'stopped' and s.status == 'stop_button')
                 print('PASS: f=%.1f Hz, W=1/f, one decision/cycle, polarity=%d, '
                       'Circle tracking, Triangle ordinary auto, Cross stop, '
-                      'live settings and fault recovery' % (frequency, polarity), flush=True)
+                      'Share snapshots, live settings and fault recovery' % (frequency, polarity), flush=True)
             finally:
                 finish.set()
                 if thread.is_alive(): thread.join(timeout=2)

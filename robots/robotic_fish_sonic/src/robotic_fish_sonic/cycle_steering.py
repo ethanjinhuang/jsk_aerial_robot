@@ -33,6 +33,7 @@ class CycleDecision:
     cycle: int
     start: float
     end: float
+    head_mean: float
     left_mean: float
     right_mean: float
     difference: float
@@ -148,7 +149,7 @@ class CycleSteering:
         self.clock_offset = offset
         self.last_sensor_stamp = self.latest_stamp = g['t']
         self.latest_time, self.latest_error = acquisition, ''
-        self.rows.append((acquisition, g['volts'][1], g['volts'][2]))
+        self.rows.append((acquisition, *g['volts']))
         while self.rows and acquisition - self.rows[0][0] > self.period + 2. * self.gap_s:
             self.rows.popleft()
         if len(self.rows) > 10000:
@@ -201,8 +202,7 @@ class CycleSteering:
         times = [start] + [row[0] for row in rows] + [end]
         if len(rows) < 2 or max(b - a for a, b in zip(times, times[1:])) > self.gap_s + 1e-9:
             raise SteeringFault('incomplete_cycle')
-        left = sum(row[1] / len(rows) for row in rows)
-        right = sum(row[2] / len(rows) for row in rows)
+        head, left, right = [sum(row[i] / len(rows) for row in rows) for i in (1, 2, 3)]
         if not math.isfinite(left + right):
             raise SteeringFault('invalid_signal_sum')
         if left + right < self.low_signal_v:
@@ -212,6 +212,6 @@ class CycleSteering:
             self.settings, self.pending = self.pending, None
         direction = 1 if difference > self.settings.threshold else -1 if difference < -self.settings.threshold else 0
         self.cycle = cycle
-        self.last_decision = CycleDecision(cycle, start, end, left, right, difference,
+        self.last_decision = CycleDecision(cycle, start, end, head, left, right, difference,
                                            direction * self.left_bias_sign * self.settings.bias, len(rows))
         return self.last_decision

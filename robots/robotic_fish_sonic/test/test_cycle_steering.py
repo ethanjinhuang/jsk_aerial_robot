@@ -6,9 +6,9 @@ import unittest
 from robotic_fish_sonic.cycle_steering import CycleSteering, SteeringFault
 
 
-def batch(t, left=2., right=1., **changes):
+def batch(t, left=2., right=1., head=1., **changes):
     samples = []
-    for channel, value in enumerate((1., left, right)):
+    for channel, value in enumerate((head, left, right)):
         data = dict(channel_id=channel, timestamp=NS(to_sec=lambda t=t: t),
                     volt_cali=value, status_cali=True, cali_id='test',
                     adc_code=100, status_dac_feedback=True, dac_volt=.9)
@@ -58,13 +58,15 @@ class CycleTests(unittest.TestCase):
         self.start(e)
         for i in range(1, 10):
             self.push(e, i * .05)
-        self.push(e, .5, left=1., right=3.)
+        self.push(e, .5, left=1., right=3., head=4.)
         first = e.evaluate(100.5)
+        self.assertAlmostEqual(first.head_mean, 1.)
         self.assertAlmostEqual(first.left_mean, 2.)
         self.assertAlmostEqual(first.right_mean, 1.)
         self.assertEqual(first.sample_count, 10)
         self.fill(e, .5, 1., left=1., right=3.)
         second = e.evaluate(101.)
+        self.assertAlmostEqual(second.head_mean, 1.3)
         self.assertAlmostEqual(second.left_mean, 1.)
         self.assertAlmostEqual(second.right_mean, 3.)
         self.assertEqual(second.sample_count, 10)

@@ -14,8 +14,8 @@ sys.path.insert(0, str(ROOT.parent / 'robotic_fish_sonic' / 'src'))
 from robotic_fish.sonic_motion import SonicController, SonicMotion
 
 
-def joy(steering=0., pressed=(), decrease=1., increase=1.):
-    buttons = [int(i in pressed) for i in range(8)]
+def joy(steering=0., pressed=(), decrease=1., increase=1., button_count=8):
+    buttons = [int(i in pressed) for i in range(button_count)]
     return [0., 0., steering, decrease, increase], buttons
 
 
@@ -330,7 +330,12 @@ class RosAdapterTests(unittest.TestCase):
 
     def test_invalid_config_fails_before_publisher(self):
         for params in [{'~update_rate': 0}, {'~update_rate': 4}, {'~update_rate': True},
-                       {'~servo_cmd': []}, {'~servo_cmd': [float('nan')]}, {'~servo_cmd': [5000]}]:
+                       {'~servo_cmd': []}, {'~servo_cmd': [float('nan')]}, {'~servo_cmd': [5000]},
+                       *[{'~status_button': value} for value in (-1, True, 1.5, 0, 1, 2, 3, 6)],
+                       {'~acoustic_steering/max_age_s': 0},
+                       {'~acoustic_steering/max_age_s': True},
+                       {'~acoustic_steering/future_tolerance_s': False},
+                       {'~acoustic_steering/future_tolerance_s': -1}]:
             with self.subTest(params=params):
                 module, ros, _, _ = self.make_node(params)
                 with self.assertRaises(ValueError):
@@ -345,6 +350,7 @@ class RosAdapterTests(unittest.TestCase):
 
     def adc(self, t):
         return NS(samples=[NS(channel_id=i,timestamp=NS(to_sec=lambda:t),volt_cali=value,
+                              volt_raw=value*.5,
                               status_cali=True,cali_id='test',adc_code=100,
                               status_dac_feedback=True,dac_volt=.9)
                            for i,value in enumerate((1.,2.,1.))])
@@ -407,6 +413,101 @@ class RosAdapterTests(unittest.TestCase):
         node._adcCallback(NS(samples=[]))
         node._controlLoop()
         self.assertEqual((node.controller.mode,node.controller.reason),('auto','auto_button'))
+
+    def send_status_joy(self, node, pressed=(), **kwargs):
+        axes, buttons = joy(pressed=pressed, button_count=14, **kwargs)
+        node._joyCallback(NS(axes=axes, buttons=buttons))
+        node._controlLoop()
+
+    def status_reports(self, ros):
+        return [call.args[1] for call in ros.loginfo.call_args_list if call.args[0] == '%s']
+
+    def test_share_reports_actual_cycle_means_once_per_press_without_changing_gait(self):
+        module, ros, clock, published = self.make_node({'~acoustic_steering/enabled': True})
+        with patch.dict(sys.modules, module._mock_modules):
+            node = module.Teleop()
+        node._adcCallback(self.adc(0.))
+        self.send_status_joy(node, (2,))
+        for i in range(1, 11):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            self.send_status_joy(node)
+        epoch, cycle = node.controller.auto_epoch, node.acoustic.cycle
+        clock[0] = .52
+        newest = self.adc(.52)
+        newest.samples[0].volt_cali = 4.
+        node._adcCallback(newest)
+        self.send_status_joy(node, (8,))
+        report = self.status_reports(ros)[-1]
+        self.assertIn('ADC instant calibrated/fallback [V]: head=4.00000 left=2.00000 right=1.00000', report)
+        self.assertIn('Cycle calibrated mean [V]: head=1.00000 left=2.00000 right=1.00000', report)
+        self.assertIn('delta [V]=+1.00000 normalized=+0.3333', report)
+        self.assertIn('Direction=left last_decision=left command_bias=(+256.0/1024.0)', report)
+        self.send_status_joy(node, (8,))
+        self.assertEqual(len(self.status_reports(ros)), 1)
+        self.assertEqual((node.controller.auto_epoch, node.acoustic.cycle), (epoch, cycle))
+        self.send_status_joy(node)
+        self.send_status_joy(node, (8,))
+        self.assertEqual(len(self.status_reports(ros)), 2)
+        self.send_status_joy(node)
+        self.send_status_joy(node, (1, 8))
+        report = self.status_reports(ros)[-1]
+        self.assertIn('historical=True', report)
+        self.assertIn('Direction=stopped last_decision=left command_bias=(+0.0/1024.0)', report)
+        self.assertEqual(published[-1].cmd, [2048])
+
+    def test_share_works_with_tracking_disabled_and_marks_missing_or_stale_data(self):
+        module, ros, clock, _ = self.make_node()
+        node = module.Teleop()
+        self.send_status_joy(node, (8,))
+        self.assertIn('unavailable (no ADC data)', self.status_reports(ros)[-1])
+        self.assertIn('Direction=disabled', self.status_reports(ros)[-1])
+        self.assertIn('command_bias=(+0.0/1024.0)', self.status_reports(ros)[-1])
+        clock[0] = .1
+        frame = self.adc(.1)
+        frame.samples.reverse()
+        node._adcCallback(frame)
+        self.send_status_joy(node)
+        self.send_status_joy(node, (8,))
+        report = self.status_reports(ros)[-1]
+        self.assertIn('ADC instant raw [V]: head=0.50000 left=1.00000 right=0.50000', report)
+        self.assertIn('ADC quality=valid', report)
+        self.assertIn('no completed tracking cycle', report)
+        clock[0] = .4
+        self.send_status_joy(node)
+        self.send_status_joy(node, (8,))
+        self.assertIn('ADC quality=stale_sample', self.status_reports(ros)[-1])
+        self.assertEqual(node.controller.mode, 'manual')
+        node._shutdown()
+        self.assertIsNone(node.acoustic)
+
+    def test_share_marks_warmup_and_invalid_calibration_without_fabricating_means(self):
+        module, ros, clock, _ = self.make_node({'~acoustic_steering/enabled': True})
+        with patch.dict(sys.modules, module._mock_modules):
+            node = module.Teleop()
+        node._adcCallback(self.adc(0.))
+        self.send_status_joy(node, (2, 8))
+        self.assertIn('Direction=warmup', self.status_reports(ros)[-1])
+        self.assertIn('no completed tracking cycle', self.status_reports(ros)[-1])
+        clock[0] = .05
+        bad = self.adc(.05)
+        bad.samples[1].status_cali = False
+        node._adcCallback(bad)
+        self.send_status_joy(node)
+        self.send_status_joy(node, (8,))
+        report = self.status_reports(ros)[-1]
+        self.assertIn('ADC quality=calibration_fallback', report)
+        self.assertIn('Direction=stopped last_decision=unavailable', report)
+
+    def test_share_can_be_remapped_and_handles_incomplete_adc_groups(self):
+        module, ros, _, _ = self.make_node({'~status_button': 10})
+        node = module.Teleop()
+        self.send_status_joy(node, (8,))
+        self.assertEqual(self.status_reports(ros), [])
+        node._adcCallback(NS(samples=[]))
+        self.send_status_joy(node, (10,))
+        self.assertIn('expected channels 0,1,2', self.status_reports(ros)[-1])
+        self.assertEqual(node.controller.mode, 'manual')
 
 
 if __name__ == '__main__':
