@@ -26,6 +26,7 @@ class SteeringFault(ValueError):
 class SteeringSettings:
     threshold: float
     bias: float
+    lr_offset: float
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,8 @@ class CycleDecision:
     difference: float
     bias: float
     sample_count: int
+    lr_offset: float
+    compensated_difference: float
 
 
 class CycleSteering:
@@ -53,7 +56,7 @@ class CycleSteering:
     """
     def __init__(self, frequency, max_bias=1024., threshold=.1, bias=256.,
                  left_bias_sign=1, gap_s=.2, max_age_s=.2,
-                 future_tolerance_s=.05, low_signal_v=.001):
+                 future_tolerance_s=.05, low_signal_v=.001, lr_offset=0.):
         self.max_bias = number(max_bias, 'max_bias')
         self.gap_s = number(gap_s, 'gap_s')
         self.max_age_s = number(max_age_s, 'max_age_s')
@@ -64,7 +67,7 @@ class CycleSteering:
         if isinstance(left_bias_sign, bool) or left_bias_sign not in (-1, 1):
             raise ValueError('left_bias_sign must be -1 or 1')
         self.left_bias_sign = int(left_bias_sign)
-        self.settings = self._settings(threshold, bias)
+        self.settings = self._settings(threshold, bias, lr_offset)
         self.pending = None
         self._set_frequency(frequency)
         self.rows = deque()
@@ -83,15 +86,18 @@ class CycleSteering:
     def gain_warmup(self):
         return self.waiting_status == 'gain_warmup'
 
-    def _settings(self, threshold, bias):
+    def _settings(self, threshold, bias, lr_offset):
         threshold, bias = number(threshold, 'threshold'), number(bias, 'bias')
+        lr_offset = number(lr_offset, 'lr_offset')
         if not 0 <= threshold <= 1 or not 0 <= bias <= self.max_bias:
             raise ValueError('threshold must be in [0,1] and bias in [0,max_bias]')
-        return SteeringSettings(threshold, bias)
+        if not -1 <= lr_offset <= 1:
+            raise ValueError('lr_offset must be in [-1,1]')
+        return SteeringSettings(threshold, bias, lr_offset)
 
-    def configure(self, threshold, bias):
-        """Validate the complete pair now; apply it at the next valid decision."""
-        self.pending = self._settings(threshold, bias)
+    def configure(self, threshold, bias, lr_offset):
+        """Validate the entire triplet now; apply it at the next valid decision."""
+        self.pending = self._settings(threshold, bias, lr_offset)
 
     def _set_frequency(self, frequency):
         frequency = number(frequency, 'frequency')
@@ -247,7 +253,7 @@ class CycleSteering:
         times = [start] + [row[0] for row in rows] + [end]
         if len(rows) < 2 or max(b - a for a, b in zip(times, times[1:])) > self.gap_s + 1e-9:
             raise SteeringFault('incomplete_cycle')
-        head, left, right = [sum(row[i] / len(rows) for row in rows) for i in (1, 2, 3)]
+        head, left, right = [math.fsum(row[i] / len(rows) for row in rows) for i in (1, 2, 3)]
         if not math.isfinite(left + right):
             raise SteeringFault('invalid_signal_sum')
         if left + right < self.low_signal_v:
@@ -255,9 +261,11 @@ class CycleSteering:
         difference = (left - right) / (left + right)
         if self.pending is not None:
             self.settings, self.pending = self.pending, None
-        direction = 1 if difference > self.settings.threshold else -1 if difference < -self.settings.threshold else 0
+        compensated = difference - self.settings.lr_offset
+        direction = 1 if compensated > self.settings.threshold else -1 if compensated < -self.settings.threshold else 0
         self.cycle = cycle
         self.last_decision = CycleDecision(cycle, start, end, head, left, right, difference,
-                                           direction * self.left_bias_sign * self.settings.bias, len(rows))
+                                           direction * self.left_bias_sign * self.settings.bias, len(rows),
+                                           self.settings.lr_offset, compensated)
         self.waiting_status, self._stable_since = '', None
         return self.last_decision

@@ -292,7 +292,7 @@ class RosAdapterTests(unittest.TestCase):
                       Publisher=Mock(return_value=NS(publish=published.append)),
                       Subscriber=Mock(return_value=NS(unregister=lambda: None)), on_shutdown=Mock(),
                       loginfo=Mock(), logwarn=Mock(), logdebug=Mock(), ROSException=RuntimeError,
-                      Service=Mock(return_value=NS(shutdown=Mock())))
+                      Service=Mock(side_effect=lambda *args, **kwargs: NS(shutdown=Mock())))
         fake_ros.published = published
         modules = {'rospy': fake_ros, 'sensor_msgs.msg': NS(Joy=object),
                    'std_msgs.msg': NS(String=lambda data:NS(data=data)),
@@ -373,8 +373,8 @@ class RosAdapterTests(unittest.TestCase):
             node._controlLoop()
             if i<10:self.assertEqual(node.controller.applied_bias,0.)
         self.assertEqual((node.controller.mode,node.controller.applied_bias),('tracking',256.))
-        self.assertTrue(node._setAcousticSteering(NS(threshold=.7,bias=128.)).success)
-        self.assertFalse(node._setAcousticSteering(NS(threshold=.2,bias=1025.)).success)
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.7,bias=128.,lr_offset=0.)).success)
+        self.assertFalse(node._setAcousticSteering(NS(threshold=.2,bias=1025.,lr_offset=0.)).success)
         self.assertEqual(node.acoustic.settings.bias,256.)
         for i in range(11,21):
             clock[0]=i*.05
@@ -388,7 +388,48 @@ class RosAdapterTests(unittest.TestCase):
         self.assertEqual((node.controller.mode,node.controller.reason),('stopped','acoustic_adc_timeout'))
         self.assertTrue(any(getattr(msg,'cmd',[])==[2048] for msg in published))
         node._shutdown()
-        ros.Service.return_value.shutdown.assert_called_once()
+        node.settings_service.shutdown.assert_called_once()
+
+    def test_three_field_service_changes_judgment_and_snapshot_at_next_cycle(self):
+        module, ros, clock, published = self.make_node({'~acoustic_steering/enabled': True,
+                                                       '~acoustic_steering/lr_offset': .1})
+        with patch.dict(sys.modules, module._mock_modules):
+            node = module.Teleop()
+        node._adcCallback(self.adc(0.))
+        self.send_status_joy(node, (2,))
+        for i in range(1, 11):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            self.send_status_joy(node)
+        previous = node.acoustic.last_decision
+        self.assertEqual(ros.Service.call_count, 1)
+        self.assertTrue(node._setAcousticSteering(NS(threshold=.1, bias=128., lr_offset=.5)).success)
+        pending = node.acoustic.pending
+        self.assertFalse(node._setAcousticSteering(NS(threshold=.8, bias=64., lr_offset=float('nan'))).success)
+        self.assertIs(node.acoustic.pending, pending)
+        self.send_status_joy(node, (8,))
+        self.assertIn('+0.1000', self.status_reports(ros)[-1])
+        self.assertIs(node.acoustic.last_decision, previous)
+        for i in range(11, 21):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            self.send_status_joy(node)
+        self.send_status_joy(node, (8,))
+        report = self.status_reports(ros)[-1]
+        self.assertRegex(report, r'Normalized raw\s*:\s*\+0.3333')
+        self.assertRegex(report, r'LR offset\s*:\s*\+0.5000')
+        self.assertRegex(report, r'Compensated / T\s*:\s*-0.1667 / 0.1000')
+        self.assertRegex(report, r'Direction\s*:\s*RIGHT')
+        self.assertEqual(node.controller.applied_bias, -128.)
+        state = [m for m in published if hasattr(m, 'normalized_difference')][-1]
+        self.assertAlmostEqual(state.normalized_difference, 1 / 3)
+        self.assertAlmostEqual(state.compensated_difference, -1 / 6)
+        self.assertEqual(state.lr_offset, .5)
+        self.assertEqual(node.controller.auto_epoch, 0.)
+        self.send_status_joy(node, (1, 8))
+        self.assertEqual(node.controller.mode, 'stopped')
+        node._shutdown()
+        self.assertFalse(node._setAcousticSteering(NS(threshold=.1, bias=128., lr_offset=0.)).success)
 
     def test_acoustic_missing_data_cannot_start_tracking_but_manual_works(self):
         module,_,clock,_=self.make_node({'~acoustic_steering/enabled':True})
@@ -553,7 +594,7 @@ class RosAdapterTests(unittest.TestCase):
         self.assertRegex(report, r'Calibrated / fallback\s*\|\s*4.00000\s*\|\s*2.00000\s*\|\s*1.00000')
         self.assertRegex(report, r'Previous cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000')
         self.assertRegex(report, r'L-R \[V\]\s*:\s*\+1.00000')
-        self.assertRegex(report, r'Normalized / T\s*:\s*\+0.3333 / 0.1000')
+        self.assertRegex(report, r'Compensated / T\s*:\s*\+0.3333 / 0.1000')
         self.assertRegex(report, r'Direction\s*:\s*LEFT')
         self.assertIn('(+256.0/1024.0)', report)
         self.assertNotIn('\033[', report)

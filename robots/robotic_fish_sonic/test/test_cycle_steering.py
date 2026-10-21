@@ -87,22 +87,100 @@ class CycleTests(unittest.TestCase):
         e.begin(100., 2., 100.)
         self.fill(e, left=3.)
         self.assertEqual(e.evaluate(100.5).bias, 0.)
-        e.configure(.1, 128.)
+        e.configure(.1, 128., 0.)
         self.fill(e, .5, 1., left=3.)
         self.assertEqual(e.evaluate(101.).bias, -128.)
 
     def test_atomic_parameters_apply_at_boundary(self):
         e = CycleSteering(2.)
         self.start(e)
-        e.configure(.6, 100.)
+        e.configure(.6, 100., 0.)
         self.assertEqual(e.settings.bias, 256.)
         with self.assertRaises(ValueError):
-            e.configure(.1, 2048.)
+            e.configure(.1, 2048., 0.)
         self.assertEqual((e.pending.threshold,e.pending.bias), (.6,100.))
         self.fill(e)
         result=e.evaluate(100.5)
         self.assertEqual((result.bias,e.settings.bias), (0.,100.))
         self.assertIsNone(e.pending)
+
+    def test_compensation_shifts_the_decision_without_changing_measured_means(self):
+        cases = [(3., 1., .5, .1, 0.), (3., 1., .25, .1, 128.),
+                 (3., 1., .75, .1, -128.), (1., 3., -.5, .1, 0.),
+                 (1., 3., -.75, .1, 128.), (1., 3., -.25, .1, -128.),
+                 (3., 1., .25, .25, 0.), (3., 1., .75, .25, 0.)]
+        for left, right, offset, threshold, bias in cases:
+            for polarity in (-1, 1):
+                with self.subTest(left=left, offset=offset, polarity=polarity):
+                    e = CycleSteering(2., threshold=threshold, bias=128., lr_offset=offset,
+                                      left_bias_sign=polarity)
+                    self.push(e, 0., left=left, right=right)
+                    e.begin(100., 2., 100.)
+                    self.fill(e, left=left, right=right)
+                    result = e.evaluate(100.5)
+                    self.assertAlmostEqual(result.left_mean, left)
+                    self.assertAlmostEqual(result.right_mean, right)
+                    self.assertAlmostEqual(result.difference, (left - right) / (left + right))
+                    self.assertAlmostEqual(result.compensated_difference, result.difference - offset)
+                    self.assertEqual(result.lr_offset, offset)
+                    self.assertEqual(result.bias, polarity * bias)
+
+    def test_compensation_is_unchanged_by_common_voltage_scaling(self):
+        for scale in (.1, 1., 2.):
+            e = CycleSteering(2., lr_offset=.5)
+            self.push(e, 0., left=3. * scale, right=scale)
+            e.begin(100., 2., 100.)
+            self.fill(e, left=3. * scale, right=scale)
+            result = e.evaluate(100.5)
+            self.assertAlmostEqual(result.compensated_difference, 0.)
+            self.assertEqual(result.bias, 0.)
+
+    def test_three_settings_are_validated_and_applied_as_one_update(self):
+        e = CycleSteering(2., lr_offset=.1)
+        self.start(e)
+        e.configure(.1, 128., .5)
+        self.assertEqual((e.settings.threshold, e.settings.bias, e.settings.lr_offset), (.1, 256., .1))
+        self.assertEqual((e.pending.threshold, e.pending.bias, e.pending.lr_offset), (.1, 128., .5))
+        pending = e.pending
+        for value in (-1.01, 1.01, float('nan'), float('inf'), True):
+            with self.assertRaises(ValueError):
+                e.configure(.2, 64., value)
+            self.assertIs(e.pending, pending)
+            with self.assertRaises(ValueError):
+                CycleSteering(2., lr_offset=value)
+        for threshold, bias in [(-1., 64.), (.2, 2048.)]:
+            with self.assertRaises(ValueError):
+                e.configure(threshold, bias, -.25)
+            self.assertIs(e.pending, pending)
+        self.fill(e)
+        self.assertEqual(e.evaluate(100.5).bias, -128.)
+        self.assertEqual(e.settings, pending)
+        self.assertIsNone(e.pending)
+        e.configure(.2, 64., -.25)
+        self.fill(e, .5, 1.)
+        self.assertEqual(e.evaluate(101.).bias, 64.)
+        self.assertEqual((e.settings.threshold, e.settings.bias, e.settings.lr_offset), (.2, 64., -.25))
+
+    def test_compensation_waits_through_quality_hold_without_rewriting_old_decision(self):
+        e = CycleSteering(2.)
+        self.start(e)
+        self.fill(e)
+        previous = e.evaluate(100.5)
+        e.configure(.1, 256., .75)
+        for i in range(11, 22):
+            t = i * .05
+            self.push(e, t, status_cali=False, cali_id='')
+            self.assertIsNone(e.evaluate(100. + t))
+            self.assertEqual(e.settings.lr_offset, 0.)
+            self.assertIs(e.last_decision, previous)
+            self.assertEqual(previous.lr_offset, 0.)
+        for i in range(22, 41):
+            t = i * .05
+            self.push(e, t)
+            result = e.evaluate(100. + t)
+            if i < 40:
+                self.assertIsNone(result)
+        self.assertEqual((e.epoch, result.cycle, result.lr_offset, result.bias), (100., 4, .75, -256.))
 
     def test_missing_adc_and_timeouts(self):
         e = CycleSteering(2.)
@@ -155,7 +233,7 @@ class CycleTests(unittest.TestCase):
         self.start(e)
         self.fill(e)
         previous = e.evaluate(100.5)
-        e.configure(.1, 128.)
+        e.configure(.1, 128., 0.)
         self.push(e, .55, left=1., right=3., dac_volt=1.)
         for i in range(12, 30):
             t = i * .05
@@ -263,7 +341,7 @@ class CycleTests(unittest.TestCase):
                 self.start(e)
                 self.fill(e)
                 previous = e.evaluate(100.5)
-                e.configure(.1, 128.)
+                e.configure(.1, 128., 0.)
                 for i in range(11, 31):
                     t = i * .05
                     self.assertTrue(self.push(e, t, left=0., right=0., **changes))

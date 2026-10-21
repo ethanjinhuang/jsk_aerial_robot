@@ -78,7 +78,7 @@ roslaunch robotic_fish record.launch
 
 - `config/io.yaml`：ADC、校准表、DAC、增益及保护参数。
 - `config/acoustic.yaml`：声学节点私有参数，默认历史窗口 0.5 秒、
-  最大间隔 0.2 秒、低电压数值阈值 0.001 V。
+  最大间隔 0.2 秒、低电压数值阈值 0.001 V，以及未来时间戳容差 0.05 秒。
 - `config/calibration/`：保留的三份独立通道校准表。
 - `config/udev/`：DAC 设备规则；spinal 当前路径为
   `/dev/robotic_fish_spinal`，现场需核实对应规则。
@@ -99,6 +99,10 @@ rostopic echo /robotic_fish/acoustic/channel_comparison
 `status` 和 `sample_stamp`；保留旧结果时采集时间不刷新。
 `reliable` 是软件质量标记，不是经过实验验证的测向准确性。
 测试目录的合成模型不能用于真实方向判断。
+固定窗口比较会拒绝超过 `future_tolerance_s` 的未来采样组，保留旧结果和原时间戳，
+标记 `INVALID_INPUT`；心跳发现 ROS 时间回退也会清空窗口并标记 `TIME_RESET`。
+两种情况都需要重新积累有效数据完成预热，才会恢复 `reliable=true`。
+此处时间容差可在声学 YAML 中设置，周期趋声控制仍使用其独立的时间检查。
 
 ## 按摆尾周期进行左右趋声控制
 
@@ -111,6 +115,8 @@ rostopic echo /robotic_fish/acoustic/channel_comparison
 每次同方向过零时读取上一完整 `1/f` 周期的校准 ADC 数据，比较左右
 电压均值，选取 `-C/0/+C`，保持一周期。该路径直接使用 ADC 数据，
 不经过 `quadrant_node` 的固定窗口，不需要方向训练模型。
+归一化差值判据支持 `d_corrected=(L-R)/(L+R)-lr_offset`，补偿初值为零。
+补偿只平移判断基线，原始电压和归一化差值保持原值；Share 同时显示补偿前后结果。
 输入应为整流／检波后的包络或幅值电压；当前硬件前端已由用户确认符合此条件。
 周期均值表示平均响应幅值，不是物理声强，也不能直接用于原始交流声波电压。
 跟踪中调整已确认的 DAC 增益不再停止运动：保持摆尾相位和上一偏置，清空旧窗口，
@@ -129,11 +135,15 @@ rostopic echo /robotic_fish/acoustic/channel_comparison
 
 新增接口：
 
-- `srv/SetAcousticSteering`：将阈值和转向偏置作为一组验证、暂存，在下一有效周期生效。
+- `srv/SetAcousticSteering`：统一接收 `threshold`、`bias` 和 `lr_offset`，
+  三项整组验证、暂存，在下一有效周期一起生效；补偿范围 `[-1,1]`，无单位。
 - `msg/AcousticSteeringState`：记录周期窗口、方向差值、偏置、参数及模式状态。
 - `/robotic_fish/acoustic/steering_state`：启用功能后的运行状态，可随 bag 记录。
 
 目前摆频由启动参数指定，窗口自动取倒数；更换摆频后重启并重新积累完整周期。
+补偿可通过运动 launch 的 `acoustic_lr_offset` 设置初值，运行时调用
+`/sonic_teleop_node/set_acoustic_steering` 并填写三项；具体命令见运动包说明。
+本次扩展了周期状态消息和原服务请求，两端需重新编译并 source 两包后重启相关节点。
 不会在运动底层加入通用偏置限速。验证边界见
 [周期趋声验证记录](docs/cycle_steering_validation.md)。
 
@@ -162,8 +172,9 @@ python3 robots/robotic_fish_sonic/test/bag_compatibility.py
 通信测试使用独立本机 master（端口 11427）和合成数据，不启动硬件节点；
 该端口须空闲。bag 测试在临时目录生成旧／新类型的合成数据。
 
-原有固定窗口算法保持不变，其未来时间戳可靠性检查缺口仍待处理。
-新的周期趋声路径单独检查采样年龄和未来时间戳，不依赖该固定窗口的可靠性标记。
+增益模式切换和保护复位与 DAC 指令串行执行：服务返回成功时，之前的在途指令已经完成。
+切换为 `off` 后不再进行普通增益调整，原始 ADC 过压保护仍可降低增益。
+DAC 指令超时保护在获得串口执行锁后检查最新指令时间，默认仍为关闭。
 运动节点已提供手柄超时和停止锁存，周期趋声控制尚未验证真实水中趋声效果。
 
 详细 IO 行为见 [IO参考](docs/io_reference.md)。原声学验证记录作为

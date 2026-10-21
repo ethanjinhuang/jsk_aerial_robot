@@ -207,6 +207,8 @@ def main():
                 assert abs(state.window_s - 1. / frequency) < 1e-9
                 assert abs((state.window_end - state.window_start).to_sec() - 1. / frequency) < 1e-6
                 assert abs(state.normalized_difference - 1 / 3) < 1e-9
+                assert state.lr_offset == 0.
+                assert abs(state.compensated_difference - 1 / 3) < 1e-9
                 assert state.command_bias == polarity * 128.
                 with lock:
                     updates = [s for _, s in states if s.decision_updated]
@@ -215,7 +217,8 @@ def main():
                 assert re.search(r'Raw instant\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
                 assert re.search(r'Previous cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
                 assert re.search(r'L-R \[V\]\s*:\s*\+1.00000', report)
-                assert re.search(r'Normalized / T\s*:\s*\+0.3333 / 0.1000', report)
+                assert re.search(r'Normalized raw\s*:\s*\+0.3333', report)
+                assert re.search(r'Compensated / T\s*:\s*\+0.3333 / 0.1000', report)
                 assert re.search(r'Direction\s*:\s*LEFT', report)
                 assert set(map(len, report.splitlines())) == {78}
                 # Re-press Circle: keep tracking and the existing phase/window.
@@ -227,13 +230,43 @@ def main():
                 set_input(button=None)
                 rospy.wait_for_service('/' + name + '/set_acoustic_steering', timeout=3)
                 configure = rospy.ServiceProxy('/' + name + '/set_acoustic_steering', SetAcousticSteering)
-                assert not configure(-1., 64.).success
-                assert configure(.6, 64.).success
+                assert not configure(-1., 64., 0.).success
+                assert configure(.6, 64., 0.).success
                 wait_state(lambda s: s.parameters_pending)
                 state = wait_state(lambda s: s.cycle_index >= 2 and not s.parameters_pending)
                 assert state.command_bias == 0. and state.turn_bias == 64.
-                assert configure(.1, 64.).success
+                assert configure(.1, 64., 0.).success
                 state = wait_state(lambda s: s.cycle_index >= 3 and s.command_bias == polarity * 64.)
+                previous_end = state.window_end
+                assert not configure(.15, 96., 1.01).success
+                request_time = rospy.Time.now()
+                command = subprocess.run(
+                    ['rosservice', 'call', '/' + name + '/set_acoustic_steering',
+                     '{threshold: 0.15, bias: 96.0, lr_offset: 0.5}'],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=5)
+                assert command.returncode == 0 and 'success: True' in command.stdout, command.stdout
+                state = wait_state(lambda s: s.lr_offset == .5 and s.command_bias == -polarity * 96.)
+                assert (state.threshold, state.turn_bias, state.lr_offset) == (.15, 96., .5)
+                with lock:
+                    settings = {(s.threshold, s.turn_bias, s.lr_offset)
+                                for _, s in states if s.header.stamp >= request_time}
+                assert settings <= {(.1, 64., 0.), (.15, 96., .5)}, settings
+                assert abs(state.normalized_difference - 1 / 3) < 1e-9
+                assert abs(state.compensated_difference + 1 / 6) < 1e-9
+                phase_cycles = (state.window_end - previous_end).to_sec() * frequency
+                assert abs(phase_cycles - round(phase_cycles)) < 1e-6
+                report = share_report()
+                assert re.search(r'Normalized raw\s*:\s*\+0.3333', report)
+                assert re.search(r'LR offset\s*:\s*\+0.5000', report)
+                assert re.search(r'Compensated / T\s*:\s*-0.1667 / 0.1500', report)
+                assert re.search(r'Direction\s*:\s*RIGHT', report)
+                previous_cycle = state.cycle_index
+                assert configure(.1, 64., .5).success
+                state = wait_state(lambda s: s.cycle_index > previous_cycle and not s.parameters_pending
+                                   and (s.threshold, s.turn_bias, s.lr_offset) == (.1, 64., .5))
+                assert state.lr_offset == .5 and state.command_bias == -polarity * 64.
+                assert configure(.1, 64., 0.).success
+                wait_state(lambda s: s.lr_offset == 0. and s.command_bias == polarity * 64.)
                 set_input(left=1., right=3.)
                 wait_state(lambda s: s.command_bias == -polarity * 64. and s.status == 'active')
                 with lock:
@@ -336,7 +369,7 @@ def main():
                       'Circle tracking, Triangle ordinary auto, Cross stop, '
                       'gain adjustment and unusable quality hold without stopping, '
                       'remote aligned/color Share snapshots, '
-                      'live settings and fault recovery' % (frequency, polarity), flush=True)
+                      'live normalized compensation, settings and fault recovery' % (frequency, polarity), flush=True)
             finally:
                 finish.set()
                 if thread.is_alive(): thread.join(timeout=2)

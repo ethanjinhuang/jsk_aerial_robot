@@ -36,7 +36,9 @@ def main():
         from quadrant_node import Node
         rospy.init_node('quadrant_smoke', disable_signals=True)
         rospy.set_param('~model', str(ROOT / 'test/fixture_model.json'))
+        rospy.set_param('~future_tolerance_s', .025)
         node = Node()
+        assert node.engine.future_tolerance_s == .025
         received = []
         diagnostics = []
         comparisons = []
@@ -100,6 +102,34 @@ def main():
         assert any(c.reliable and c.updated for c in comparisons)
         print('PASS: model-free numeric comparisons, stale timestamps, reliable calibrated window')
         print('PASS: missing model keeps probabilities unavailable and publishes actionable diagnostics')
+        previous = [c for c in comparisons if c.updated][-1]
+        before = len(comparisons)
+        for sample in message.samples:
+            sample.timestamp = rospy.Time.now() + rospy.Duration(5.)
+        pub.publish(message)
+        deadline = time.monotonic() + 3.
+        while not any(c.status & Status.INVALID_INPUT for c in comparisons[before:]):
+            if time.monotonic() > deadline:
+                raise RuntimeError('future frame was not rejected')
+            time.sleep(.01)
+        rejected = comparisons[-1]
+        assert not rejected.reliable and not rejected.updated
+        assert rejected.sample_stamp == previous.sample_stamp
+        time.sleep(.12)
+        assert comparisons[-1].status & Status.INVALID_INPUT
+        assert not comparisons[-1].reliable
+        recovery_start = len(comparisons)
+        for _ in range(12):
+            for sample in message.samples:
+                sample.timestamp = rospy.Time.now()
+            pub.publish(message)
+            time.sleep(.05)
+        deadline = time.monotonic() + 3.
+        while not any(c.reliable and c.updated for c in comparisons[recovery_start:]):
+            if time.monotonic() > deadline:
+                raise RuntimeError('comparison did not recover after a fresh window')
+            time.sleep(.01)
+        print('PASS: future input holds original stamp, stays unreliable on heartbeat, then rebuilds a reliable window')
         comparison_sub.unregister()
         diagnostic_sub.unregister()
         sub.unregister()

@@ -53,7 +53,10 @@ def format_status(data):
         row('Cycle', '#%d %s; W=%.3f s; N=%d' %
             (data['cycle'], 'HISTORICAL' if data['historical'] else 'CURRENT', data['window'], data['count']))
     row('L-R [V]', numeric(data['delta'], 5, True))
-    row('Normalized / T', '%s / %s' % (numeric(data['difference'], 4, True), numeric(data['threshold'], 4)))
+    row('Normalized raw', numeric(data['difference'], 4, True))
+    row('LR offset', numeric(data['lr_offset'], 4, True))
+    row('Compensated / T', '%s / %s' % (numeric(data['compensated_difference'], 4, True),
+                                        numeric(data['threshold'], 4)))
     row('Last decision', data['judged'].upper())
     lines.append(border)
     return '\n'.join(lines)

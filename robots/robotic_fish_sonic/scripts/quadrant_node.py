@@ -14,7 +14,8 @@ class Node:
         self.engine = Estimator(Model(path) if path else None,
                                 rospy.get_param('~window_s', .5),
                                 rospy.get_param('~gap_s', .2),
-                                rospy.get_param('~low_signal_v', .001))
+                                rospy.get_param('~low_signal_v', .001),
+                                rospy.get_param('~future_tolerance_s', .05))
         self.lock = threading.Lock()
         self.pub = rospy.Publisher('~probabilities', QuadrantProbabilities, queue_size=20)
         self.comparison_pub = rospy.Publisher('~comparison', ChannelComparison, queue_size=20)

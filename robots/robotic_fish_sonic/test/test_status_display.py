@@ -15,7 +15,8 @@ def snapshot(**changes):
                 direction='left', bias=128., bias_limit=1024., raw=(.5, .7, .4),
                 calibrated=(.51, .72, .42), means=(.5, .7, .4), quality='valid',
                 sample_age=.02, receipt_age=.015, cycle=3, historical=False,
-                window=2/3, count=13, delta=.3, difference=3/11, threshold=.1, judged='left')
+                window=2/3, count=13, delta=.3, difference=3/11, lr_offset=0.,
+                compensated_difference=3/11, threshold=.1, judged='left')
     data.update(changes)
     return data
 
@@ -38,6 +39,15 @@ class DisplayTests(unittest.TestCase):
         self.assertIn('(+128.0/1024.0)', plain)
         self.assertNotIn('\033[', plain)
 
+    def test_compensation_is_visible_without_replacing_raw_differences(self):
+        plain = format_status(snapshot(lr_offset=.3, compensated_difference=-.0272727,
+                                        direction='straight', judged='straight'))
+        self.assertEqual(set(map(len, plain.splitlines())), {78})
+        self.assertRegex(plain, r'L-R \[V\]\s*:\s*\+0.30000')
+        self.assertRegex(plain, r'Normalized raw\s*:\s*\+0.2727')
+        self.assertRegex(plain, r'LR offset\s*:\s*\+0.3000')
+        self.assertRegex(plain, r'Compensated / T\s*:\s*-0.0273 / 0.1000')
+
     def test_long_quality_and_reason_wrap_inside_table(self):
         plain = format_status(snapshot(reason='fault_' * 40,
                                        quality='calibration_fallback|gain_unknown|' * 8))
@@ -46,7 +56,8 @@ class DisplayTests(unittest.TestCase):
 
     def test_unavailable_values_and_historical_direction_are_explicit(self):
         plain = format_status(snapshot(raw=None, calibrated=None, means=None, quality='no_data',
-                                       direction='warmup', delta=None, difference=None))
+                                       direction='warmup', delta=None, difference=None,
+                                       compensated_difference=None))
         self.assertIn('no completed tracking cycle', plain)
         self.assertRegex(plain, r'Previous cycle mean\s*\|\s*--\s*\|\s*--\s*\|\s*--')
         held = format_status(snapshot(direction='stopped', historical=True, bias=0.))

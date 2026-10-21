@@ -422,7 +422,11 @@ roslaunch robotic_fish sonic_teleop.launch acoustic_steering:=true \
 本次硬件前端已确认输出整流／检波后的包络或幅值电压，周期均值用于比较
 平均声学响应幅值，不是物理声强。更换为原始交流波形输入时需重新设计特征提取。
 
-差值大于阈值取左转偏置，小于负阈值取右转偏置，其余取零。
+先计算 `d=(L-R)/(L+R)`，再使用 `d_corrected=d-acoustic_lr_offset` 比较阈值。
+补偿默认为零，范围 `[-1,1]`，无电压单位。例如声源居中且采样稳定时测得
+`d=0.08`，可设置 `acoustic_lr_offset:=0.08`，使此基线对应补偿后的零点。
+左右通道同比例放大时归一化差值不变；实际更改增益后仍需复核基线。
+补偿后的差值大于阈值取左转偏置，小于负阈值取右转偏置，其余取零。
 每次取固定 `-C/0/+C`，不累加；整个周期保持该偏置，不重置摆尾相位。
 目标按原控制循环约 50 Hz 发布，决策频率为摆频 `f`，实际过零处理发生在
 边界后的首个控制周期。接受中心偏置跳变。
@@ -431,16 +435,21 @@ roslaunch robotic_fish sonic_teleop.launch acoustic_steering:=true \
 该符号、阈值和偏置初值都需要现场验证，不代表已确认的水中转向效果。
 偏置使用舵机刻度，靠近软件边界时仍按原规则缩小摆幅。
 
-现场同时调整阈值与偏置（无需重启，在下一次有效周期决策生效）：
+现场通过同一条命令调整阈值、转向偏置及左右补偿（无需重启，在下一次有效周期决策生效）：
 
 ```bash
-rosservice call /sonic_teleop_node/set_acoustic_steering "{threshold: 0.15, bias: 128.0}"
+rosservice call /sonic_teleop_node/set_acoustic_steering \
+  "{threshold: 0.15, bias: 128.0, lr_offset: 0.08}"
 rostopic echo /robotic_fish/acoustic/steering_state
 ```
 
-阈值范围 `[0,1]`，偏置范围 `[0,servo_range]`。无效请求不覆盖此前有效配置，
-多次有效请求以最新一组为准；`parameters_pending` 表示等待生效。
-仅阈值和偏置支持这个运行时接口；`rosparam set` 不会更新控制器，
+每次调用请同时填写三项：阈值范围 `[0,1]`，偏置范围 `[0,servo_range]`，
+补偿范围 `[-1,1]`。`lr_offset: 0.0` 表示取消左右补偿。
+整组校验通过后，在下一有效周期决策一起应用；任何一项无效都不覆盖此前已接受的配置。
+多次有效请求以最新一组为准；`parameters_pending` 表示等待生效，预热或质量等待期间继续暂存。
+补偿不会修改三通道电压、原始差值、摆尾相位或转向偏置上限。
+重启后使用启动参数；例如在原 PC 命令中增加 `acoustic_lr_offset:=0.08`。
+这三项支持运行时服务；`rosparam set` 不会更新控制器，
 摆频和方向符号通过 launch 设置，修改后重启并重新积累周期数据。
 
 进入声源跟踪模式前需要已有新鲜、结构有效且未饱和的三通道数据。
@@ -483,6 +492,8 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 状态中的 `motion_mode` 分别为 `manual`、`auto`、`tracking`、`stopped`。
 
 状态话题包含模式／原因、周期序号、实际窗口、左右均值、差值、参数及输出偏置；
+`normalized_difference` 保留补偿前的归一化差值，`lr_offset` 为已生效补偿，
+`compensated_difference` 为最近决策使用的补偿后差值。
 `decision_updated` 仅在新决策时为真。停止后可保留上一决策的数值和窗口时间，
 必须结合 `motion_mode`、`status` 和 `sample_stamp` 解读。
 `record.launch` 已包含该状态话题。详细软件验证见
@@ -499,7 +510,7 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 - 当前运动模式、声学状态和停止原因。
 - ADC0／ADC1／ADC2（头／左／右）的最新原始电压、校准／回退电压，以及数据质量和年龄。
 - 上一完整摆尾周期内三个通道的校准电压均值、周期长度及样本数。
-- 左右均值的电压差 `L-R`、控制使用的归一化差值 `(L-R)/(L+R)` 和实际阈值。
+- 左右均值的电压差 `L-R`、原始归一化差值、补偿值、判定使用的补偿后差值和实际阈值。
 - 判断方向 `left`／`right`／`straight`，以及 `(当前输出偏置/修改上限)`。
 
 例如，进入跟踪并完成一个周期后：
@@ -523,7 +534,9 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 | Source / Rx age : 0.020 / 0.015 s                                          |
 | Cycle           : #3 CURRENT; W=0.667 s; N=13                              |
 | L-R [V]         : +0.30000                                                 |
-| Normalized / T  : +0.2727 / 0.1000                                         |
+| Normalized raw  : +0.2727                                                  |
+| LR offset       : +0.0000                                                  |
+| Compensated / T : +0.2727 / 0.1000                                         |
 | Last decision   : LEFT                                                     |
 +----------------------------------------------------------------------------+
 ```

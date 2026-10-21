@@ -98,12 +98,17 @@ class Model:
 
 
 class Estimator:
-    def __init__(self, model=None, window_s=.5, gap_s=.2, low_signal_v=.001):
+    def __init__(self, model=None, window_s=.5, gap_s=.2, low_signal_v=.001,
+                 future_tolerance_s=.05):
         if not all(math.isfinite(v) and v > 0 for v in (window_s, gap_s, low_signal_v)):
             raise ValueError('window, gap and threshold must be positive')
+        if (isinstance(future_tolerance_s, bool) or not math.isfinite(future_tolerance_s)
+                or future_tolerance_s < 0):
+            raise ValueError('future tolerance must be finite and nonnegative')
         if model and model.data['window_s'] != window_s:
             raise ValueError('model filter window mismatch')
         self.model, self.window_s, self.gap_s, self.low_signal_v = model, window_s, gap_s, low_signal_v
+        self.future_tolerance_s = future_tolerance_s
         self.rows = deque()
         self.signature = None
         self.last_input = None
@@ -114,6 +119,14 @@ class Estimator:
     def snapshot(self, now, status=None, updated=False, comparison_updated=False):
         if status is not None:
             self.current_status = int(status)
+        # Heartbeats must invalidate a window even if no new ADC frame arrives
+        # after a ROS clock rewind. Held values keep their acquisition stamps.
+        if not math.isfinite(now) or now < 0:
+            self.rows.clear()
+            self.current_status |= int(Status.INVALID_INPUT | Status.WARMUP)
+        elif self.last_input is not None and self.last_input - now > self.future_tolerance_s:
+            self.rows.clear()
+            self.current_status |= int(Status.TIME_RESET | Status.WARMUP)
         status = Status(self.current_status)
         if not self.model:
             status |= Status.MODEL_UNAVAILABLE
@@ -134,7 +147,11 @@ class Estimator:
 
     def push(self, message, now):
         try:
+            if not math.isfinite(now) or now < 0:
+                raise ValueError('invalid receipt time')
             g = adapt(message)
+            if g['t'] - now > self.future_tolerance_s:
+                raise ValueError('sample timestamp is in the future')
         except (ValueError, TypeError, AttributeError, OverflowError):
             self.rows.clear()
             return self.snapshot(now, Status.INVALID_INPUT)

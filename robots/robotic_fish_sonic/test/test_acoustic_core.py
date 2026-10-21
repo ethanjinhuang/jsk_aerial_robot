@@ -164,6 +164,86 @@ class CoreTests(unittest.TestCase):
         self.assertFalse(c['reliable'])
         self.assertTrue(c['status'] & Status.GAIN_TRANSITION)
 
+    def test_future_input_holds_last_result_and_rebuilds_window(self):
+        for model in (None, self.model):
+            for old in (False, True):
+                with self.subTest(model=bool(model), old=old):
+                    e = Estimator(model)
+                    for i in range(12):
+                        previous = e.push(batch(10+i*.05, old=old), 10+i*.05)
+                    self.assertTrue(previous['comparison']['reliable'])
+                    rejected = e.push(batch(100., old=old), 10.6)
+                    self.assertFalse(rejected['updated'])
+                    self.assertFalse(rejected['comparison']['updated'])
+                    self.assertFalse(rejected['comparison']['reliable'])
+                    self.assertTrue(rejected['status'] & Status.INVALID_INPUT)
+                    self.assertEqual(rejected['estimate_stamp'], previous['estimate_stamp'])
+                    self.assertEqual(rejected['comparison']['sample_stamp'],
+                                     previous['comparison']['sample_stamp'])
+                    self.assertEqual(e.last_input, previous['comparison']['sample_stamp'])
+                    self.assertEqual(len(e.rows), 0)
+                    self.assertFalse(e.snapshot(10.61)['comparison']['reliable'])
+                    recovered = e.push(batch(10.65, old=old), 10.65)
+                    self.assertTrue(recovered['status'] & Status.WARMUP)
+                    self.assertFalse(recovered['status'] & Status.TIME_RESET)
+                    for i in range(1, 12):
+                        recovered = e.push(batch(10.65+i*.05, old=old), 10.65+i*.05)
+                    self.assertTrue(recovered['comparison']['reliable'])
+
+    def test_future_input_cannot_create_first_estimate(self):
+        e = Estimator(self.model)
+        for i in range(12):
+            result = e.push(batch(100+i*.05), 10+i*.05)
+        self.assertFalse(result['has_estimate'])
+        self.assertFalse(result['comparison']['has_comparison'])
+        self.assertFalse(result['comparison']['reliable'])
+        self.assertTrue(result['status'] & Status.INVALID_INPUT)
+
+    def test_clock_rewind_heartbeat_invalidates_window_until_rebuilt(self):
+        e = Estimator(self.model)
+        for i in range(12):
+            previous = e.push(batch(10+i*.05), 10+i*.05)
+        rewound = e.snapshot(9.)
+        self.assertTrue(rewound['status'] & Status.TIME_RESET)
+        self.assertFalse(rewound['comparison']['reliable'])
+        self.assertEqual(rewound['estimate_stamp'], previous['estimate_stamp'])
+        self.assertEqual(len(e.rows), 0)
+        self.assertFalse(e.snapshot(10.56)['comparison']['reliable'])
+        recovered = e.push(batch(10.6), 10.6)
+        self.assertTrue(recovered['status'] & Status.WARMUP)
+        for i in range(1, 12):
+            recovered = e.push(batch(10.6+i*.05), 10.6+i*.05)
+        self.assertTrue(recovered['comparison']['reliable'])
+
+    def test_small_future_skew_is_tolerated_but_still_expires(self):
+        e = Estimator()
+        for i in range(12):
+            result = e.push(batch(10+i*.05+.02), 10+i*.05)
+        self.assertTrue(result['comparison']['reliable'])
+        self.assertTrue(e.snapshot(10.6)['comparison']['reliable'])
+        self.assertTrue(e.snapshot(11.)['status'] & Status.STALE)
+
+    def test_invalid_receipt_time_never_updates_result(self):
+        for now in (float('nan'), float('inf'), -1.):
+            with self.subTest(now=now):
+                e = Estimator(self.model)
+                e.push(batch(10.), 10.)
+                result = e.push(batch(10.05), now)
+                self.assertFalse(result['updated'])
+                self.assertTrue(result['status'] & Status.INVALID_INPUT)
+                self.assertEqual(e.last_input, 10.)
+                self.assertEqual(len(e.rows), 0)
+                self.assertTrue(e.snapshot(now)['status'] & Status.INVALID_INPUT)
+
+    def test_future_tolerance_validation_and_override(self):
+        for value in (-.01, float('nan'), float('inf'), True):
+            with self.assertRaises(ValueError):
+                Estimator(future_tolerance_s=value)
+        e = Estimator(future_tolerance_s=0.)
+        self.assertTrue(e.push(batch(10.001), 10.)['status'] & Status.INVALID_INPUT)
+        e = Estimator(future_tolerance_s=.1)
+        self.assertTrue(e.push(batch(10.075), 10.)['comparison']['updated'])
+
 
 if __name__ == '__main__':
     unittest.main()

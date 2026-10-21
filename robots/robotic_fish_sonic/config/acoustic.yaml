@@ -2,3 +2,5 @@
 window_s: 0.5
 gap_s: 0.2
 low_signal_v: 0.001
+# Allow small PC/VIM4 clock skew; reject samples farther ahead of ROS time.
+future_tolerance_s: 0.05

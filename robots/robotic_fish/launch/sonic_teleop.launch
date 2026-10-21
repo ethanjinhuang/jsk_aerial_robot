@@ -4,6 +4,7 @@
   <arg name="acoustic_steering" default="false"/>
   <arg name="acoustic_threshold" default="0.1"/>
   <arg name="acoustic_bias" default="256.0"/>
+  <arg name="acoustic_lr_offset" default="0.0"/>
   <arg name="acoustic_max_age_s" default="0.5"/>
   <arg name="left_bias_sign" default="1"/>
   <arg name="joy_timeout_s" default="0.5"/>
@@ -28,6 +29,7 @@
     <param name="acoustic_steering/enabled" type="bool" value="$(arg acoustic_steering)"/>
     <param name="acoustic_steering/threshold" value="$(arg acoustic_threshold)"/>
     <param name="acoustic_steering/bias" value="$(arg acoustic_bias)"/>
+    <param name="acoustic_steering/lr_offset" type="double" value="$(arg acoustic_lr_offset)"/>
     <param name="acoustic_steering/max_age_s" type="double" value="$(arg acoustic_max_age_s)"/>
     <param name="acoustic_steering/left_bias_sign" type="int" value="$(arg left_bias_sign)"/>
     <param name="auto_default_amplitude" value="512.0"/>

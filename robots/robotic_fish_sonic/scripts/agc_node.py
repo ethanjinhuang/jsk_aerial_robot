@@ -231,22 +231,23 @@ class GainControlNode:
 
     def _enable_callback(self, request):
         # Backward-compatible service: enabling selects closed-loop mode.
-        with self.lock:
+        # A successful response also confirms that earlier DAC work has finished.
+        with self.command_lock, self.lock:
             self.controller.set_mode("closed_loop" if request.data else "off")
             self.mode = self.controller.mode
             self.last_error = ""
-        self._publish_config()
-        self._publish_state()
-        return SetBoolResponse(True, "gain mode is {}".format(self.mode))
+            self._publish_config()
+            self._publish_state()
+            return SetBoolResponse(True, "gain mode is {}".format(self.mode))
 
     def _reset_safety_callback(self, _request):
-        with self.lock:
+        with self.command_lock, self.lock:
             if self.controller.safety_active:
                 return TriggerResponse(False, "ADC overrange protection is still active")
             self.controller.reset_safety()
             self.last_error = ""
-        self._publish_state()
-        return TriggerResponse(True, "gain-control safety latch reset")
+            self._publish_state()
+            return TriggerResponse(True, "gain-control safety latch reset")
 
     def _set_dac_voltage(self, target):
         try:

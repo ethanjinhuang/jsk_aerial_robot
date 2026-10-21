@@ -414,6 +414,12 @@ roslaunch robotic_fish_sonic sensor_io.launch gain_mode:=off
 
 Normal manual or closed-loop adjustment is disabled, but the controller continues to monitor the ADC safety threshold. If the DAC state is known and an overrange occurs, safety logic can still lower the DAC. If no DAC state is available and an overrange is detected, the controller requests the configured DAC minimum.
 
+The enable service and safety-reset service are serialized with ADC decisions and
+DAC requests. A successful mode-change response confirms that earlier in-flight
+DAC work has completed; subsequent normal adjustments follow the new mode.
+The DAC command watchdog checks the latest command time after acquiring its IO
+lock, so a newer command cannot be overwritten by an earlier timeout decision.
+
 ### 6.2 `manual` mode
 
 ```bash

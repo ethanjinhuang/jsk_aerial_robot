@@ -1,6 +1,8 @@
 # Applied together at the next valid positive-going gait zero crossing.
 float64 threshold
 float64 bias
+# Dimensionless baseline subtracted from (left_mean-right_mean)/(left_mean+right_mean).
+float64 lr_offset
 ---
 bool success
 string message

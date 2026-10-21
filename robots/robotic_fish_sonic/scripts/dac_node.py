@@ -156,12 +156,13 @@ class DacNode:
         return SetDacVoltageResponse(success, applied, message)
 
     def _watchdog_callback(self, _event):
-        if self.command_timeout <= 0 or self.last_command_ns == 0:
-            return
-        elapsed = (time.monotonic_ns() - self.last_command_ns) / 1e9
-        if elapsed <= self.command_timeout or self.watchdog_fired:
-            return
         with self.lock:
+            # A command may have completed while this callback waited for serial IO.
+            if self.command_timeout <= 0 or self.last_command_ns == 0:
+                return
+            elapsed = (time.monotonic_ns() - self.last_command_ns) / 1e9
+            if elapsed <= self.command_timeout or self.watchdog_fired:
+                return
             try:
                 self._apply_voltage_locked(
                     self.safe_voltage, self.default_channel, mark_command=False
