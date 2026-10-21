@@ -67,6 +67,7 @@
   <exec_depend>rosbag</exec_depend>
 
   <test_depend>python3-nose</test_depend>
+  <test_depend>roslaunch</test_depend>
 
 
   <!-- The export tag contains other, unspecified, tags -->

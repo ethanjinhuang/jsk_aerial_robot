@@ -99,6 +99,7 @@ def main():
             driving = {'button': None, 'axis': 0., 'left': 2., 'right': 1., 'valid': True,
                        'adc': True, 'gain': .9, 'mixed_gain': False,
                        'gain_known': True, 'saturated': False}
+            remote_joy_skew = .067 if case == 0 else 60.
             finish = threading.Event()
 
             def drive():
@@ -107,6 +108,8 @@ def main():
                         values = dict(driving)
                     joy = Joy(axes=[0., 0., values['axis'], 1., 1.],
                               buttons=[int(i == values['button']) for i in range(14)])
+                    # PC time may differ; VIM4 must use its local Joy receipt time.
+                    joy.header.stamp = rospy.Time.now() - rospy.Duration.from_sec(remote_joy_skew)
                     joy_pub.publish(joy)
                     if values['adc']:
                         stamp = rospy.Time.now()
@@ -369,7 +372,8 @@ def main():
                       'Circle tracking, Triangle ordinary auto, Cross stop, '
                       'gain adjustment and unusable quality hold without stopping, '
                       'remote aligned/color Share snapshots, '
-                      'live normalized compensation, settings and fault recovery' % (frequency, polarity), flush=True)
+                      'live normalized compensation, settings and fault recovery, '
+                      'remote Joy stamp %.3f s behind local clock' % (frequency, polarity, remote_joy_skew), flush=True)
             finally:
                 finish.set()
                 if thread.is_alive(): thread.join(timeout=2)

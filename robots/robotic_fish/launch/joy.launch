@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Run on the computer physically connected to the joystick. -->
+  <arg name="joy_dev" default="/dev/input/js0"/>
+  <arg name="joy_autorepeat_rate" default="20.0"/>
+
+  <node pkg="joy" type="joy_node" name="joy_node" output="screen">
+    <param name="dev" type="str" value="$(arg joy_dev)"/>
+    <param name="coalesce_interval" type="double" value="0.025"/>
+    <param name="autorepeat_rate" type="double" value="$(arg joy_autorepeat_rate)"/>
+  </node>
+</launch>

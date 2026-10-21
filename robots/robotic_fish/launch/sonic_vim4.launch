@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Run this whole launch on VIM4; the PC runs only joy.launch. -->
+  <arg name="config" default="$(find robotic_fish_sonic)/config/io.yaml"/>
+  <arg name="spinal_mode" default="serial"/>
+  <arg name="gain_mode" default="manual"/>
+  <arg name="manual_gain_voltage" default="0.0"/>
+  <arg name="enable_status_console" default="true"/>
+  <arg name="status_color" default="auto"/>
+  <arg name="auto_frequency" default="1.5"/>
+  <arg name="acoustic_steering" default="true"/>
+  <arg name="acoustic_threshold" default="0.1"/>
+  <arg name="acoustic_bias" default="256.0"/>
+  <arg name="acoustic_lr_offset" default="0.0"/>
+  <arg name="acoustic_max_age_s" default="0.5"/>
+  <arg name="acoustic_future_tolerance_s" default="0.05"/>
+  <arg name="left_bias_sign" default="1"/>
+  <arg name="joy_timeout_s" default="0.5"/>
+  <arg name="update_rate" default="50.0"/>
+
+  <include file="$(find robotic_fish_sonic)/launch/io.launch">
+    <arg name="dev" value="vim4"/>
+    <arg name="spinal_mode" value="$(arg spinal_mode)"/>
+    <arg name="config" value="$(arg config)"/>
+    <arg name="gain_mode" value="$(arg gain_mode)"/>
+    <arg name="manual_gain_voltage" value="$(arg manual_gain_voltage)"/>
+    <arg name="enable_status_console" value="$(arg enable_status_console)"/>
+    <arg name="status_color" value="$(arg status_color)"/>
+  </include>
+
+  <include file="$(find robotic_fish)/launch/sonic_teleop.launch">
+    <arg name="enable_joy" value="false"/>
+    <arg name="auto_frequency" value="$(arg auto_frequency)"/>
+    <arg name="acoustic_steering" value="$(arg acoustic_steering)"/>
+    <arg name="acoustic_threshold" value="$(arg acoustic_threshold)"/>
+    <arg name="acoustic_bias" value="$(arg acoustic_bias)"/>
+    <arg name="acoustic_lr_offset" value="$(arg acoustic_lr_offset)"/>
+    <arg name="acoustic_max_age_s" value="$(arg acoustic_max_age_s)"/>
+    <arg name="acoustic_future_tolerance_s" value="$(arg acoustic_future_tolerance_s)"/>
+    <arg name="left_bias_sign" value="$(arg left_bias_sign)"/>
+    <arg name="joy_timeout_s" value="$(arg joy_timeout_s)"/>
+    <arg name="update_rate" value="$(arg update_rate)"/>
+  </include>
+</launch>

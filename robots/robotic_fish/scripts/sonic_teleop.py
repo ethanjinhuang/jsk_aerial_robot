@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Single-servo ROS adapter, with optional complete-cycle acoustic steering."""
 import math
+import socket
 import threading
 import time
 
@@ -110,6 +111,8 @@ class Teleop:
         rospy.on_shutdown(self._shutdown)
         rospy.loginfo('Sonic motion: %.1f Hz wall clock, direct joystick mapping, Joy timeout %.3f s',
                       self.update_rate, self.controller.joy_timeout_s)
+        rospy.loginfo('Sonic host=%s; ADC max age=%.3f s, future tolerance=%.3f s; Joy uses local receipt time',
+                      socket.gethostname(), self._status_max_age, self._status_future_tolerance)
         self._thread.start()
 
     def _adcCallback(self, msg):

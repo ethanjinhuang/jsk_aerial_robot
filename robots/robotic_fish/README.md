@@ -175,6 +175,9 @@ roslaunch robotic_fish teleop.launch dev:=vim4
 | `teleop.launch` | 普通双舵机机器鱼 | `/servo/target_states` |
 | `spring_teleop.launch` | 带弹簧和锁止机构的机器鱼 | `/servo/target_states` |
 | `advance_teleop.launch` | 普通舵机加扩展电机版本 | `/servo/target_states`、`/servo/extended_cmds` |
+| `joy.launch` | PC 单独连接手柄 | `/joy` |
+| `sonic_vim4.launch` | VIM4 集中运行声学 IO、串口桥和单舵机控制 | `/servo/target_states`，接收 PC 的 `/joy` |
+| `sonic_teleop.launch` | 单舵机控制，可选本机手柄 | `/servo/target_states` |
 
 使用 spring 版本：
 
@@ -188,17 +191,18 @@ roslaunch robotic_fish spring_teleop.launch dev:=pc
 roslaunch robotic_fish advance_teleop.launch dev:=pc
 ```
 
-声学采集与处理已经合并到 `robotic_fish_sonic`。以下命令在不同终端运行：
+声学采集与处理已经合并到 `robotic_fish_sonic`。趋声实验推荐采用
+[VIM4 集中控制、PC 只运行手柄](#65-周期趋声控制)的分工。
+`sonic_vim4.launch` 组合启动 IO、串口桥、运动和 Share 显示，不启动手柄或录包。
+`sonic_teleop.launch` 默认同时启动运动和手柄，使用 `enable_joy:=false` 时只启动运动。
+只运行一个运动命令发布者、一个手柄发布者和一个串口桥。
+
+录包建议在 VIM4 的另一终端运行，让录制时间与 ADC、运动状态使用同一台主机的时间：
 
 ```bash
-roslaunch robotic_fish_sonic sonic.launch gain_mode:=manual
-roslaunch spinal bridge.launch dev:=vim4
-roslaunch robotic_fish sonic_teleop.launch
-roslaunch robotic_fish record.launch
+roslaunch robotic_fish record.launch record_diagnostics:=true
 ```
 
-`sonic_teleop.launch` 只启动运动节点和手柄。IO、声学处理、串口桥及录包
-需要分别启动；不要重复启动同一串口桥或手柄发布者。
 `record.launch` 默认将 bag 保存在用户主目录，前缀为 `sonic`。录制内容包括：
 
 - ADC 三通道批数据（原始电压、校准电压、校准标识和时间戳）
@@ -359,12 +363,14 @@ ROS 仿真时钟暂停或回拨不会暂停运动或手柄超时检查。
 | `joy_timeout_s` | 0.5 | 最后一个有效 Joy 消息的接收超时，秒 |
 | `update_rate` | 50 | 控制循环目标频率，Hz；应大于摆尾频率的两倍 |
 | `joy_autorepeat_rate` | 20 | launch 为 joy_node 设置的重复发布频率 |
+| `enable_joy` | true | `sonic_teleop.launch` 是否同时启动本机手柄；VIM4 分机控制时关闭 |
+| `joy_dev` | `/dev/input/js0` | 手柄所在主机的设备路径；也用于独立的 `joy.launch` |
 | `steering_axis` | 2 | 方向轴索引 |
 | `amplitude_decrease_axis` / `amplitude_increase_axis` | 3 / 4 | 调幅轴索引 |
 | `stop_button` / `auto_button` / `manual_button` | 1 / 3 / 0 | 模式按键索引 |
 | `tracking_button` | 2 | 声源跟踪模式按键索引，默认圆圈 |
 | `status_button` | 8 | 状态查看按键索引，默认 Share；不能与运动按键重叠 |
-| `status_local_echo` | false | 同时在 PC 运动节点终端显示 Share 快照 |
+| `status_local_echo` | false | 同时在运动节点所在终端显示 Share 快照 |
 | `amplitude_buttons` | `[6, 7]` | 调幅使能按键列表 |
 
 中心 2048、软件范围 ±1024、启动文件摆频 1.5 Hz、默认摆幅 512 和
@@ -398,21 +404,43 @@ python3 robots/robotic_fish/test/sonic_ros_smoke.py
 
 ### 6.5 周期趋声控制
 
-沿用原来的设备分工：VIM4 运行 IO 和串口桥，PC 连接手柄并运行运动节点。
-确认两端使用本次编译后的消息及服务定义，并在各终端执行 `rosfish`。
+推荐部署为：**PC 只连接手柄，VIM4 运行 ADC／DAC、增益控制、串口桥、
+周期趋声及运动节点、Share 显示**。采样时间戳与控制节点的 ROS 当前时间均来自 VIM4；
+摆尾相位、接收超时仍用 VIM4 的单调时钟。Joy 消息只按 VIM4 本机接收时间计时，
+不会使用 PC 的 Joy 时间戳计算超时。
+
+两端更新代码、编译 `robotic_fish_sonic robotic_fish` 并 source 各自工作空间。
+网络配置继续使用 `rosfish`：两端 `ROS_MASTER_URI` 指向 VIM4（本次为
+`http://192.168.1.168:11311`），每端 `ROS_IP`／已设置的 `ROS_HOSTNAME`
+应为该端本机地址。关闭上一轮 PC 运动 launch 和重复的 VIM4 IO／桥后，按以下方式启动。
 
 VIM4：
 
 ```bash
-roslaunch robotic_fish_sonic io.launch dev:=vim4 gain_mode:=manual
+roslaunch robotic_fish sonic_vim4.launch acoustic_bias:=128
 ```
 
-PC（手柄连接保持原方式，关闭上一轮运动 launch 后执行）：
+该入口默认允许声源跟踪，手动增益模式的初始目标为 0 V；仍需用十字键调节增益，
+或通过 `manual_gain_voltage:=...` 设置已经确认的现场值。启动后仍为手动模式。
+
+PC（手柄保持连接）：
 
 ```bash
-roslaunch robotic_fish sonic_teleop.launch acoustic_steering:=true \
-  auto_frequency:=1.5 acoustic_threshold:=0.1 acoustic_bias:=256 left_bias_sign:=1
+roslaunch robotic_fish joy.launch
 ```
+
+PC 上不再启动运动节点。手柄设备可用 `joy_dev:=/dev/input/js1` 选择，重复发布默认 20 Hz。
+VIM4 启动日志打印 `Sonic host=...`、实际 ADC 最大年龄及未来时间戳容差；
+也可在任一端执行 `rosnode info /sonic_teleop_node`，确认节点 URI 指向 VIM4。
+
+若 VIM4 已单独运行 `robotic_fish_sonic io.launch`，可保留 IO，只在 VIM4 新终端运行：
+
+```bash
+roslaunch robotic_fish sonic_teleop.launch enable_joy:=false \
+  acoustic_steering:=true acoustic_bias:=128
+```
+
+此时不要再启动组合入口 `sonic_vim4.launch`。原 `sonic_teleop.launch` 的默认组合方式仍可用于单机调试。
 
 默认仍是手动模式。按圆圈 `○`（`buttons[2]`）进入声源跟踪后，使用同方向的正向过零点
 （相位 `2*pi*k`）判断，首个完整周期内偏置为零。
@@ -448,23 +476,24 @@ rostopic echo /robotic_fish/acoustic/steering_state
 整组校验通过后，在下一有效周期决策一起应用；任何一项无效都不覆盖此前已接受的配置。
 多次有效请求以最新一组为准；`parameters_pending` 表示等待生效，预热或质量等待期间继续暂存。
 补偿不会修改三通道电压、原始差值、摆尾相位或转向偏置上限。
-重启后使用启动参数；例如在原 PC 命令中增加 `acoustic_lr_offset:=0.08`。
+重启后使用启动参数；例如在 VIM4 的启动命令中增加 `acoustic_lr_offset:=0.08`。
 这三项支持运行时服务；`rosparam set` 不会更新控制器，
 摆频和方向符号通过 launch 设置，修改后重启并重新积累周期数据。
 
 进入声源跟踪模式前需要已有新鲜、结构有效且未饱和的三通道数据。
 校准或 DAC 状态尚未就绪时，可以进入跟踪并以零偏置摆尾等待；
 只有校准成功、DAC 增益已确认的数据才用于声学方向判断。
-`sonic_teleop.launch` 默认最大数据年龄为 0.5 秒，通过 `acoustic_max_age_s` 设置；
+`sonic_vim4.launch` 与 `sonic_teleop.launch` 默认最大数据年龄为 0.5 秒，通过 `acoustic_max_age_s` 设置；
 启动时显式写入节点参数，无需先单独执行 `rosparam set`。例如沿用本次现场设置：
 
 ```bash
-roslaunch robotic_fish sonic_teleop.launch acoustic_steering:=true \
-  acoustic_bias:=128 acoustic_max_age_s:=0.5
+roslaunch robotic_fish sonic_vim4.launch acoustic_bias:=128 \
+  acoustic_max_age_s:=0.5 acoustic_future_tolerance_s:=0.05
 ```
 
 该值仅在启动时读取，修改后需重启运动 launch。直接运行脚本而未设置私有参数时，
-仍沿用 0.2 秒初值。最大采样间隔为 0.2 秒，未来时间戳容差为 0.05 秒，
+仍沿用 0.2 秒初值。最大采样间隔为 0.2 秒，未来时间戳容差默认 0.05 秒，
+通过 `acoustic_future_tolerance_s` 显式写入；同机采集和控制继续保留该检查。
 左右电压和的低信号阈值为 0.001 V。
 采样不必恰好命中周期端点，但两端及内部的间隔均不得超过允许间隔，
 且至少有两组数据。启动时等待完整 `1/f` 周期，不采用原比较节点的 80% 预热规则。
@@ -501,11 +530,12 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 
 ### 6.6 Share 查看系统状态
 
-按一下 **Share（`buttons[8]`）**，PC 运动节点生成一次快照，经
+按一下 **Share（`buttons[8]`）**，VIM4 运动节点生成一次快照，经
 `/robotic_fish/sonic/status_snapshot`（`std_msgs/String`）发送，
-由 **VIM4 的 `io.launch` 终端**打印。长按不重复打印，松开后再按可再次查看。
+由 **VIM4 的 `sonic_vim4.launch` 终端**打印（单独启动 IO 时为 `io.launch` 终端）。
+长按不重复打印，松开后再按可再次查看。
 快照不锁存，显示节点启动后等待下一次 Share，避免把旧结果当作新状态。
-周期统计和判断仍在 PC 完成，VIM4 不重新计算窗口。输出包括：
+周期统计、判断及快照均在 VIM4 完成，显示节点只打印快照。输出包括：
 
 - 当前运动模式、声学状态和停止原因。
 - ADC0／ADC1／ADC2（头／左／右）的最新原始电压、校准／回退电压，以及数据质量和年龄。
@@ -548,11 +578,11 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 可显式设置 `status_color:=always` 或 `status_color:=never`，例如在 VIM4 强制彩色：
 
 ```bash
-roslaunch robotic_fish_sonic io.launch dev:=vim4 gain_mode:=manual status_color:=always
+roslaunch robotic_fish sonic_vim4.launch acoustic_bias:=128 status_color:=always
 ```
 
 需要单独运行显示节点时，执行 `roslaunch robotic_fish_sonic status_console.launch color:=auto`；
-已有 `io.launch` 显示节点时直接按 Share 即可。PC 单机调试可给运动 launch 设置
+已有组合入口或 `io.launch` 显示节点时直接按 Share 即可。单机调试可给运动 launch 设置
 `status_local_echo:=true`。快照话题始终是纯文本，`record.launch` 已包含它。
 
 周期均值与控制判断使用同一批数据，不是 ADC 的 `volt_raw_mean_1s`，也不会因查看而重算或重置相位。
@@ -568,7 +598,9 @@ roslaunch robotic_fish_sonic io.launch dev:=vim4 gain_mode:=manual status_color:
 手动／普通自动时为 `NOT_TRACKING`。`Last decision` 仅表示最近一次声学判断。
 声学功能未启用时，Share 仍可查看瞬时电压，方向为 `DISABLED`，不产生周期判断。
 无 ADC、校准回退、数据过期等情况会明确标出；瞬时回退电压不作为有效校准均值使用。
-电压年龄及 `Snapshot ROS [s]` 均为 PC 生成快照时的记录，不会在显示端刷新。
+电压年龄及 `Snapshot ROS [s]` 均为运动节点生成快照时的记录；推荐部署下来自 VIM4，
+不会在显示端刷新。若仍在 PC 录包，PC 的录制时间与 VIM4 采样时间之差仍受跨机时钟偏差影响，
+不能直接将该差值解释为控制节点的样本年龄；两端校时或在 VIM4 录包可方便后续分析。
 
 ## 7. ROS 话题与参数
 

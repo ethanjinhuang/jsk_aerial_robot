@@ -39,4 +39,5 @@ include_directories(
 
 if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_sonic_motion.py)
+  catkin_add_nosetests(test/test_sonic_launch.py)
 endif()

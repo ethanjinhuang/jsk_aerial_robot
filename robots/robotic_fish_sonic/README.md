@@ -51,6 +51,7 @@ roslaunch robotic_fish_sonic sonic.launch
 | `quadrant.launch` | 声学比较和可选方向模型 |
 | `sonic.launch` | IO 和声学处理 |
 | `io.launch` | spinal 桥和 IO，沿用原用途 |
+| `robotic_fish/sonic_vim4.launch` | 在 VIM4 组合运行 IO、桥、运动控制和 Share 显示 |
 
 `sonic.launch` 的 `enable_adc`、`enable_dac`、`enable_gain_control`、
 `enable_acoustic` 可分别关闭模块。仅处理外部 ADC 消息时：
@@ -61,18 +62,28 @@ roslaunch robotic_fish_sonic sonic.launch enable_adc:=false enable_dac:=false
 
 关闭增益控制节点会同时移除该节点提供的过压降增益保护。
 
-手动增益实验可以在不同终端依次启动：
+趋声实验采用 VIM4 同机采集和控制，PC 只连接手柄。
+在 VIM4 上启动（已包含 IO 和串口桥）：
 
 ```bash
-roslaunch robotic_fish_sonic sonic.launch gain_mode:=manual
-roslaunch spinal bridge.launch dev:=vim4
-roslaunch robotic_fish sonic_teleop.launch
-roslaunch robotic_fish record.launch
+roslaunch robotic_fish sonic_vim4.launch acoustic_bias:=128
 ```
 
-`sonic_teleop.launch` 启动手柄和运动程序。只测增益时改用单独的
-`joy_node`。只运行一个手柄发布者和一个 spinal 桥；已启动 `io.launch`
-时不要再启动同一硬件的 IO 或桥节点。
+在 PC 上启动：
+
+```bash
+roslaunch robotic_fish joy.launch
+```
+
+两端使用同一 VIM4 ROS master，并 source 各自更新后的工作空间。
+周期统计、运动相位、时间检查及 Share 快照都在 VIM4；PC 的 Joy 时间戳不参与控制超时计算。
+手动增益默认目标为 0 V，按原十字键方式调整，或指定已经确认的 `manual_gain_voltage`。
+仍由 Circle 进入跟踪、Cross 停止。原 `sonic_teleop.launch` 的组合方式保留；
+VIM4 已有 `io.launch` 时，可仅启动运动：`sonic_teleop.launch enable_joy:=false acoustic_steering:=true`。
+每台设备的操作与切换说明见[周期趋声控制](../robotic_fish/README.md#65-周期趋声控制)。
+只运行一个手柄发布者、一个运动命令发布者和一个 spinal 桥。
+录包建议在 VIM4 另开终端运行 `roslaunch robotic_fish record.launch record_diagnostics:=true`，
+让录制时间与采样、控制时间同源；PC 录包仍需要考虑两端时钟偏差。
 
 ## 配置与声学输出
 
@@ -125,7 +136,7 @@ rostopic echo /robotic_fish/acoustic/channel_comparison
 校准越界回退／未知增益同样保持摆尾与上一偏置并暂停决策，Share 显示具体原因及
 `HOLDING`；数据有效后以 `data_warmup` 重建完整周期并自动恢复判断。
 首次进入跟踪而数据尚不可用时，以零偏置等待。时间检查、饱和、Cross 和 Joy 超时等停止规则仍生效。
-运动节点按 Share 发布纯文本快照，`io.launch` 默认启动 `status_console.py`，
+VIM4 运动节点按 Share 发布纯文本快照，组合入口及 `io.launch` 默认启动 `status_console.py`，
 在 VIM4 终端用对齐表格显示三通道瞬时电压、上一完整周期均值、差值及方向。
 `status_color:=auto` 自动检测终端颜色，`always` 强制彩色，`never` 关闭；
 `enable_status_console:=false` 可关闭显示。独立显示可运行
@@ -140,7 +151,9 @@ rostopic echo /robotic_fish/acoustic/channel_comparison
 - `msg/AcousticSteeringState`：记录周期窗口、方向差值、偏置、参数及模式状态。
 - `/robotic_fish/acoustic/steering_state`：启用功能后的运行状态，可随 bag 记录。
 
-目前摆频由启动参数指定，窗口自动取倒数；更换摆频后重启并重新积累完整周期。
+目前摆频由 VIM4 运动启动参数指定，窗口自动取倒数；更换摆频后重启并重新积累完整周期。
+ADC 年龄、未来时间戳检查均在 VIM4 本机进行，未来容差继续默认 0.05 秒；
+`acoustic_future_tolerance_s` 在启动时显式设置，启动日志显示主机名和实际时间限值。
 补偿可通过运动 launch 的 `acoustic_lr_offset` 设置初值，运行时调用
 `/sonic_teleop_node/set_acoustic_steering` 并填写三项；具体命令见运动包说明。
 本次扩展了周期状态消息和原服务请求，两端需重新编译并 source 两包后重启相关节点。
