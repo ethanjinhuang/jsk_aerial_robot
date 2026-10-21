@@ -16,6 +16,7 @@
   <arg name="manual_button" default="0"/>
   <arg name="tracking_button" default="2"/>
   <arg name="status_button" default="8"/>
+  <arg name="status_local_echo" default="false"/>
   <arg name="amplitude_buttons" default="[6, 7]"/>
 
   <node pkg="robotic_fish" type="sonic_teleop.py" name="sonic_teleop_node" output="screen">
@@ -39,6 +40,7 @@
     <param name="manual_button" type="int" value="$(arg manual_button)"/>
     <param name="tracking_button" type="int" value="$(arg tracking_button)"/>
     <param name="status_button" type="int" value="$(arg status_button)"/>
+    <param name="status_local_echo" type="bool" value="$(arg status_local_echo)"/>
     <rosparam param="amplitude_buttons" subst_value="true">$(arg amplitude_buttons)</rosparam>
   </node>
 

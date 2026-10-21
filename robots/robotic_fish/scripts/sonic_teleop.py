@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Single-servo ROS adapter, with optional complete-cycle acoustic steering."""
 import math
-import sys
 import threading
 import time
 
 import rospy
 from sensor_msgs.msg import Joy
 from spinal.msg import ServoControlCmd
+from std_msgs.msg import String
 
 from robotic_fish.sonic_motion import SonicController
 from robotic_fish_sonic.acoustic_core import adapt, Status
 from robotic_fish_sonic.msg import AdcSampleArray
+from robotic_fish_sonic.status_display import format_status, write_snapshot
 
 
 class Teleop:
@@ -33,6 +34,9 @@ class Teleop:
                               ('amplitude_buttons', [6, 7])]:
             parameters[name] = rospy.get_param('~' + name, default)
         self.controller = SonicController(**parameters)
+        self.status_local_echo = rospy.get_param('~status_local_echo', False)
+        if not isinstance(self.status_local_echo, bool):
+            raise ValueError('status_local_echo must be boolean')
         self.status_button = rospy.get_param('~status_button', 8)
         if (isinstance(self.status_button, bool) or not isinstance(self.status_button, int)
                 or self.status_button < 0):
@@ -97,6 +101,8 @@ class Teleop:
         # Keep instant readings available to Share even when tracking is disabled.
         self.adc_sub = rospy.Subscriber('/robotic_fish/adc/samples', AdcSampleArray,
                                         self._adcCallback, queue_size=100)
+        self.status_pub = rospy.Publisher('/robotic_fish/sonic/status_snapshot', String,
+                                          queue_size=10, latch=False)
         self.servo_cmd_pub = rospy.Publisher('/servo/target_states', ServoControlCmd, queue_size=1)
         self.joy_sub = rospy.Subscriber('/joy', Joy, self._joyCallback, queue_size=1)
         self._thread = threading.Thread(target=self._run, name='sonic-motion', daemon=True)
@@ -136,53 +142,45 @@ class Teleop:
 
     def _formatStatus(self, state, now):
         """Describe the actual held decision; never run a new steering decision."""
-        lines = ['Sonic status (Share): mode=%s status=%s reason=%s' %
-                 (state.mode, self._acoustic_status, state.reason)]
-        if self._latest_adc is None:
-            lines.append('  ADC instant: unavailable (no ADC data)')
-        else:
+        data = dict(mode=state.mode, status=self._acoustic_status, reason=state.reason,
+                    stamp=rospy.Time.now().to_sec(), raw=None, calibrated=None, means=None,
+                    quality='no_data', sample_age=None, receipt_age=None, cycle=0,
+                    historical=False, window=1. / self.controller.frequency, count=0,
+                    delta=None, difference=None, threshold=None, judged='unavailable',
+                    bias=state.applied_bias, bias_limit=self.controller.motion.servo_range)
+        if self._latest_adc is not None:
             samples = sorted(self._latest_adc.samples, key=lambda s: s.channel_id)
             if [s.channel_id for s in samples] != [0, 1, 2]:
-                lines.append('  ADC instant: unavailable (expected channels 0,1,2)')
+                data['quality'] = 'invalid_input (expected channels 0,1,2)'
             else:
-                for label, field in [('raw', 'volt_raw'), ('calibrated/fallback', 'volt_cali')]:
-                    values = ['%s=%.5f' % (name, getattr(sample, field, float('nan')))
-                              for name, sample in zip(('head', 'left', 'right'), samples)]
-                    lines.append('  ADC instant %s [V]: %s' % (label, ' '.join(values)))
+                data['raw'] = [getattr(sample, 'volt_raw', float('nan')) for sample in samples]
+                data['calibrated'] = [sample.volt_cali for sample in samples]
+                data['receipt_age'] = now - self._latest_adc_receipt
                 try:
                     group = adapt(self._latest_adc)
-                    age = rospy.Time.now().to_sec() - group['t']
-                    quality = '|'.join(flag.name.lower() for flag in Status if flag & group['status']) or 'valid'
-                    if age > self._status_max_age or now - self._latest_adc_receipt > self._status_max_age:
-                        quality = 'stale_sample'
-                    elif age < -self._status_future_tolerance:
-                        quality = 'future_sample'
-                    lines.append('  ADC quality=%s sample_age=%.3fs receipt_age=%.3fs' %
-                                 (quality, age, now - self._latest_adc_receipt))
+                    data['sample_age'] = data['stamp'] - group['t']
+                    data['quality'] = '|'.join(flag.name.lower() for flag in Status if flag & group['status']) or 'valid'
+                    if data['sample_age'] > self._status_max_age or data['receipt_age'] > self._status_max_age:
+                        data['quality'] = 'stale_sample'
+                    elif data['sample_age'] < -self._status_future_tolerance:
+                        data['quality'] = 'future_sample'
                 except (ValueError, TypeError, AttributeError, OverflowError) as exc:
-                    lines.append('  ADC quality=invalid_input (%s)' % exc)
+                    data['quality'] = 'invalid_input (%s)' % exc
         decision = None if self.acoustic is None else self.acoustic.last_decision
         active = state.mode == 'tracking' and self._acoustic_status == 'active'
-        if decision is None:
-            lines.append('  Cycle mean [V] / left-right difference: unavailable (no completed tracking cycle)')
-            judged = 'unavailable'
-        else:
-            judged = ('left' if decision.difference > self.acoustic.settings.threshold else
-                      'right' if decision.difference < -self.acoustic.settings.threshold else 'straight')
-            lines.append('  Last completed cycle=%d window=%.3fs samples=%d historical=%s' %
-                         (decision.cycle, decision.end - decision.start, decision.sample_count, not active))
-            lines.append('  Cycle calibrated mean [V]: head=%.5f left=%.5f right=%.5f' %
-                         (decision.head_mean, decision.left_mean, decision.right_mean))
-            lines.append('  Left-right delta [V]=%+.5f normalized=%+.4f threshold=%.4f' %
-                         (decision.left_mean - decision.right_mean, decision.difference,
-                          self.acoustic.settings.threshold))
-        direction = judged if active else ('warmup' if state.mode == 'tracking' else
-                    'stopped' if state.mode == 'stopped' else
-                    'disabled' if self.acoustic is None else 'not_tracking')
-        bias_limit = self.controller.motion.servo_range
-        lines.append('  Direction=%s last_decision=%s command_bias=(%+.1f/%.1f)' %
-                     (direction, judged, state.applied_bias, bias_limit))
-        return '\n'.join(lines)
+        if self.acoustic is not None:
+            data['threshold'] = self.acoustic.settings.threshold
+        if decision is not None:
+            data.update(judged='left' if decision.difference > data['threshold'] else
+                        'right' if decision.difference < -data['threshold'] else 'straight',
+                        means=(decision.head_mean, decision.left_mean, decision.right_mean),
+                        cycle=decision.cycle, historical=not active,
+                        window=decision.end - decision.start, count=decision.sample_count,
+                        delta=decision.left_mean - decision.right_mean, difference=decision.difference)
+        data['direction'] = data['judged'] if active else ('warmup' if state.mode == 'tracking' else
+                            'stopped' if state.mode == 'stopped' else
+                            'disabled' if self.acoustic is None else 'not_tracking')
+        return format_status(data)
 
     def publish_cmd(self, state):
         self.servo_cmd[0] = state.target
@@ -209,7 +207,7 @@ class Teleop:
                     self.controller.set_tracking_bias(decision.bias)
                     updated = True
                     self._acoustic_status = 'active'
-                    rospy.loginfo('Acoustic cycle=%d, L/R=%.5f/%.5f, difference=%.3f, bias=%.1f',
+                    rospy.logdebug('Acoustic cycle=%d, L/R=%.5f/%.5f, difference=%.3f, bias=%.1f',
                                   decision.cycle, decision.left_mean, decision.right_mean,
                                   decision.difference, decision.bias)
             except self._SteeringFault as exc:
@@ -262,16 +260,13 @@ class Teleop:
                 logger = rospy.logwarn if state.mode == 'stopped' else rospy.loginfo
                 logger('Sonic mode=%s reason=%s %s', state.mode, state.reason, self.controller.input_error)
                 self._last_transition = transition
-            rospy.loginfo_throttle(1., 'Sonic %s: bias target/applied=%.1f/%.1f, '
-                                   'amplitude requested/effective=%.1f/%.1f, target=%.1f',
-                                   state.mode, state.requested_bias, state.applied_bias,
-                                   state.requested_amplitude, state.effective_amplitude, state.target)
             if self._status_requested:
                 self._status_requested = False
                 report = self._formatStatus(state, now)
         if report is not None:
-            rospy.loginfo('%s', report)
-            sys.stdout.flush()
+            self.status_pub.publish(String(data=report))
+            if self.status_local_echo:
+                write_snapshot(report)
 
     def _run(self):
         period = 1. / self.update_rate

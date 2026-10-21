@@ -328,7 +328,7 @@ IMU 名称、平面和范围按本次提供的映射记录。
 | `buttons[2]` 的新按下 | 圆圈 `○` | 进入声源跟踪模式；已在跟踪时再次按下保持模式和相位，不执行开关切换 |
 | `buttons[0]` 的新按下 | 方块 `□` | 进入手动位置模式，或从停止恢复手动 |
 | `buttons[1]` | 叉号 `×` | 停止摆尾、回中并锁存；优先于其他输入 |
-| `buttons[8]` 的新按下 | Share | 在运动节点终端打印声学与控制状态；长按只打印一次 |
+| `buttons[8]` 的新按下 | Share | 发布状态快照，由 VIM4 的 IO 终端显示对齐表格；长按只打印一次 |
 | `buttons[6]` 或 `buttons[7]` 按住 | L2 或 R2 | 用 R2 模拟轴 `axes[4]` 增幅、L2 模拟轴 `axes[3]` 减幅，沿用原映射 |
 
 各模式通过独立按键选择：方块手动、三角普通自动、圆圈声源跟踪；
@@ -364,13 +364,15 @@ ROS 仿真时钟暂停或回拨不会暂停运动或手柄超时检查。
 | `stop_button` / `auto_button` / `manual_button` | 1 / 3 / 0 | 模式按键索引 |
 | `tracking_button` | 2 | 声源跟踪模式按键索引，默认圆圈 |
 | `status_button` | 8 | 状态查看按键索引，默认 Share；不能与运动按键重叠 |
+| `status_local_echo` | false | 同时在 PC 运动节点终端显示 Share 快照 |
 | `amplitude_buttons` | `[6, 7]` | 调幅使能按键列表 |
 
 中心 2048、软件范围 ±1024、启动文件摆频 1.5 Hz、默认摆幅 512 和
 调幅速率 64 刻度／秒保留。直接 rosrun 时的摆频默认仍为 2 Hz。
 位置、幅值和偏置使用舵机刻度，软件范围不等于已验证的机械限位。
 实际摆幅受当前中心位置的剩余余量限制；靠近位置边界时摆幅会缩小。
-日志显示模式／原因、目标和实际偏置、请求和实际摆幅以及最终目标位置。
+常规日志显示模式切换和停止原因；详细数据通过 Share 查看。
+不再每秒打印 `Sonic manual: bias...`，逐周期声学日志改为 debug 级别。
 
 ```bash
 roslaunch robotic_fish sonic_teleop.launch
@@ -463,8 +465,11 @@ rostopic echo /robotic_fish/acoustic/steering_state
 
 ### 6.6 Share 查看系统状态
 
-按一下 **Share（`buttons[8]`）**，在运行 `sonic_teleop.launch` 的终端打印一组快照。
-长按不重复打印，松开后再按可再次查看。输出包括：
+按一下 **Share（`buttons[8]`）**，PC 运动节点生成一次快照，经
+`/robotic_fish/sonic/status_snapshot`（`std_msgs/String`）发送，
+由 **VIM4 的 `io.launch` 终端**打印。长按不重复打印，松开后再按可再次查看。
+快照不锁存，显示节点启动后等待下一次 Share，避免把旧结果当作新状态。
+周期统计和判断仍在 PC 完成，VIM4 不重新计算窗口。输出包括：
 
 - 当前运动模式、声学状态和停止原因。
 - ADC0／ADC1／ADC2（头／左／右）的最新原始电压、校准／回退电压，以及数据质量和年龄。
@@ -475,25 +480,53 @@ rostopic echo /robotic_fish/acoustic/steering_state
 例如，进入跟踪并完成一个周期后：
 
 ```text
-Sonic status (Share): mode=tracking status=active reason=tracking_button
-  ADC instant raw [V]: head=0.50000 left=0.70000 right=0.40000
-  ADC instant calibrated/fallback [V]: head=0.51000 left=0.72000 right=0.42000
-  ADC quality=valid sample_age=0.020s receipt_age=0.015s
-  Last completed cycle=3 window=0.667s samples=13 historical=False
-  Cycle calibrated mean [V]: head=0.50000 left=0.70000 right=0.40000
-  Left-right delta [V]=+0.30000 normalized=+0.2727 threshold=0.1000
-  Direction=left last_decision=left command_bias=(+256.0/1024.0)
++----------------------------------------------------------------------------+
+|                            SONIC STATUS / SHARE                            |
++----------------------------------------------------------------------------+
+| Mode / state    : tracking / active                                        |
+| Direction       : LEFT                                                     |
+| Bias / limit    : (+128.0/1024.0)                                          |
+| Reason          : tracking_button                                          |
+| Snapshot ROS [s]: 123.450                                                  |
++----------------------------------------------------------------------------+
+| Voltage [V]            |     Head (ADC0) |     Left (ADC1) |  Right (ADC2) |
+| Raw instant            |         0.50000 |         0.70000 |       0.40000 |
+| Calibrated / fallback  |         0.51000 |         0.72000 |       0.42000 |
+| Previous cycle mean    |         0.50000 |         0.70000 |       0.40000 |
++----------------------------------------------------------------------------+
+| ADC quality     : valid                                                    |
+| Source / Rx age : 0.020 / 0.015 s                                          |
+| Cycle           : #3 CURRENT; W=0.667 s; N=13                              |
+| L-R [V]         : +0.30000                                                 |
+| Normalized / T  : +0.2727 / 0.1000                                         |
+| Last decision   : LEFT                                                     |
++----------------------------------------------------------------------------+
 ```
+
+表格宽 78 列，电压统一保留 5 位小数。颜色用于辅助识别：数值青色，
+`LEFT` 黄色、`RIGHT` 洋红色、`STRAIGHT` 绿色，异常／停止红色，预热／历史结果黄色。
+`io.launch` 默认 `enable_status_console:=true status_color:=auto`：
+交互终端启用颜色；重定向输出、`TERM=dumb` 或设置了 `NO_COLOR` 时输出纯文本。
+可显式设置 `status_color:=always` 或 `status_color:=never`，例如在 VIM4 强制彩色：
+
+```bash
+roslaunch robotic_fish_sonic io.launch dev:=vim4 gain_mode:=manual status_color:=always
+```
+
+需要单独运行显示节点时，执行 `roslaunch robotic_fish_sonic status_console.launch color:=auto`；
+已有 `io.launch` 显示节点时直接按 Share 即可。PC 单机调试可给运动 launch 设置
+`status_local_echo:=true`。快照话题始终是纯文本，`record.launch` 已包含它。
 
 周期均值与控制判断使用同一批数据，不是 ADC 的 `volt_raw_mean_1s`，也不会因查看而重算或重置相位。
 偏置分子为当前实际输出偏置；分母为允许设置的偏置绝对值上限 `servo_range`（默认 1024），
 各模式使用同一上限。在线调整声学 `bias` 不会改变分母。
 停止时显示 `(+0.0/1024.0)`（默认配置）。
-首次进入跟踪尚未完成周期时显示 `unavailable` 和 `warmup`。
-停止后保留的周期结果标为 `historical=True`，当前方向为 `stopped`；
-手动／普通自动时为 `not_tracking`。`last_decision` 仅表示最近一次声学判断。
-声学功能未启用时，Share 仍可查看瞬时电压，方向为 `disabled`，不产生周期判断。
+首次进入跟踪尚未完成周期时显示 `unavailable` 和 `WARMUP`，均值单元格为 `--`。
+停止后保留的周期结果标为 `HISTORICAL`，当前方向为 `STOPPED`；
+手动／普通自动时为 `NOT_TRACKING`。`Last decision` 仅表示最近一次声学判断。
+声学功能未启用时，Share 仍可查看瞬时电压，方向为 `DISABLED`，不产生周期判断。
 无 ADC、校准回退、数据过期等情况会明确标出；瞬时回退电压不作为有效校准均值使用。
+电压年龄及 `Snapshot ROS [s]` 均为 PC 生成快照时的记录，不会在显示端刷新。
 
 ## 7. ROS 话题与参数
 

@@ -3,6 +3,7 @@
 import argparse
 from pathlib import Path
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -17,6 +18,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--node-script', type=Path,
                         default=Path(__file__).resolve().parents[1] / 'scripts/sonic_teleop.py')
+    parser.add_argument('--console-script', type=Path,
+                        default=Path(__file__).resolve().parents[2] / 'robotic_fish_sonic/scripts/status_console.py')
     args = parser.parse_args()
     port = 11429
     try:
@@ -49,6 +52,7 @@ def main():
             raise RuntimeError('isolated master startup timeout')
         import rospy
         from sensor_msgs.msg import Joy
+        from std_msgs.msg import String
         from spinal.msg import ServoControlCmd
         from robotic_fish_sonic.msg import AdcSample, AdcSampleArray, AcousticSteeringState
         from robotic_fish_sonic.srv import SetAcousticSteering
@@ -59,7 +63,7 @@ def main():
             prefix = '/cycle_test_' + str(case)
             log = (output / (name + '.log')).open('w'); logs.append(log)
             lock = threading.Lock()
-            states, targets = [], []
+            states, targets, snapshots = [], [], []
             def receive_state(msg):
                 with lock:
                     states.append((time.monotonic(), msg))
@@ -67,8 +71,12 @@ def main():
                 assert list(msg.index) == [0] and len(msg.cmd) == 1
                 with lock:
                     targets.append(msg.cmd[0])
+            def receive_snapshot(msg):
+                with lock:
+                    snapshots.append(msg.data)
             sub = rospy.Subscriber(prefix + '/state', AcousticSteeringState, receive_state, queue_size=200)
             target_sub = rospy.Subscriber(prefix + '/targets', ServoControlCmd, receive_target, queue_size=200)
+            status_sub = rospy.Subscriber(prefix + '/snapshot', String, receive_snapshot, queue_size=10)
             joy_pub = rospy.Publisher(prefix + '/joy', Joy, queue_size=1)
             adc_pub = rospy.Publisher(prefix + '/adc', AdcSampleArray, queue_size=1)
             node = subprocess.Popen(
@@ -76,10 +84,18 @@ def main():
                  '/joy:=' + prefix + '/joy', '/servo/target_states:=' + prefix + '/targets',
                  '/robotic_fish/adc/samples:=' + prefix + '/adc',
                  '/robotic_fish/acoustic/steering_state:=' + prefix + '/state',
+                 '/robotic_fish/sonic/status_snapshot:=' + prefix + '/snapshot',
                  '_acoustic_steering/enabled:=true', '_acoustic_steering/bias:=128.0',
                  '_acoustic_steering/left_bias_sign:=' + str(polarity),
                  '_auto_frequency:=' + str(frequency)], stdout=log, stderr=subprocess.STDOUT)
             processes.append(node)
+            console_log = (output / (name + '_console.log')).open('w'); logs.append(console_log)
+            console = subprocess.Popen(
+                [sys.executable, str(args.console_script), '__name:=' + name + '_console',
+                 '/robotic_fish/sonic/status_snapshot:=' + prefix + '/snapshot',
+                 '_color:=' + ('auto' if case == 0 else 'always')],
+                stdout=console_log, stderr=subprocess.STDOUT)
+            processes.append(console)
             driving = {'button': None, 'axis': 0., 'left': 2., 'right': 1., 'valid': True, 'adc': True}
             finish = threading.Event()
 
@@ -125,16 +141,19 @@ def main():
                 raise AssertionError('target timeout; expected ' + str(value))
 
             def share_report():
-                path = output / (name + '.log')
-                marker = 'Sonic status (Share):'
-                before = path.read_text().count(marker)
+                path = output / (name + '_console.log')
+                marker = 'SONIC STATUS / SHARE'
+                with lock:
+                    before = len(snapshots)
                 set_input(button=8)
                 deadline = time.monotonic() + 2.
                 while time.monotonic() < deadline:
                     content = path.read_text()
-                    if content.count(marker) == before + 1:
+                    with lock:
+                        delivered = len(snapshots) == before + 1
+                    if delivered and content.count(marker) == before + 1:
                         break
-                    if node.poll() is not None:
+                    if node.poll() is not None or console.poll() is not None:
                         raise RuntimeError('node exited during Share report; see ' + str(output))
                     time.sleep(.01)
                 else:
@@ -142,8 +161,14 @@ def main():
                 time.sleep(.12)
                 content = path.read_text()
                 assert content.count(marker) == before + 1, 'held Share printed repeatedly'
+                with lock:
+                    assert len(snapshots) == before + 1
+                    report = snapshots[-1]
+                assert '\033[' not in report
+                assert report in re.sub(r'\033\[[0-9;]*m', '', content)
+                assert ('\033[' in content) == (case == 1)
                 set_input(button=None)
-                return content.rsplit(marker, 1)[1]
+                return report
 
             thread = threading.Thread(target=drive, daemon=True)
             try:
@@ -181,10 +206,12 @@ def main():
                     updates = [s for _, s in states if s.decision_updated]
                 assert len(updates) == 1, updates
                 report = share_report()
-                assert 'ADC instant raw [V]: head=1.00000 left=2.00000 right=1.00000' in report
-                assert 'Cycle calibrated mean [V]: head=1.00000 left=2.00000 right=1.00000' in report
-                assert 'delta [V]=+1.00000 normalized=+0.3333' in report
-                assert 'Direction=left last_decision=left' in report
+                assert re.search(r'Raw instant\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
+                assert re.search(r'Previous cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
+                assert re.search(r'L-R \[V\]\s*:\s*\+1.00000', report)
+                assert re.search(r'Normalized / T\s*:\s*\+0.3333 / 0.1000', report)
+                assert re.search(r'Direction\s*:\s*LEFT', report)
+                assert set(map(len, report.splitlines())) == {78}
                 # Re-press Circle: keep tracking and the existing phase/window.
                 set_input(button=2)
                 time.sleep(.1)
@@ -214,7 +241,7 @@ def main():
                 wait_state(lambda s: s.motion_mode == 'stopped' and s.status == 'stop_button')
                 wait_target(2048)
                 report = share_report()
-                assert 'historical=True' in report and 'Direction=stopped' in report
+                assert 'HISTORICAL' in report and re.search(r'Direction\s*:\s*STOPPED', report)
                 set_input(button=None)
                 time.sleep(.1)
                 set_input(button=2)
@@ -251,14 +278,20 @@ def main():
                 wait_state(lambda s: s.motion_mode == 'stopped' and s.status == 'stop_button')
                 print('PASS: f=%.1f Hz, W=1/f, one decision/cycle, polarity=%d, '
                       'Circle tracking, Triangle ordinary auto, Cross stop, '
-                      'Share snapshots, live settings and fault recovery' % (frequency, polarity), flush=True)
+                      'remote aligned/color Share snapshots, live settings and fault recovery' % (frequency, polarity), flush=True)
             finally:
                 finish.set()
                 if thread.is_alive(): thread.join(timeout=2)
-                joy_pub.unregister(); adc_pub.unregister(); sub.unregister(); target_sub.unregister()
+                joy_pub.unregister(); adc_pub.unregister(); sub.unregister(); target_sub.unregister(); status_sub.unregister()
                 if node.poll() is None:
                     node.send_signal(signal.SIGINT)
                     assert node.wait(timeout=5) == 0
+                if console.poll() is None:
+                    console.send_signal(signal.SIGINT)
+                    assert console.wait(timeout=5) == 0
+                node_output = (output / (name + '.log')).read_text()
+                assert 'SONIC STATUS / SHARE' not in node_output
+                assert 'Sonic manual: bias' not in node_output
         rospy.signal_shutdown('cycle steering smoke complete')
         print('PASS: clean shutdown; isolated logs: ' + str(output), flush=True)
     finally:

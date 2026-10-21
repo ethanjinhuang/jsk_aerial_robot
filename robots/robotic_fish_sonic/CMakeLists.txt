@@ -46,6 +46,7 @@ catkin_install_python(PROGRAMS
   scripts/calibrate_from_bag.py
   scripts/quadrant_node.py
   scripts/replay_quadrants.py
+  scripts/status_console.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
@@ -71,4 +72,5 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_node_safety.py)
   catkin_add_nosetests(test/test_acoustic_core.py)
   catkin_add_nosetests(test/test_cycle_steering.py)
+  catkin_add_nosetests(test/test_status_display.py)
 endif()

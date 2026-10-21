@@ -6,6 +6,8 @@
   <arg name="enable_adc" default="true"/>
   <arg name="enable_dac" default="true"/>
   <arg name="enable_gain_control" default="true"/>
+  <arg name="enable_status_console" default="true"/>
+  <arg name="status_color" default="auto"/>
   <!-- Deprecated compatibility alias. true selects closed_loop. -->
   <arg name="enable_agc" default="false"/>
   <arg name="gain_mode" default="off"/>
@@ -32,5 +34,8 @@
     <arg name="agc_target_max_v" value="$(arg agc_target_max_v)"/>
     <arg name="agc_step_v" value="$(arg agc_step_v)"/>
     <arg name="adc_safety_limit_v" value="$(arg adc_safety_limit_v)"/>
+  </include>
+  <include if="$(arg enable_status_console)" file="$(find robotic_fish_sonic)/launch/status_console.launch">
+    <arg name="color" value="$(arg status_color)"/>
   </include>
 </launch>

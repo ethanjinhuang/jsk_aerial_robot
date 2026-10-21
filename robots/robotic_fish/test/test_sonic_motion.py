@@ -291,9 +291,11 @@ class RosAdapterTests(unittest.TestCase):
         fake_ros = NS(get_param=lambda k, default=None: (params or {}).get(k, default),
                       Publisher=Mock(return_value=NS(publish=published.append)),
                       Subscriber=Mock(return_value=NS(unregister=lambda: None)), on_shutdown=Mock(),
-                      loginfo=Mock(), logwarn=Mock(), loginfo_throttle=Mock(), ROSException=RuntimeError,
+                      loginfo=Mock(), logwarn=Mock(), logdebug=Mock(), ROSException=RuntimeError,
                       Service=Mock(return_value=NS(shutdown=Mock())))
+        fake_ros.published = published
         modules = {'rospy': fake_ros, 'sensor_msgs.msg': NS(Joy=object),
+                   'std_msgs.msg': NS(String=lambda data:NS(data=data)),
                    'spinal.msg': NS(ServoControlCmd=lambda: NS(index=[], cmd=[])),
                    'robotic_fish_sonic.msg': NS(AdcSampleArray=object,
                        AcousticSteeringState=lambda: NS(header=NS())),
@@ -326,7 +328,7 @@ class RosAdapterTests(unittest.TestCase):
         node._shutdown()
         self.assertEqual(published[-1].cmd, [2048])
         self.assertEqual(node.controller.reason, 'shutdown')
-        self.assertEqual(ros.Publisher.call_count, 1)
+        self.assertEqual(ros.Publisher.call_count, 2)
 
     def test_invalid_config_fails_before_publisher(self):
         for params in [{'~update_rate': 0}, {'~update_rate': 4}, {'~update_rate': True},
@@ -335,6 +337,7 @@ class RosAdapterTests(unittest.TestCase):
                        {'~acoustic_steering/max_age_s': 0},
                        {'~acoustic_steering/max_age_s': True},
                        {'~acoustic_steering/future_tolerance_s': False},
+                       {'~status_local_echo': 'true'},
                        {'~acoustic_steering/future_tolerance_s': -1}]:
             with self.subTest(params=params):
                 module, ros, _, _ = self.make_node(params)
@@ -420,12 +423,13 @@ class RosAdapterTests(unittest.TestCase):
         node._controlLoop()
 
     def status_reports(self, ros):
-        return [call.args[1] for call in ros.loginfo.call_args_list if call.args[0] == '%s']
+        return [message.data for message in ros.published if hasattr(message, 'data')]
 
     def test_share_reports_actual_cycle_means_once_per_press_without_changing_gait(self):
         module, ros, clock, published = self.make_node({'~acoustic_steering/enabled': True})
         with patch.dict(sys.modules, module._mock_modules):
             node = module.Teleop()
+        module.write_snapshot = Mock()
         node._adcCallback(self.adc(0.))
         self.send_status_joy(node, (2,))
         for i in range(1, 11):
@@ -439,10 +443,14 @@ class RosAdapterTests(unittest.TestCase):
         node._adcCallback(newest)
         self.send_status_joy(node, (8,))
         report = self.status_reports(ros)[-1]
-        self.assertIn('ADC instant calibrated/fallback [V]: head=4.00000 left=2.00000 right=1.00000', report)
-        self.assertIn('Cycle calibrated mean [V]: head=1.00000 left=2.00000 right=1.00000', report)
-        self.assertIn('delta [V]=+1.00000 normalized=+0.3333', report)
-        self.assertIn('Direction=left last_decision=left command_bias=(+256.0/1024.0)', report)
+        self.assertRegex(report, r'Calibrated / fallback\s*\|\s*4.00000\s*\|\s*2.00000\s*\|\s*1.00000')
+        self.assertRegex(report, r'Previous cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000')
+        self.assertRegex(report, r'L-R \[V\]\s*:\s*\+1.00000')
+        self.assertRegex(report, r'Normalized / T\s*:\s*\+0.3333 / 0.1000')
+        self.assertRegex(report, r'Direction\s*:\s*LEFT')
+        self.assertIn('(+256.0/1024.0)', report)
+        self.assertNotIn('\033[', report)
+        module.write_snapshot.assert_not_called()
         self.send_status_joy(node, (8,))
         self.assertEqual(len(self.status_reports(ros)), 1)
         self.assertEqual((node.controller.auto_epoch, node.acoustic.cycle), (epoch, cycle))
@@ -452,17 +460,19 @@ class RosAdapterTests(unittest.TestCase):
         self.send_status_joy(node)
         self.send_status_joy(node, (1, 8))
         report = self.status_reports(ros)[-1]
-        self.assertIn('historical=True', report)
-        self.assertIn('Direction=stopped last_decision=left command_bias=(+0.0/1024.0)', report)
-        self.assertEqual(published[-1].cmd, [2048])
+        self.assertIn('HISTORICAL', report)
+        self.assertRegex(report, r'Direction\s*:\s*STOPPED')
+        self.assertRegex(report, r'Last decision\s*:\s*LEFT')
+        self.assertIn('(+0.0/1024.0)', report)
+        self.assertEqual([message for message in published if hasattr(message, 'cmd')][-1].cmd, [2048])
 
     def test_share_works_with_tracking_disabled_and_marks_missing_or_stale_data(self):
         module, ros, clock, _ = self.make_node()
         node = module.Teleop()
         self.send_status_joy(node, (8,))
-        self.assertIn('unavailable (no ADC data)', self.status_reports(ros)[-1])
-        self.assertIn('Direction=disabled', self.status_reports(ros)[-1])
-        self.assertIn('command_bias=(+0.0/1024.0)', self.status_reports(ros)[-1])
+        self.assertIn('no_data', self.status_reports(ros)[-1])
+        self.assertRegex(self.status_reports(ros)[-1], r'Direction\s*:\s*DISABLED')
+        self.assertIn('(+0.0/1024.0)', self.status_reports(ros)[-1])
         clock[0] = .1
         frame = self.adc(.1)
         frame.samples.reverse()
@@ -470,13 +480,13 @@ class RosAdapterTests(unittest.TestCase):
         self.send_status_joy(node)
         self.send_status_joy(node, (8,))
         report = self.status_reports(ros)[-1]
-        self.assertIn('ADC instant raw [V]: head=0.50000 left=1.00000 right=0.50000', report)
-        self.assertIn('ADC quality=valid', report)
+        self.assertRegex(report, r'Raw instant\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000')
+        self.assertRegex(report, r'ADC quality\s*:\s*valid')
         self.assertIn('no completed tracking cycle', report)
         clock[0] = .4
         self.send_status_joy(node)
         self.send_status_joy(node, (8,))
-        self.assertIn('ADC quality=stale_sample', self.status_reports(ros)[-1])
+        self.assertRegex(self.status_reports(ros)[-1], r'ADC quality\s*:\s*stale_sample')
         self.assertEqual(node.controller.mode, 'manual')
         node._shutdown()
         self.assertIsNone(node.acoustic)
@@ -487,7 +497,7 @@ class RosAdapterTests(unittest.TestCase):
             node = module.Teleop()
         node._adcCallback(self.adc(0.))
         self.send_status_joy(node, (2, 8))
-        self.assertIn('Direction=warmup', self.status_reports(ros)[-1])
+        self.assertRegex(self.status_reports(ros)[-1], r'Direction\s*:\s*WARMUP')
         self.assertIn('no completed tracking cycle', self.status_reports(ros)[-1])
         clock[0] = .05
         bad = self.adc(.05)
@@ -496,17 +506,20 @@ class RosAdapterTests(unittest.TestCase):
         self.send_status_joy(node)
         self.send_status_joy(node, (8,))
         report = self.status_reports(ros)[-1]
-        self.assertIn('ADC quality=calibration_fallback', report)
-        self.assertIn('Direction=stopped last_decision=unavailable', report)
+        self.assertRegex(report, r'ADC quality\s*:\s*calibration_fallback')
+        self.assertRegex(report, r'Direction\s*:\s*STOPPED')
+        self.assertRegex(report, r'Last decision\s*:\s*UNAVAILABLE')
 
     def test_share_can_be_remapped_and_handles_incomplete_adc_groups(self):
-        module, ros, _, _ = self.make_node({'~status_button': 10})
+        module, ros, _, _ = self.make_node({'~status_button': 10, '~status_local_echo': True})
         node = module.Teleop()
+        module.write_snapshot = Mock()
         self.send_status_joy(node, (8,))
         self.assertEqual(self.status_reports(ros), [])
         node._adcCallback(NS(samples=[]))
         self.send_status_joy(node, (10,))
         self.assertIn('expected channels 0,1,2', self.status_reports(ros)[-1])
+        module.write_snapshot.assert_called_once_with(self.status_reports(ros)[-1])
         self.assertEqual(node.controller.mode, 'manual')
 
 

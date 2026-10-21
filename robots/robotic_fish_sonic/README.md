@@ -113,8 +113,12 @@ rostopic echo /robotic_fish/acoustic/channel_comparison
 不经过 `quadrant_node` 的固定窗口，不需要方向训练模型。
 输入应为整流／检波后的包络或幅值电压；当前硬件前端已由用户确认符合此条件。
 周期均值表示平均响应幅值，不是物理声强，也不能直接用于原始交流声波电压。
-运动节点支持按 Share 在终端查看三通道瞬时电压、上一完整周期的校准均值、
-左右差值和当前判断，具体见 [Share 查看系统状态](../robotic_fish/README.md#66-share-查看系统状态)。
+运动节点按 Share 发布纯文本快照，`io.launch` 默认启动 `status_console.py`，
+在 VIM4 终端用对齐表格显示三通道瞬时电压、上一完整周期均值、差值及方向。
+`status_color:=auto` 自动检测终端颜色，`always` 强制彩色，`never` 关闭；
+`enable_status_console:=false` 可关闭显示。独立显示可运行
+`roslaunch robotic_fish_sonic status_console.launch color:=auto`。
+具体见 [Share 查看系统状态](../robotic_fish/README.md#66-share-查看系统状态)。
 三通道映射仍要求 ADC0=头、ADC1=左、ADC2=右，并要求有效校准和已确认增益。
 
 新增接口：
