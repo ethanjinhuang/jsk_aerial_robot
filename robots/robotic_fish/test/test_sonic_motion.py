@@ -387,7 +387,7 @@ class RosAdapterTests(unittest.TestCase):
             node._joyCallback(NS(axes=joy(steering=-1.)[0],buttons=joy()[1]))
             node._controlLoop()
             if i<10:self.assertEqual(node.controller.applied_bias,0.)
-        self.assertEqual((node.controller.mode,node.controller.applied_bias),('tracking',256.))
+        self.assertEqual((node.controller.mode,node.controller.applied_bias),('tracking',-256.))
         self.assertTrue(node._setAcousticSteering(NS(threshold=.7,bias=128.,lr_voltage_offset_v=0.)).success)
         self.assertFalse(node._setAcousticSteering(NS(threshold=.2,bias=1025.,lr_voltage_offset_v=0.)).success)
         self.assertEqual(node.acoustic.settings.bias,256.)
@@ -407,8 +407,8 @@ class RosAdapterTests(unittest.TestCase):
 
     def test_mean_percentage_boundary_matches_motion_share_service_and_recording(self):
         for left, right, threshold, direction, bias in (
-                (1.075, .925, .15, 'left', 256.),
-                (.925, 1.075, .15, 'right', -256.),
+                (1.075, .925, .15, 'left', -256.),
+                (.925, 1.075, .15, 'right', 256.),
                 (1.074, .926, .15, 'straight', 0.),
                 (1., 1., 0., 'straight', 0.)):
             with self.subTest(left=left, right=right, threshold=threshold):
@@ -427,6 +427,10 @@ class RosAdapterTests(unittest.TestCase):
                 state = [m for m in published if hasattr(m, 'decision_updated')][-1]
                 self.assertEqual((state.direction, state.decision_direction), (direction, direction))
                 self.assertEqual(state.difference_reference, 'channel_mean')
+                self.assertEqual(state.left_bias_sign, -1)
+                self.assertEqual(state.command_bias, bias)
+                motion = [m for m in published if hasattr(m, 'target_position')][-1]
+                self.assertAlmostEqual(motion.target_position, 2048. + bias)
                 response = node._setAcousticSteering(NS(threshold=threshold, bias=256., lr_voltage_offset_v=0.))
                 self.assertEqual(response.direction, direction)
                 self.assertEqual(response.difference_reference, 'channel_mean')
@@ -466,7 +470,7 @@ class RosAdapterTests(unittest.TestCase):
         self.assertNotIn('Compensated mean', report)
         self.assertRegex(report, r'Diff after/T \[%\]\s*:\s*\(2.00000-1.00000\+\(-1.50000\)\)/AVG = -33.33% / 10.00%')
         self.assertRegex(report, r'Direction\s*:\s*RIGHT')
-        self.assertEqual(node.controller.applied_bias, -128.)
+        self.assertEqual(node.controller.applied_bias, 128.)
         state = [m for m in published if hasattr(m, 'normalized_difference')][-1]
         self.assertAlmostEqual(state.normalized_difference, 2 / 3)
         self.assertAlmostEqual(state.compensated_difference, -1 / 3)
@@ -518,15 +522,15 @@ class RosAdapterTests(unittest.TestCase):
             self.assertEqual((node.controller.mode, node.controller.auto_epoch), ('tracking', epoch))
             if i < 30:
                 self.assertEqual(node._acoustic_status, 'gain_warmup')
-                self.assertEqual(node.controller.applied_bias, 256.)
-                expected, _ = node.controller.motion.sample(clock[0] - epoch, 256., 512., 2.)
+                self.assertEqual(node.controller.applied_bias, -256.)
+                expected, _ = node.controller.motion.sample(clock[0] - epoch, -256., 512., 2.)
                 self.assertEqual([m for m in published if hasattr(m, 'cmd')][-1].cmd, [int(expected)])
         report = self.status_reports(ros)[-1]
         self.assertIn('tracking / gain_warmup', report)
         self.assertRegex(report, r'Direction\s*:\s*HOLDING')
         self.assertIn('HISTORICAL', report)
-        self.assertIn('(+256.0/1024.0)', report)
-        self.assertEqual((node._acoustic_status, node.controller.applied_bias), ('active', -256.))
+        self.assertIn('(-256.0/1024.0)', report)
+        self.assertEqual((node._acoustic_status, node.controller.applied_bias), ('active', 256.))
         self.assertEqual(node.acoustic.last_decision.cycle, 3)
 
     def test_cross_and_joy_timeout_still_stop_during_quality_or_gain_wait(self):
@@ -579,12 +583,12 @@ class RosAdapterTests(unittest.TestCase):
                     if 11 <= i <= 30:
                         self.assertEqual(node._acoustic_status, expected)
                     if 11 <= i < 50:
-                        self.assertEqual(node.controller.applied_bias, 256.)
+                        self.assertEqual(node.controller.applied_bias, -256.)
                 for report in self.status_reports(ros):
                     self.assertRegex(report, r'Direction\s*:\s*HOLDING')
                     self.assertIn('HISTORICAL', report)
                 self.assertIn('data_warmup', self.status_reports(ros)[-1])
-                self.assertEqual((node._acoustic_status, node.controller.applied_bias), ('active', -256.))
+                self.assertEqual((node._acoustic_status, node.controller.applied_bias), ('active', 256.))
 
     def test_tracking_can_start_with_quality_hold_and_zero_bias(self):
         for quality in ('calibration', 'unknown'):
@@ -642,7 +646,7 @@ class RosAdapterTests(unittest.TestCase):
         self.assertRegex(report, r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000')
         self.assertRegex(report, r'Diff after/T \[%\]\s*:\s*\(2.00000-1.00000\+\(\+0.00000\)\)/AVG = \+66.67% / 10.00%')
         self.assertRegex(report, r'Direction\s*:\s*LEFT')
-        self.assertIn('(+256.0/1024.0)', report)
+        self.assertIn('(-256.0/1024.0)', report)
         self.assertNotIn('\033[', report)
         module.write_snapshot.assert_not_called()
         self.send_status_joy(node, (8,))
@@ -916,7 +920,7 @@ class RosAdapterTests(unittest.TestCase):
         self.assertEqual((rejected.motion_mode, rejected.status, rejected.direction, rejected.adc_quality),
                          ('tracking', 'active', 'left', 'valid'))
         self.assertEqual((rejected.command_bias, rejected.active_threshold,
-                          rejected.active_bias, rejected.active_lr_voltage_offset_v), (128., .15, 128., .08))
+                          rejected.active_bias, rejected.active_lr_voltage_offset_v), (-128., .15, 128., .08))
         self.assertFalse(rejected.parameters_pending)
         self.assertEqual(rejected.pending_request_id, 0)
         self.assertTrue(all(math.isnan(value) for value in
@@ -948,7 +952,7 @@ class RosAdapterTests(unittest.TestCase):
             node._adcCallback(self.adc(clock[0]))
             self.send_status_joy(node, (8,) if i == 21 else ())
             self.assertEqual((node.controller.mode, node.controller.auto_epoch, node.controller.applied_bias),
-                             ('tracking', 0., 256.))
+                             ('tracking', 0., -256.))
             if i >= 20:
                 self.assertEqual(node._acoustic_status, 'voltage_compensation_out_of_range')
                 self.assertIs(node.acoustic.last_decision, previous)
@@ -963,7 +967,7 @@ class RosAdapterTests(unittest.TestCase):
             clock[0] = i * .05
             node._adcCallback(self.adc(clock[0]))
             self.send_status_joy(node)
-        self.assertEqual((node._acoustic_status, node.controller.applied_bias), ('active', -128.))
+        self.assertEqual((node._acoustic_status, node.controller.applied_bias), ('active', 128.))
         self.assertEqual(node.acoustic.last_decision.cycle, 4)
         events = [m for m in published if hasattr(m, 'event')]
         self.assertEqual([(m.request_id, m.event) for m in events],

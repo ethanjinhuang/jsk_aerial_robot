@@ -46,6 +46,7 @@ def verify_recording(directory):
                c['settings']['acoustic_steering']['voltage_offset_reference'] == 'left_minus_right' and
                c['settings']['acoustic_steering']['threshold_inclusive'] for c in configs)
     assert configs[0]['settings']['acoustic_steering']['bias'] == 128., 'late startup config lost'
+    assert configs[0]['settings']['acoustic_steering']['left_bias_sign'] == -1
     assert configs[0]['pending_request'] is None
     assert any(c['pending_request'] for c in configs), 'pending configuration lost'
     assert configs[-1]['pending_request'] is None and configs[-1]['applied_request_id'] > 0
@@ -135,7 +136,7 @@ def main():
         from robotic_fish_sonic.srv import SetAcousticSteering
         rospy.init_node('cycle_steering_smoke', disable_signals=True)
 
-        for case, (frequency, polarity) in enumerate(((1.5, 1), (2., -1))):
+        for case, (frequency, polarity) in enumerate(((1.5, -1), (2., 1))):
             name = 'cycle_motion_' + str(case)
             prefix = '/cycle_test_' + str(case)
             log = (output / (name + '.log')).open('w'); logs.append(log)
@@ -166,8 +167,9 @@ def main():
                  '/robotic_fish/sonic/config:=' + prefix + '/config',
                  '/robotic_fish/acoustic/steering_events:=' + prefix + '/events',
                  '_acoustic_steering/enabled:=true', '_acoustic_steering/bias:=128.0',
-                 '_acoustic_steering/left_bias_sign:=' + str(polarity),
-                 '_auto_frequency:=' + str(frequency)], stdout=log, stderr=subprocess.STDOUT)
+                 '_auto_frequency:=' + str(frequency)] +
+                ([] if case == 0 else ['_acoustic_steering/left_bias_sign:=' + str(polarity)]),
+                stdout=log, stderr=subprocess.STDOUT)
             processes.append(node)
             console_log = (output / (name + '_console.log')).open('w'); logs.append(console_log)
             console = subprocess.Popen(
@@ -313,6 +315,7 @@ def main():
                 assert state.lr_voltage_offset_v == 0.
                 assert abs(state.compensated_difference - 2 / 3) < 1e-9
                 assert state.command_bias == polarity * 128.
+                assert state.left_bias_sign == polarity
                 with lock:
                     updates = [s for _, s in states if s.decision_updated]
                 assert len(updates) == 1, updates

@@ -104,7 +104,7 @@ class Teleop:
                 threshold=rospy.get_param('~acoustic_steering/threshold', .1),
                 bias=rospy.get_param('~acoustic_steering/bias', 256.),
                 lr_voltage_offset_v=rospy.get_param('~acoustic_steering/lr_voltage_offset_v', 0.),
-                left_bias_sign=rospy.get_param('~acoustic_steering/left_bias_sign', 1),
+                left_bias_sign=rospy.get_param('~acoustic_steering/left_bias_sign', -1),
                 gap_s=rospy.get_param('~acoustic_steering/gap_s', .2),
                 max_age_s=self._status_max_age,
                 future_tolerance_s=self._status_future_tolerance,

@@ -42,16 +42,16 @@ class CycleTests(unittest.TestCase):
                         self.assertIsNone(result)  # Including half-cycle and 80% coverage.
                 self.assertAlmostEqual(result.end - result.start, 1. / frequency)
                 self.assertAlmostEqual(result.difference, 2 / 3)
-                self.assertEqual(result.bias, 256.)
+                self.assertEqual(result.bias, -256.)
                 self.assertIsNone(e.evaluate(100. + e.period + .001))
 
     def test_bias_is_held_and_never_accumulated(self):
         e = CycleSteering(2.)
         self.start(e)
         self.fill(e)
-        self.assertEqual(e.evaluate(100.5).bias, 256.)
+        self.assertEqual(e.evaluate(100.5).bias, -256.)
         self.fill(e, .5, 1.)
-        self.assertEqual(e.evaluate(101.).bias, 256.)
+        self.assertEqual(e.evaluate(101.).bias, -256.)
 
     def test_window_means_exclude_the_next_cycle_boundary(self):
         e = CycleSteering(2.)
@@ -105,13 +105,14 @@ class CycleTests(unittest.TestCase):
                 result = e.evaluate(100.5)
                 self.assertTrue(math.isnan(result.raw_means[0]))
                 self.assertEqual(result.raw_means[1:], (1., .5))
-                self.assertEqual(result.bias, 256.)
+                self.assertEqual(result.bias, -256.)
 
     def test_threshold_sign_and_neutral(self):
-        for left, right, expected in [(3., 1., 128.), (1., 3., -128.),
+        for left, right, expected in [(3., 1., -128.), (1., 3., 128.),
                                        (1., 1., 0.), (1.1, 1., 0.)]:
             with self.subTest(left=left,right=right):
                 e = CycleSteering(2., bias=128.)
+                self.assertEqual(e.left_bias_sign, -1)
                 self.push(e, 0., left=left, right=right)
                 e.begin(100., 2., 100.)
                 self.fill(e, left=left, right=right)
@@ -140,10 +141,10 @@ class CycleTests(unittest.TestCase):
                         self.fill(e, left=left, right=right)
                         result = e.evaluate(100.5)
                         self.assertAlmostEqual(result.compensated_difference, sign * difference)
-                        self.assertEqual(result.bias, sign * expected)
+                        self.assertEqual(result.bias, -sign * expected)
 
     def test_zero_threshold_equal_channels_stay_straight(self):
-        for left, right, expected in ((1., 1., 0.), (1.00001, 1., 256.), (1., 1.00001, -256.)):
+        for left, right, expected in ((1., 1., 0.), (1.00001, 1., -256.), (1., 1.00001, 256.)):
             e = CycleSteering(2., threshold=0.)
             self.push(e, 0., left=left, right=right)
             e.begin(100., 2., 100.)
@@ -151,7 +152,7 @@ class CycleTests(unittest.TestCase):
             self.assertEqual(e.evaluate(100.5).bias, expected)
 
     def test_two_hundred_percent_threshold_requires_zero_weaker_channel(self):
-        for left, right, expected in ((2., 0., 256.), (0., 2., -256.), (2., .001, 0.)):
+        for left, right, expected in ((2., 0., -256.), (0., 2., 256.), (2., .001, 0.)):
             e = CycleSteering(2., threshold=2.)
             self.push(e, 0., left=left, right=right)
             e.begin(100., 2., 100.)
@@ -242,12 +243,12 @@ class CycleTests(unittest.TestCase):
                 e.configure(threshold, bias, -.25)
             self.assertIs(e.pending, pending)
         self.fill(e)
-        self.assertEqual(e.evaluate(100.5).bias, -128.)
+        self.assertEqual(e.evaluate(100.5).bias, 128.)
         self.assertEqual(e.settings, pending)
         self.assertIsNone(e.pending)
         e.configure(.2, 64., .25)
         self.fill(e, .5, 1.)
-        self.assertEqual(e.evaluate(101.).bias, 64.)
+        self.assertEqual(e.evaluate(101.).bias, -64.)
         self.assertEqual((e.settings.threshold, e.settings.bias, e.settings.lr_voltage_offset_v), (.2, 64., .25))
 
     def test_compensation_waits_through_quality_hold_without_rewriting_old_decision(self):
@@ -269,7 +270,7 @@ class CycleTests(unittest.TestCase):
             result = e.evaluate(100. + t)
             if i < 40:
                 self.assertIsNone(result)
-        self.assertEqual((e.epoch, result.cycle, result.lr_voltage_offset_v, result.bias), (100., 4, -1.5, -256.))
+        self.assertEqual((e.epoch, result.cycle, result.lr_voltage_offset_v, result.bias), (100., 4, -1.5, 256.))
 
     def test_out_of_range_pending_triplet_holds_previous_decision_and_can_be_replaced(self):
         e = CycleSteering(2.)
@@ -288,7 +289,7 @@ class CycleTests(unittest.TestCase):
         e.configure(.1, 64., -1.5)
         self.fill(e, 1.5, 2.)
         result = e.evaluate(102.)
-        self.assertEqual((e.epoch, result.cycle, result.bias), (100., 4, -64.))
+        self.assertEqual((e.epoch, result.cycle, result.bias), (100., 4, 64.))
         self.assertIsNone(e.pending)
         self.assertFalse(e.waiting_status)
 
@@ -305,7 +306,7 @@ class CycleTests(unittest.TestCase):
         self.fill(e, .5, 1., left=1., right=1.)
         result = e.evaluate(101.)
         self.assertEqual((result.cycle, result.compensated_left_mean, result.compensated_right_mean), (2, .75, 1.25))
-        self.assertEqual(result.bias, -256.)
+        self.assertEqual(result.bias, 256.)
 
     def test_zero_compensated_channel_is_valid_and_overflow_is_not_clamped(self):
         for offset, expected in ((-6., -2.), (2., 2.)):
@@ -400,7 +401,7 @@ class CycleTests(unittest.TestCase):
         self.assertEqual((e.epoch, result.cycle, result.start, result.end), (100., 3, 101., 101.5))
         self.assertAlmostEqual(result.left_mean, 1.)
         self.assertAlmostEqual(result.right_mean, 3.)
-        self.assertEqual(result.bias, -128.)
+        self.assertEqual(result.bias, 128.)
         self.assertFalse(e.gain_warmup)
         self.assertIsNone(e.pending)
 
@@ -424,7 +425,7 @@ class CycleTests(unittest.TestCase):
                 self.assertIsNone(result)
         self.assertAlmostEqual(result.left_mean, 1.)
         self.assertAlmostEqual(result.right_mean, 3.)
-        self.assertEqual(result.bias, -256.)
+        self.assertEqual(result.bias, 256.)
         # Entering tracking with mixed gain waits without inventing a mean.
         e.deactivate()
         mixed = batch(1.55)
@@ -510,7 +511,7 @@ class CycleTests(unittest.TestCase):
                     if i < 50:
                         self.assertIsNone(result)
                         self.assertEqual(e.waiting_status, 'data_warmup')
-                self.assertEqual((e.epoch, result.cycle, result.bias), (100., 5, -128.))
+                self.assertEqual((e.epoch, result.cycle, result.bias), (100., 5, 128.))
                 self.assertAlmostEqual(result.left_mean, 1.)
                 self.assertAlmostEqual(result.right_mean, 3.)
                 self.assertFalse(e.waiting_status)

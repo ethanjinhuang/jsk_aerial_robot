@@ -511,8 +511,13 @@ d_corrected = (L - R + delta) / mean
 目标按原控制循环约 50 Hz 发布，决策频率为摆频 `f`，实际过零处理发生在
 边界后的首个控制周期。接受中心偏置跳变。
 
-`left_bias_sign=1` 表示正偏置用于左转，`-1` 表示负偏置用于左转；
-该符号、阈值和偏置初值都需要现场验证，不代表已确认的水中转向效果。
+`left_bias_sign` 将声学判断映射到舵机偏置，默认 **`-1`**：
+左侧强时舵机中心向右偏，输出 `-bias`；右侧强时输出 `+bias`。
+例如中心 2048、`bias=128` 时，左右判断对应的摆尾中心分别为 1920、2176。
+Share／状态话题的 `LEFT`、`RIGHT` 表示声学判断方向，舵机偏转符号看 `bias`，两者不能混同。
+该默认值按当前尾舵安装方向反转；如换用相反安装，可通过 `left_bias_sign:=1` 覆盖。
+此参数启动时读取，修改后需重启运动 launch；若启动命令仍显式填写 `left_bias_sign:=1`，将覆盖新默认值。
+阈值、偏置幅度与水中实际转向效果仍需现场确认。
 偏置使用舵机刻度，靠近软件边界时仍按原规则缩小摆幅。
 
 现场通过同一条命令调整阈值、转向偏置及左右补偿（无需重启，在下一次有效周期决策生效）：
@@ -535,7 +540,7 @@ status: active
 reason: tracking_button
 direction: left
 adc_quality: valid
-command_bias: 256.0
+command_bias: -256.0
 active_threshold: 0.1
 active_bias: 256.0
 active_lr_voltage_offset_v: 0.0
@@ -658,7 +663,7 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 |                            SONIC STATUS / SHARE                            |
 +----------------------------------------------------------------------------+
 | Mode / state    : tracking / active                                        |
-| Direction       : LEFT; bias=(+128.0/1024.0)                               |
+| Direction       : LEFT; bias=(-128.0/1024.0)                               |
 | ADC quality     : valid                                                    |
 +----------------------------------------------------------------------------+
 | Voltage [V]            |     Head (ADC0) |     Left (ADC1) |  Right (ADC2) |

@@ -72,7 +72,7 @@ class CycleSteering:
     until a complete aligned cycle is usable, without changing the gait epoch.
     """
     def __init__(self, frequency, max_bias=1024., threshold=.1, bias=256.,
-                 left_bias_sign=1, gap_s=.2, max_age_s=.2,
+                 left_bias_sign=-1, gap_s=.2, max_age_s=.2,
                  future_tolerance_s=.05, low_signal_v=.001, lr_voltage_offset_v=0.):
         self.max_bias = number(max_bias, 'max_bias')
         self.gap_s = number(gap_s, 'gap_s')

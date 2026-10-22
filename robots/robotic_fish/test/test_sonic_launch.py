@@ -56,6 +56,7 @@ class SonicLaunchTests(unittest.TestCase):
         config = self.load('sonic_teleop.launch')
         self.assertCountEqual([node.type for node in config.nodes], ['joy_node','sonic_teleop.py'])
         self.assertFalse(config.params['/sonic_teleop_node/acoustic_steering/enabled'].value)
+        self.assertEqual(config.params['/sonic_teleop_node/acoustic_steering/left_bias_sign'].value, -1)
         self.assertEqual(config.params['/sonic_teleop_node/acoustic_steering/future_tolerance_s'].value, .05)
 
     def test_motion_only_entry_has_no_io_or_joystick(self):
@@ -64,6 +65,7 @@ class SonicLaunchTests(unittest.TestCase):
         self.assertEqual([node.type for node in config.nodes], ['sonic_teleop.py'])
         self.assertTrue(config.params['/sonic_teleop_node/acoustic_steering/enabled'].value)
         self.assertEqual(config.params['/sonic_teleop_node/acoustic_steering/future_tolerance_s'].value, .1)
+        self.assertEqual(config.params['/sonic_teleop_node/acoustic_steering/left_bias_sign'].value, -1)
 
     def test_vim4_entry_has_one_motion_bridge_and_sensor_stack(self):
         config = self.load('sonic_vim4.launch')
@@ -75,11 +77,12 @@ class SonicLaunchTests(unittest.TestCase):
         self.assertEqual(config.params['/gain_control/gain_control/mode'].value, 'manual')
         self.assertEqual(config.params['/gain_control/gain_control/manual_voltage'].value, 0.)
         self.assertTrue(config.params['/sonic_teleop_node/acoustic_steering/enabled'].value)
+        self.assertEqual(config.params['/sonic_teleop_node/acoustic_steering/left_bias_sign'].value, -1)
 
     def test_vim4_entry_forwards_control_gain_and_display_options(self):
         values = {'auto_frequency': 2., 'acoustic_threshold': .15, 'acoustic_bias': 128.,
                   'acoustic_lr_voltage_offset_v': -.01, 'acoustic_max_age_s': .7,
-                  'acoustic_future_tolerance_s': .025, 'left_bias_sign': -1,
+                  'acoustic_future_tolerance_s': .025, 'left_bias_sign': 1,
                   'joy_timeout_s': .6, 'update_rate': 60., 'manual_gain_voltage': 1.7}
         config = self.load('sonic_vim4.launch', 'status_color:=never',
                            *[key+':='+str(value) for key,value in values.items()])

@@ -14,7 +14,7 @@
   <arg name="acoustic_lr_voltage_offset_v" default="0.0"/>
   <arg name="acoustic_max_age_s" default="0.5"/>
   <arg name="acoustic_future_tolerance_s" default="0.05"/>
-  <arg name="left_bias_sign" default="1"/>
+  <arg name="left_bias_sign" default="-1"/>
   <arg name="joy_timeout_s" default="0.5"/>
   <arg name="update_rate" default="50.0"/>
 
