@@ -7,6 +7,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
@@ -209,6 +210,90 @@ class NodeSafetyTests(unittest.TestCase):
                     self.assertEqual(n.calls, [.95])  # Off mode still protects the ADC.
 
 
+class DacCommandTests(unittest.TestCase):
+    def make_node(self):
+        cls = node_class('dac_node.py', 'DacNode')
+        cls._apply_voltage_locked.__globals__['serial'] = __import__('serial')
+        node = cls.__new__(cls)
+        node.lock = threading.RLock()
+        node.default_channel = 1
+        node.dac = Mock()
+        node.dac.write.return_value = 5
+        node.verify_echo = True
+        node.applied_voltage = 1.23
+        node.last_command_ns = 1234
+        node.watchdog_fired = True
+        node.error_count, node.last_error = 0, ''
+        node._open_locked = Mock()
+        node._publish_result = Mock()
+        return node
+
+    def test_invalid_requests_preserve_confirmed_state_connection_and_watchdog(self):
+        for voltage, channel in ((1., 2), (1., -1), (1., 256), (-.01, 1), (5.01, 1),
+                                 (float('nan'), 1), (float('inf'), 1), (-float('inf'), 1)):
+            with self.subTest(voltage=voltage, channel=channel):
+                node = self.make_node()
+                connection = node.dac
+                success, applied, message = node._set_voltage(voltage, channel)
+                self.assertFalse(success)
+                self.assertTrue(math.isnan(applied))
+                self.assertTrue(message)
+                self.assertEqual(node.applied_voltage, 1.23)
+                self.assertIs(node.dac, connection)
+                node._open_locked.assert_not_called()
+                connection.write.assert_not_called()
+                connection.close.assert_not_called()
+                node._publish_result.assert_not_called()
+                self.assertEqual(node.last_command_ns, 1234)
+                self.assertTrue(node.watchdog_fired)
+
+    def test_valid_request_after_rejection_still_writes_and_confirms_voltage(self):
+        node = self.make_node()
+        self.assertFalse(node._set_voltage(1., 2)[0])
+        connection = node.dac
+        command = dac_driver.voltage_to_command(1.2, 1)
+        connection.read.return_value = command
+        success, applied, _ = node._set_voltage(1.2, 1)
+        self.assertTrue(success)
+        self.assertEqual(applied, 1.2)
+        self.assertEqual(node.applied_voltage, 1.2)
+        connection.write.assert_called_once_with(command)
+        connection.close.assert_not_called()
+        node._publish_result.assert_called_once_with(1.2, 1.2, True, '')
+        self.assertGreater(node.last_command_ns, 1234)
+        self.assertFalse(node.watchdog_fired)
+
+    def test_transport_failures_still_invalidate_state_and_close_connection(self):
+        import serial
+        for error in (OSError('disconnected'), serial.SerialTimeoutException('write timeout')):
+            with self.subTest(error=error):
+                node = self.make_node()
+                connection = node.dac
+                connection.write.side_effect = error
+                success, applied, message = node._set_voltage(1.2, 1)
+                self.assertFalse(success)
+                self.assertTrue(math.isnan(applied))
+                self.assertIn(str(error), message)
+                self.assertIsNone(node.applied_voltage)
+                self.assertIsNone(node.dac)
+                connection.close.assert_called_once_with()
+                result = node._publish_result.call_args[0]
+                self.assertFalse(result[2])
+                self.assertTrue(math.isnan(result[1]))
+
+    def test_echo_mismatch_still_invalidates_state_and_closes_connection(self):
+        node = self.make_node()
+        connection = node.dac
+        connection.read.return_value = b''
+        success, _, message = node._set_voltage(1.2, 1)
+        self.assertFalse(success)
+        self.assertIn('echo mismatch', message)
+        self.assertIsNone(node.applied_voltage)
+        self.assertIsNone(node.dac)
+        connection.close.assert_called_once_with()
+        self.assertFalse(node._publish_result.call_args[0][2])
+
+
 class DacWatchdogTests(unittest.TestCase):
     def make_node(self):
         cls = node_class('dac_node.py', 'DacNode')
@@ -398,7 +483,7 @@ class CompactRecordingTests(unittest.TestCase):
         n._publish_config()
         self.assertEqual(records[-1]['mode'], 'off')
 
-    def test_dac_success_failure_and_rejection_each_publish_one_result(self):
+    def test_dac_publishes_execution_results_but_not_rejected_requests(self):
         from test_drivers import FakeDac
         cls = node_class('dac_node.py', 'DacNode')
         n = cls.__new__(cls)
@@ -424,10 +509,11 @@ class CompactRecordingTests(unittest.TestCase):
         self.assertEqual(len(records), 2)
         self.assertFalse(records[-1].status_dac_feedback)
         self.assertTrue(math.isnan(records[-1].dac_volt))
-        with self.assertRaises(ValueError):
+        last_result = records[-1]
+        with self.assertRaisesRegex(ValueError, 'common-gain'):
             n._apply_voltage_locked(.9, 2)
-        self.assertEqual(len(records), 3)
-        self.assertIn('common-gain', records[-1].log)
+        self.assertEqual(len(records), 2)
+        self.assertIs(records[-1], last_result)
 
     def test_adc_rejects_false_feedback_even_with_finite_voltage(self):
         n, _ = AdcSchemaTests().make_node()

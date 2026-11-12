@@ -538,6 +538,10 @@ Advanced settings are under `gain_control` in `config/io.yaml`:
 | `/robotic_fish/gain_control/reset_safety` | `std_srvs/Trigger` | Clear the manual-mode safety latch; rejected while overrange remains active |
 | `/robotic_fish/agc/enable` | `std_srvs/SetBool` | Compatibility API: true selects closed-loop and false selects off |
 
+Invalid DAC voltage or channel requests return a service error without writing to the hardware,
+closing the connection, replacing the latched DAC state, or refreshing the command watchdog.
+Actual communication or echo failures still invalidate the confirmed state and close the connection.
+
 ### 7.3 Useful inspection commands
 
 ```bash

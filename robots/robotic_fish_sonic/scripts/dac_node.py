@@ -107,11 +107,12 @@ class DacNode:
             self.dac = None
 
     def _apply_voltage_locked(self, voltage, channel, mark_command=True):
+        # A rejected request has not changed the hardware or its confirmed state.
+        normalized = dac_driver.normalize_voltage(voltage)
+        dac_driver.validate_channel(channel)
+        if channel != self.default_channel:
+            raise ValueError("Only the configured common-gain DAC channel is allowed")
         try:
-            normalized = dac_driver.normalize_voltage(voltage)
-            dac_driver.validate_channel(channel)
-            if channel != self.default_channel:
-                raise ValueError("Only the configured common-gain DAC channel is allowed")
             self._open_locked()
             applied, _, _ = dac_driver.set_voltage(
                 self.dac, normalized, channel=channel, verify_echo=self.verify_echo)

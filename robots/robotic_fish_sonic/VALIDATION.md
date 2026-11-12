@@ -1,5 +1,114 @@
 # robotic_fish_sonic 合并验证
 
+## 2026-11-12 速度限幅与 DAC 请求校验修复
+
+按用户确认的范围修复下方检查中的问题 4、5。共享串口桥暂缓，旧控制器的
+Joy 失联保护留待专项处理，通用舵机桥不属于当前 fish_sonic 修复范围。
+
+- `robotic_fish/scripts/teleop.py` 与 `spring_teleop.py` 对缩放后的速度输出
+  做正负限幅。非有限输入或缩放溢出时发送零速，后续有效命令可正常执行。
+- `dac_node.py` 在进入硬件操作前完成电压及通道校验。非法请求返回失败，
+  保留已确认电压、串口连接、原锁存状态和命令看门狗时间；请求失败仍计入错误统计。
+  实际通信失败、写超时或回显错误仍发布无效状态并关闭连接。
+- 新增 7 项回归测试，覆盖两个旧速度入口的正负边界、自定义倍率／限值、
+  NaN/Inf／缩放溢出及恢复，以及 DAC 参数拒绝后的状态保留、后续合法请求、
+  断连／超时／回显失败。新增测试在修复前已复现原问题。
+- 更新原有 DAC 记录测试：成功和硬件失败发布执行结果；参数拒绝仅通过服务
+  返回原因，不覆盖硬件状态话题。
+
+两个机器鱼包的 CMake `run_tests` 结果为声学包 167 项、运动包 65 项，
+合计 232 项，0 errors、0 failures、0 skipped。独立构建／安装空间复用
+`/tmp/fish-project-audit-build-NjZsMW`；日志位于
+`/tmp/fish-fixes-cmake-tests.log` 和 `/tmp/fish-fixes-install.log`。
+本次未启动硬件节点或更改现场运行配置。
+
+## 2026-11-12 仓库检查：机器鱼链路与共享组件
+
+本轮对仓库做静态扫描，深入检查机器鱼的采集、校准、增益保护、运动与录包链路，
+并检查它们使用的共享串口桥及通用舵机桥。以下记录检查时复现的问题；
+问题 4、5 已随后修复，验证与当前处理范围见上节。
+P1 表示应优先处理的启动或控制异常，P2 表示需要修正的功能问题。
+
+### 已确认问题
+
+1. **P1：共享串口桥禁止调用方覆盖串口，阻止其他机器人启动。**
+   `aerial_robot_nerve/spinal/launch/bridge.launch:5–6` 用 `value` 声明
+   `serial_port`，固定为 `/dev/robotic_fish_spinal`。其他机器人的传感器入口
+   通过 include 传入 `/dev/flight_controller` 时，ROS 报
+   `cannot override arg 'serial_port', which has already been set`。
+   使用真实 XmlLoader、`real_machine:=true` 逐个验证，dragon、gimbalrotor、
+   hydrus、hydrus_xi、mini_quadrotor 的 14 个传感器配置全部在这里失败。
+   建议共享入口使用可覆盖的通用默认值，机器鱼专用串口由机器鱼入口传入，
+   并补充跨机器人启动参数验证。
+
+2. **P1：旧控制入口没有有效 Joy 超时停止，短消息也不触发停止。**
+   `robotic_fish/scripts/advance_teleop.py:212–225` 的控制循环只处理自动模式，
+   没有 Joy 接收时间检查；巡航后不再收到 Joy，调用 500 次控制循环也没有
+   新的停止指令。`teleop.py`、`spring_teleop.py`、`advance_teleop.py`
+   收到空 Joy 均抛出 `IndexError`，没有发布停止命令。
+   这确认的是上位机节点缺少停止动作；真实电机最终行为仍取决于下位机及驱动配置。
+   当前 `sonic_teleop.py` 的超时／停止测试通过，但这些旧入口没有共享其保护。
+   建议仍需使用的旧控制器加入基于单调时钟的有效输入超时、输入校验和停止锁存；
+   不再使用的入口应明确归档。旧版速度／多执行器控制不能直接替换为单舵机位置控制。
+
+3. **P1：通用舵机桥的无名称力矩消息校验字段错误。**
+   `aerial_robot_model/src/servo_bridge/servo_bridge.cpp:455–466` 在力矩回调中
+   检查、遍历 `position`，却读取 `effort.at(i)`。一个关节时，合法的
+   `name=[]、position=[]、effort=[1]` 被拒绝；
+   `name=[]、position=[0]、effort=[]` 抛出 `std::out_of_range`。
+   节点主函数没有捕获此异常。已抽取原始回调函数体，用 C++ 桩编译运行复现；
+   没有连接真实 ROS 舵机桥或硬件。
+   建议此分支按 `effort` 校验并遍历，先验证整条消息再更新任何关节。
+
+4. **P2：旧版速度回调对缩放前的值做限幅，实际输出可超过配置上限。**
+   `robotic_fish/scripts/teleop.py:264–269` 和
+   `robotic_fish/scripts/spring_teleop.py:164–169` 计算
+   `val = vel * vel_rate`，随后却比较 `vel` 与 `max_val`。
+   直接调用原始回调已确认：`vel_rate=250、max_val=250、linear.x=2`
+   输出命令为 500；负向输入同样存在问题。
+   建议对缩放后的 `val` 做对称限幅，并拒绝非有限输入。
+
+5. **P2：DAC 参数错误会清除已确认状态并关闭串口。**
+   `robotic_fish_sonic/scripts/dac_node.py:109–122` 将参数验证失败和硬件写入
+   失败放进同一个异常处理。已确认当前电压为 1.23 V 时，向非配置通道发请求，
+   在没有执行硬件写入的情况下也会把 `applied_voltage` 清空、发布反馈无效并关闭串口。
+   下游因而失去已确认的增益信息；周期趋声会进入未知增益等待。
+   建议在硬件异常处理之前完成参数校验，仅实际通信／执行失败才使 DAC 状态失效。
+
+### 本轮验证结果
+
+| 检查 | 结果 |
+| --- | --- |
+| 仓库包清单 | 17 个 catkin 包，清单可解析；机器鱼仅有两个有效源码包 |
+| 跟踪文件语法 | Python 81、XML/launch/URDF/xacro 150、YAML 152、JSON 6，共 389 个，解析无错误 |
+| 机器鱼现有单元测试 | 声学包 163 项、运动包 62 项通过 |
+| 独立 CMake 构建、安装、run_tests | 两个机器鱼包通过；测试 XML 合计 225 项，0 errors、0 failures、0 skipped |
+| bag 兼容／候选拒绝集成测试 | 4 项通过 |
+| 隔离声学 ROS 通信 | 校准回退、无模型比较、未来帧拒绝及恢复通过 |
+| 安装后运动 ROS 通信 | 暂停 ROS 时钟、摆尾、停止锁存、输入异常和 Joy 超时通过 |
+| 安装后周期趋声 ROS 通信 | 1.5/2 Hz、两种转向符号、增益／质量等待、在线调参、Share 及停止恢复通过 |
+| 实际 record.launch 录包回读 | 连续运动／相位、周期结果、锁存配置、调参事件、Share 和 ROS 日志通过 |
+| 原始实验 bag 重建默认校准 | 重建 JSON 内容与默认表相同；独立复测 3,562 组、18 个平台，0 回退 |
+| 跨机器人传感器启动配置 | 14 个确认失败，原因见问题 1 |
+
+默认校准复测的绝对差异 P95 为 2.346 mV，相对差异 P95 为 0.488%；
+这些结果沿用原实验条件，不能解释为新的硬件测量或绝对电压精度认证。
+
+另扫描了 221 处本地 ROS 资源引用：MuJoCo 模型目录在本机未提供，旧 hydrus
+T265 配置引用的 `T265ModuleList.yaml` 也不存在。这些可选／历史场景需要补齐
+资源后再验证；动态拼接的资源路径未据此判定完整可用。
+
+构建与安装目录为 `/tmp/fish-project-audit-build-NjZsMW`；日志前缀为
+`/tmp/fish-project-audit-`，包括 `static.log`、`cmake-tests.log`、
+`bag-tests.log`、`acoustic-ros.log`、`motion-ros.log`、`cycle-ros.log`、
+`cross-launch.log`、`python-repro.log` 和 `torque-repro.log`。
+临时重建表位于独立构建目录的 `calibration-rebuilt/`，没有替换默认配置。
+
+本轮没有执行飞行、舵机／电机动作、ADC/DAC 硬件采集或固件刷写；
+未重新编译整个飞行 C++ 栈与 STM32 固件。机器鱼安装验证仍使用现有工作空间
+提供的 spinal 等依赖，不能据此声称所有包均可在全新系统独立部署。
+工作空间旧包的 build/devel/.catkin_tools 残留未修改。
+
 ## 2026-11-12 新电路校准复查
 
 本节记录当前校准改动的代码审查与离线验证。校准采集和独立复测数据见

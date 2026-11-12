@@ -7,6 +7,25 @@
 DS4 的完整轴／物理按键索引见
 [手柄输入映射](../robotic_fish/README.md#ds4-输入索引映射)。
 
+## 当前包结构
+
+IO 与声学包已在 2026-10-19 的提交 `8e1d24cd` 中合并。目前机器鱼源码仅有
+两个 catkin 包：
+
+| 包 | 职责 |
+| --- | --- |
+| `robotic_fish_sonic` | ADC/DAC 驱动、校准、增益保护、声学计算、消息／服务和状态显示 |
+| `robotic_fish` | 手柄、摆尾运动及整机启动；使用 `robotic_fish_sonic` 的数据和算法 |
+
+`io`、`acoustic`、`sonic` 仍可作为配置、模块或话题中的功能名称，不代表三个
+独立包。旧目录若只含 `__pycache__/*.pyc`，属于本机缓存残留，可以清理；
+工作空间 `build`、`devel` 及 `.catkin_tools` 中也可能保留旧构建记录，
+不能据此判断源码中仍有旧包。历史 bag 兼容测试中的旧类型名需要保留。
+
+日常 VIM4 趋声实验使用 `robotic_fish/sonic_vim4.launch`，PC 使用
+`robotic_fish/joy.launch`。固定窗口比较／方向模型使用独立的 `quadrant.launch`；
+周期趋声控制直接使用 ADC 数据，整机入口已包含所需采集与控制节点。
+
 ## 构建与迁移
 
 在工作空间根目录执行：

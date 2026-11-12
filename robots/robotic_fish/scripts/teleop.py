@@ -263,10 +263,10 @@ class Teleop():
 
         vel = msg.linear.x
         val = vel * self.vel_rate
-        if vel > self.max_val:
-            val = self.max_val
-        if vel < -self.max_val:
-            val = -self.max_val
+        if not math.isfinite(val):
+            rospy.logwarn_throttle(5.0, "Non-finite velocity command; sending zero")
+            val = 0.0
+        val = max(-self.max_val, min(self.max_val, val))
         msg = ServoControlCmd()
         msg.index = [0]
         msg.cmd.append(int(val))
