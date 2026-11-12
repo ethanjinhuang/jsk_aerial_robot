@@ -291,7 +291,7 @@ The three channels are sequential and retain separate timestamps. The outer
 The current default calibration is:
 
 ```text
-config/calibration/adc_independent_transfer_2026-09-27-13-51-52.json
+config/calibration/adc_independent_transfer_20261112_060020_new_circuit_psu_130_observed_support.json
 ```
 
 It is selected in `config/io.yaml`:
@@ -301,12 +301,12 @@ adc:
   calibration:
     enabled: true
     required: true
-    file: calibration/adc_independent_transfer_2026-09-27-13-51-52.json
+    file: calibration/adc_independent_transfer_20261112_060020_new_circuit_psu_130_observed_support.json
 ```
 
 A relative path is resolved against this package's `config/` directory. An absolute path is also accepted. With `required: true`, a missing, malformed, or incompatible calibration file prevents the ADC node from starting instead of silently using invalid calibration data.
 
-ADC0, ADC1, and ADC2 each use their own piecewise-linear transfer curve. The calibration does not use DAC voltage as an input and never extrapolates beyond its observed range. If any channel in a group is outside the calibration range, the entire group falls back to raw voltages:
+ADC0, ADC1, and ADC2 each use their own piecewise-linear transfer curve. The calibration does not use DAC voltage as an input. The current table has 131 plateau-median nodes plus two measured-support boundary nodes per channel. Boundary raw voltages come only from settled training data; their reference values are linear estimates using the nearest two median nodes. Runtime still interpolates between stored nodes and does not extend the curve beyond its declared support (apart from the documented endpoint-clamping tolerance). If any channel in a group is outside the calibration range, the entire group falls back to raw voltages:
 
 ```text
 status_cali = false
@@ -369,7 +369,7 @@ Default configuration:
 
 | Setting | Default |
 | --- | --- |
-| Serial device | `/dev/robotic_fish_dac` |
+| Serial device | `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` |
 | Baud rate | `19200` |
 | Channel | `1` |
 | Voltage range | `0.00–5.00 V` |
@@ -632,7 +632,7 @@ DAC service requests are represented by execution-result messages, including the
 
 ## 10. Stable DAC device name
 
-The default device is `/dev/robotic_fish_dac`, avoiding direct dependence on a changing `/dev/ttyUSB0` number. The current VIM4 rule identifies the CH340 adapter (`1a86:7523`) attached to the dedicated USB hub port `1-1.2`.
+The current IO configuration uses `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`, the CH340 confirmed during the 2026-11-12 calibration. The optional `/dev/robotic_fish_dac` udev alias below identifies a CH340 (`1a86:7523`) on hub port `1-1.2`. On the current machine the CH340 is on `1-1.1`, so that alias is absent. Do not assume the alias exists without checking the actual connection.
 
 Install the rule:
 

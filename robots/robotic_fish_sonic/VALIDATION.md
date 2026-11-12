@@ -1,5 +1,61 @@
 # robotic_fish_sonic 合并验证
 
+## 2026-11-12 新电路校准复查
+
+本节记录当前校准改动的代码审查与离线验证。校准采集和独立复测数据见
+[初次扫描报告](docs/calibration_20261112_new_circuit.md)及
+[1.30 V 与实测边界报告](docs/calibration_20261112_measured_support.md)。
+下文 10 月的测试数量和配置属于历史版本。
+
+当前默认表为 `adc_independent_transfer_20261112_060020_new_circuit_psu_130_observed_support`。
+每通道有 131 个平台中位数节点和两个实测支持边界节点；边界参考值是局部线性
+估计，明确标记在 JSON 中。历史 125 节点表保留，未通过覆盖率检查的中位数端点
+候选没有部署。正式运行仍采用 DAC 0–5 V、ADC 4.00 V 触发和 3.30 V 恢复阈值。
+1.30 V 是本次 5 mVpp 实验的 DAC 上限。
+
+审查后补齐了以下路径：
+
+- 单 bag 与多 bag 工具共用原始数据读取与审查。先检查全部原始 ADC，再过滤
+  DAC 反馈无效组；非有限电压、饱和码及会话超限不能被反馈过滤掩盖。
+- 单 bag 生成候选要求时间留出覆盖率至少 99%，且绝对差异 P95 不变差；
+  失败时不创建候选目录。仅审计模式仍能输出异常数据摘要。
+- 多 bag 重建检查完整的训练、重叠及独立复测平台计划。独立验证仍要求每平台
+  覆盖率至少 95%、整体至少 99%，且每平台绝对差异 P95 改善。
+- 安装后的离线工具通过 ROS 包资源路径查找 `config/io.yaml`，支持无配置快照
+  的旧 bag；显式与记录阈值冲突仍拒绝生成。
+
+| 检查 | 结果 |
+| --- | --- |
+| 全包单元测试 | 163 项通过；源码环境与独立安装环境均通过 |
+| bag 集成测试 | 4 项通过：旧包 12/14 字段、新包 14 字段、隐藏超限和留出失败拒绝生成 |
+| 原始实验 bag 重建 | 与当前默认校准 JSON 完全一致 |
+| 独立复测 | 18 个平台、3,562 组稳定样本，0 回退；绝对差异 P95 为 2.346 mV，相对差异 P95 为 0.488% |
+| 独立 CMake 构建、安装 | 通过；产物位于 `/tmp/fish-calibration-final-review` |
+| 安装后的 CLI 与资源定位 | 两个工具入口可用；旧 bag 正确回退到安装包配置，新校准表可加载 |
+| 安装后的 launch 参数展开 | 选择新表及 CH340 by-id；DAC 上限 5.0 V，ADC 保护 4.00 V |
+| 隔离 ROS 通信 | 合成消息更新、校准回退、无模型比较、未来帧拒绝及恢复通过 |
+| Git 差异格式 | `git diff --check` 通过 |
+
+可重复执行的入口：
+
+```bash
+python3 -m unittest discover -s robots/robotic_fish_sonic/test -v
+python3 robots/robotic_fish_sonic/test/bag_compatibility.py
+python3 robots/robotic_fish_sonic/test/ros_smoke.py
+```
+
+需先 source 对应的构建或安装环境。ROS 通信脚本使用隔离 master 11427，
+不启动 ADC、DAC、spinal 或运动硬件节点；本次复查没有再次操作硬件。
+完整实验重建命令见实测边界报告。
+
+本机验证日志位于 `/tmp/fish_final_review_*.log`，参数展开为
+`/tmp/fish_final_review_launch.yaml`，重建结果位于 `/tmp/fish_final_review_rebuilt`。
+这些临时路径不是长期数据归档；原始 bag 的位置及 SHA-256 已嵌入校准 JSON。
+当前验证覆盖同一 5 mVpp、稳压供电条件；频率、ADC VDD 仍未提供，未验证弱输入
+配合更高增益、温度变化或模拟链路削波，不能把相对通道一致性当成绝对电压精度。
+
+## 历史合并验证
+
 2026-10-20 新增的完整摆尾周期声学控制、在线调参和隔离通信验证见
 [周期趋声验证记录](docs/cycle_steering_validation.md)。下文保留合并时的验证范围。
 

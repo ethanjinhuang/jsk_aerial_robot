@@ -5,6 +5,7 @@ import copy
 from pathlib import Path
 import sys
 import unittest
+import yaml
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +81,25 @@ class CalibrationTests(unittest.TestCase):
         values = [item[0] for item in self.calibration.input_ranges]
         with self.assertRaises(TypeError):
             self.calibration.apply(values, 0.5)
+
+    def test_default_new_circuit_calibration_has_independent_validation(self):
+        settings = yaml.safe_load((PACKAGE_ROOT / 'config/io.yaml').read_text())
+        calibration = AdcCalibration.load(PACKAGE_ROOT / 'config' / settings['adc']['calibration']['file'])
+        self.assertEqual([len(c) for c in calibration.curves], [133] * 3)
+        self.assertEqual(calibration.document['processing']['nominal_plateau_count'], 131)
+        self.assertEqual(settings['gain_control']['dac_max_v'], 5.0)
+        self.assertEqual(calibration.document['conditions']['experimental_dac_max_v'], 1.30)
+        self.assertEqual(settings['gain_control']['adc_safety_limit_v'], 4.0)
+        for curve in calibration.document['curves']:
+            self.assertEqual(curve['nodes'][0]['node_kind'], 'measured_support_boundary')
+            self.assertEqual(curve['nodes'][-1]['node_kind'], 'measured_support_boundary')
+            self.assertEqual(curve['input_max_v'], curve['measured_support']['input_max_v'])
+        validation = calibration.document['validation']['independent_repeat']
+        self.assertEqual(validation['accepted_plateaus'], 18)
+        self.assertEqual(validation['rejected_stable_groups'], 0)
+        self.assertEqual(validation['calibrated']['count'], 3562)
+        for plateau in validation['per_plateau']:
+            self.assertLess(plateau['calibrated']['p95_spread_v'], plateau['raw']['p95_spread_v'])
 
     def test_malformed_curves_are_rejected_as_a_whole(self):
         cases = []

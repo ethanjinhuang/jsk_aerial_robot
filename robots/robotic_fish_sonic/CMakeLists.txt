@@ -46,6 +46,7 @@ catkin_install_python(PROGRAMS
   scripts/adc_node.py
   scripts/dac_node.py
   scripts/calibrate_from_bag.py
+  scripts/rebuild_new_circuit_calibration.py
   scripts/quadrant_node.py
   scripts/replay_quadrants.py
   scripts/status_console.py

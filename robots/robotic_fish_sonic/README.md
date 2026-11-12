@@ -31,7 +31,7 @@ rosmsg show robotic_fish_sonic/AdcSample
 ROS 话题和服务地址、消息字段、校准 JSON 和默认保护参数保留。
 `AdcSample` 包含 14 个字段，含一秒原始电压均值及其就绪标记。
 发布者和消费者必须一起更新消息类型。历史 bag 保留原类型，离线工具按
-内嵌定义读取；已验证范围见 [VALIDATION.md](VALIDATION.md)。
+内嵌定义读取；当前校准复查及历史验证范围见 [VALIDATION.md](VALIDATION.md)。
 
 ## 启动
 
@@ -92,7 +92,7 @@ VIM4 已有 `io.launch` 时，可仅启动运动：`sonic_teleop.launch enable_j
 - `config/io.yaml`：ADC、校准表、DAC、增益及保护参数。
 - `config/acoustic.yaml`：声学节点私有参数，默认历史窗口 0.5 秒、
   最大间隔 0.2 秒、低电压数值阈值 0.001 V，以及未来时间戳容差 0.05 秒。
-- `config/calibration/`：保留的三份独立通道校准表。
+- `config/calibration/`：新电路默认校准及历史独立通道校准表。
 - `config/udev/`：DAC 设备规则；spinal 当前路径为
   `/dev/robotic_fish_spinal`，现场需核实对应规则。
 
@@ -204,6 +204,31 @@ rosrun robotic_fish_sonic calibrate_from_bag.py sweep.bag --output /tmp/fish-cal
 `--calibration`；更换校准只修改内存中的解码值。校准工具只有显式提供
 `--common-input` 才生成候选表，该选项要求实验确实采用共同电输入，
 不能用于将自由游动数据归一化。工具不改写 bag 或部署校准表。
+生成前检查全部原始 ADC 记录，包括 DAC 反馈无效的组；存在非有限值、
+饱和码或达到会话 ADC 阈值时拒绝生成。时间留出覆盖率须至少 99%，
+且校准后绝对差异 P95 不得变差。通过这些检查仍需要独立复测后才能部署。
+
+新电路的公共输入校准流程见[校准实验说明](docs/calibration_procedure.md)。
+当前 5 mVpp 信号源实验使用 `--dac-max-v 1.30`，该值仅筛选本次实验平台，
+不修改实际运行的 0–5 V 控制范围。离线 ADC 阈值优先采用 bag 中记录的
+`safety_limit_v`；无记录时采用显式 `--adc-safety-limit-v` 或本包 IO 配置，
+与线上在达到阈值时即触发保护的判定一致。当前默认触发值为 4.00 V，
+恢复值 3.30 V 仍单独保留用于滞回。
+
+当前默认使用 2026-11-12 新电路的 0–1.30 V 补完整校准表：131 个平台中位数节点，
+加上训练数据实测上下边界的两个模型估计节点，每通道共 133 个节点。
+边界只取自训练样本，不使用独立复测扩大范围，也不将边界内读数统一压到平台中位数。
+18 个独立复测平台的 3,562 组稳定样本全部可校准；相对差异 P95 从 4.90% 降至 0.49%。
+详见[实测边界补充报告](docs/calibration_20261112_measured_support.md)。
+初次 0–1.24 V 扫描记录保留在[原始校准报告](docs/calibration_20261112_new_circuit.md)。
+本机 DAC 当前使用已确认的 CH340 稳定路径
+`/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`；原物理端口规则下的
+`/dev/robotic_fish_dac` 别名在当前接线中不存在。
+
+单个扫描 bag 可用 `calibrate_from_bag.py --include-measured-endpoints` 生成实测支持边界。
+原始曲线仍为分段线性插值；边界节点的参考值由最近两个中位数节点线性估计，
+不是新增的精密参考电压测量。未使用该选项时保留原端点处理。
+本轮多 bag 合并与独立验证可通过 `rebuild_new_circuit_calibration.py` 重建，命令见补充报告。
 
 ## 测试与限制
 

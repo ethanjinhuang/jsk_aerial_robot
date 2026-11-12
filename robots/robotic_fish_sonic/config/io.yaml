@@ -15,10 +15,10 @@ adc:
   calibration:
     enabled: true
     required: true
-    file: calibration/adc_independent_transfer_2026-09-27-13-51-52.json
+    file: calibration/adc_independent_transfer_20261112_060020_new_circuit_psu_130_observed_support.json
 
 dac:
-  port: /dev/robotic_fish_dac
+  port: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
   baud: 19200
   channel: 1
   timeout: 0.1

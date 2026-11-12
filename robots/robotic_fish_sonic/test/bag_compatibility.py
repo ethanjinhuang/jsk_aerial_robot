@@ -95,6 +95,51 @@ class BagCompatibilityTests(unittest.TestCase):
     def test_merged_package_14_fields(self):
         self.check_schema('robotic_fish_sonic', 14)
 
+    def test_candidate_rejected_for_hidden_overrange_and_failed_holdout(self):
+        definition = ('robotic_fish_sonic/AdcSample[] samples\n\n' + '=' * 80 +
+                      '\nMSG: robotic_fish_sonic/AdcSample\n' +
+                      (ROOT / 'msg/AdcSample.msg').read_text())
+        types = genpy.dynamic.generate_dynamic('robotic_fish_sonic/AdcSampleArray', definition)
+        with tempfile.TemporaryDirectory(prefix='fish-calibration-rejection-') as directory:
+            directory = Path(directory)
+            for scenario in ('hidden_overrange', 'failed_holdout'):
+                path = directory / (scenario + '.bag')
+                with rosbag.Bag(str(path), 'w') as bag:
+                    for plateau in range(4):
+                        for tick in range(80):
+                            message = types['robotic_fish_sonic/AdcSampleArray']()
+                            stamp = genpy.Time.from_sec(100 + plateau * 4 + tick * .05)
+                            for channel, ratio in enumerate((1., .9, 1.2)):
+                                sample = types['robotic_fish_sonic/AdcSample']()
+                                sample.channel_id = channel
+                                sample.timestamp = stamp
+                                sample.dac_volt = (plateau + 1) * .1
+                                sample.status_dac_feedback = True
+                                sample.volt_raw = (plateau + 1) * .1 * ratio
+                                if scenario == 'failed_holdout' and tick >= 50:
+                                    sample.volt_raw += 1.
+                                if scenario == 'hidden_overrange' and plateau == tick == 0:
+                                    sample.volt_raw = 4.05
+                                    sample.status_dac_feedback = False
+                                    sample.dac_volt = float('nan')
+                                sample.adc_code = round(sample.volt_raw * 8000)
+                                sample.volt_cali = sample.volt_raw
+                                message.samples.append(sample)
+                            bag.write('/robotic_fish/adc/samples', message, stamp)
+                before = hashlib.sha256(path.read_bytes()).hexdigest()
+                output = directory / (scenario + '_candidate')
+                result = subprocess.run(
+                    [sys.executable, str(ROOT / 'scripts/calibrate_from_bag.py'), str(path),
+                     '--output', str(output), '--common-input'], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn('ceiling' if scenario == 'hidden_overrange' else 'coverage', result.stderr)
+                self.assertFalse(output.exists())
+                if scenario == 'hidden_overrange':
+                    audit = self.run_tool('calibrate_from_bag.py', path, directory / 'audit')
+                    self.assertEqual(audit['raw_observation_audit']['peak_adc_raw_v'], 4.05)
+                    self.assertEqual(audit['invalid_groups'], 1)
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
