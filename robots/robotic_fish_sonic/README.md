@@ -7,6 +7,13 @@
 DS4 的完整轴／物理按键索引见
 [手柄输入映射](../robotic_fish/README.md#ds4-输入索引映射)。
 
+rosbag 的话题分层、`exp20261022` 七包完整审计、时钟／校准质量问题及记录整理方案见
+[ROS bag 记录梳理](docs/rosbag_audit/README.md)。
+
+包内变量、带单位参数名及对外兼容边界见
+[命名与数据出口约定](docs/naming_conventions.md)。当前 ADC 只发布
+`/robotic_fish/adc/samples`，已移除重复的单通道 `adc/sample`；消息字段保持兼容。
+
 ## 当前包结构
 
 IO 与声学包已在 2026-10-19 的提交 `8e1d24cd` 中合并。目前机器鱼源码仅有

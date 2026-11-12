@@ -197,26 +197,26 @@ class GainController:
         self.last_action = "window_waiting"
         if now - history[0][0] < self.window_s:
             return None
-        mean = max(sum(row[ch] for row in history) / len(history) for ch in (1, 2))
-        high_fraction = sum(max(row[1:]) > self.window_peak_upper_v for row in history) / len(history)
-        peak = max(max(row[1:]) for row in history)
-        if high_fraction > self.window_high_fraction:
+        maximum_side_voltage_mean_v = max(sum(row[ch] for row in history) / len(history) for ch in (1, 2))
+        high_sample_ratio = sum(max(row[1:]) > self.window_peak_upper_v for row in history) / len(history)
+        maximum_side_voltage_v = max(max(row[1:]) for row in history)
+        if high_sample_ratio > self.window_high_fraction:
             direction = -1
-        elif peak > self.window_peak_upper_v:
+        elif maximum_side_voltage_v > self.window_peak_upper_v:
             self.last_action = "window_peak_hold"
             return None
-        elif mean < self.window_mean_min_v and now - self.window_last_over_s >= self.window_cooldown_s:
+        elif maximum_side_voltage_mean_v < self.window_mean_min_v and now - self.window_last_over_s >= self.window_cooldown_s:
             direction = 1
         else:
             self.last_action = "window_holding"
             return None
         if now - self.last_adjustment_s < self.interval_s:
             return None
-        target = self._target(current + direction * self.step_v)
+        target_voltage_v = self._target(current + direction * self.step_v)
         self.reset_counts()
         self.last_adjustment_s = now
         self.last_action = "window_increase" if direction > 0 else "window_decrease"
-        return target if target != current else None
+        return target_voltage_v if target_voltage_v != current else None
 
     def reset_safety(self):
         """Clear the manual-mode safety latch; an active overrange remains active."""
@@ -270,12 +270,12 @@ class GainController:
             self.last_action = "safety_waiting"
             return True, None
 
-        target = self._target(current - self.safety_step_v)
+        target_voltage_v = self._target(current - self.safety_step_v)
         self.last_safety_adjustment_s = now
         self.last_action = "safety_decreasing"
         if self.mode == "manual":
             self.manual_limited = True
-        return True, target
+        return True, target_voltage_v
 
     def observe(self, raw_voltages, current_dac_v, now_s, data_valid=True):
         try:
@@ -289,31 +289,31 @@ class GainController:
         if not isinstance(raw_voltages, (list, tuple)) or len(raw_voltages) != 3:
             self.reset_counts()
             raise ValueError("gain control requires ADC0, ADC1, and ADC2")
-        values = []
+        raw_voltages_v = []
         for value in raw_voltages:
             try:
-                values.append(self._finite(value, "ADC voltage"))
+                raw_voltages_v.append(self._finite(value, "ADC voltage"))
             except ValueError:
-                values.append(float("nan"))
-        current = self._finite(current_dac_v, "current DAC voltage")
-        now = self._finite(now_s, "monotonic time")
-        if not self.dac_min_v <= current <= self.dac_max_v:
+                raw_voltages_v.append(float("nan"))
+        confirmed_dac_voltage_v = self._finite(current_dac_v, "current DAC voltage")
+        observed_monotonic_s = self._finite(now_s, "monotonic time")
+        if not self.dac_min_v <= confirmed_dac_voltage_v <= self.dac_max_v:
             self.reset_counts()
             raise ValueError("Current DAC voltage is outside configured limits")
-        valid_values = [v for v in values if math.isfinite(v) and v >= 0]
-        maximum = max(valid_values, default=float("nan"))
-        self.current_max_raw_v = maximum
-        if maximum >= self.safety_limit_v:
-            return self._safety_decision(maximum, current, now)[1]
-        if len(valid_values) != 3 or not data_valid:
+        valid_raw_voltages_v = [v for v in raw_voltages_v if math.isfinite(v) and v >= 0]
+        maximum_raw_voltage_v = max(valid_raw_voltages_v, default=float("nan"))
+        self.current_max_raw_v = maximum_raw_voltage_v
+        if maximum_raw_voltage_v >= self.safety_limit_v:
+            return self._safety_decision(maximum_raw_voltage_v, confirmed_dac_voltage_v, observed_monotonic_s)[1]
+        if len(valid_raw_voltages_v) != 3 or not data_valid:
             self.reset_counts()
             self.last_action = "invalid_adc"
-            if len(valid_values) != 3:
+            if len(valid_raw_voltages_v) != 3:
                 raise ValueError("ADC voltages must be finite and nonnegative")
             return None
-        handled, target = self._safety_decision(maximum, current, now)
+        handled, target_voltage_v = self._safety_decision(maximum_raw_voltage_v, confirmed_dac_voltage_v, observed_monotonic_s)
         if handled:
-            return target
+            return target_voltage_v
 
         if self.mode == "off":
             self.reset_counts()
@@ -325,33 +325,33 @@ class GainController:
             if self.manual_limited:
                 self.last_action = "manual_limited"
                 return None
-            difference = self.manual_target_v - current
-            if abs(difference) < 0.005:
+            target_voltage_delta_v = self.manual_target_v - confirmed_dac_voltage_v
+            if abs(target_voltage_delta_v) < 0.005:
                 self.last_action = self.mode + "_holding"
                 return None
-            if now - self.last_adjustment_s < self.manual_ramp_interval_s:
+            if observed_monotonic_s - self.last_adjustment_s < self.manual_ramp_interval_s:
                 self.last_action = self.mode + "_waiting"
                 return None
-            direction = 1.0 if difference > 0.0 else -1.0
-            target = self._target(
-                current + direction * min(abs(difference), self.manual_ramp_step_v)
+            direction = 1.0 if target_voltage_delta_v > 0.0 else -1.0
+            target_voltage_v = self._target(
+                confirmed_dac_voltage_v + direction * min(abs(target_voltage_delta_v), self.manual_ramp_step_v)
             )
-            self.last_adjustment_s = now
+            self.last_adjustment_s = observed_monotonic_s
             self.last_action = self.mode + ("_ramping_up" if direction > 0 else "_ramping_down")
-            return target
+            return target_voltage_v
 
-        if now < self.settle_until_s:
+        if observed_monotonic_s < self.settle_until_s:
             self.reset_counts()
             self.last_action = "settling"
             return None
         if self.window_control:
-            return self._window_decision(values, current, now)
-        if maximum < self.target_min_v:
+            return self._window_decision(raw_voltages_v, confirmed_dac_voltage_v, observed_monotonic_s)
+        if maximum_raw_voltage_v < self.target_min_v:
             self.below_count += 1
             self.above_count = 0
             direction = 1
             self.last_action = "waiting_low"
-        elif maximum > self.target_max_v:
+        elif maximum_raw_voltage_v > self.target_max_v:
             self.above_count += 1
             self.below_count = 0
             direction = -1
@@ -364,17 +364,17 @@ class GainController:
         count = self.below_count if direction > 0 else self.above_count
         if count < self.consecutive_samples:
             return None
-        if now - self.last_adjustment_s < self.interval_s:
+        if observed_monotonic_s - self.last_adjustment_s < self.interval_s:
             return None
 
-        target = self._target(current + direction * self.step_v)
+        target_voltage_v = self._target(confirmed_dac_voltage_v + direction * self.step_v)
         self.reset_counts()
-        if target == current:
+        if target_voltage_v == confirmed_dac_voltage_v:
             self.last_action = "dac_max" if direction > 0 else "dac_min"
             return None
-        self.last_adjustment_s = now
+        self.last_adjustment_s = observed_monotonic_s
         self.last_action = "increase" if direction > 0 else "decrease"
-        return target
+        return target_voltage_v
 
 
 class AgcController(GainController):

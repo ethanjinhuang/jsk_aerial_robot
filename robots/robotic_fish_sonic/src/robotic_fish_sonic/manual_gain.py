@@ -10,7 +10,7 @@ class ManualGainInput:
         self.max_step_v = float(dac_driver.normalize_voltage(max_step_v))
         if not 0.01 <= self.step_v <= self.max_step_v:
             raise ValueError("manual step must be between 0.01 V and max_normal_step_v")
-        self.previous = (0, 0)
+        self._previous_directions = (0, 0)
 
     def events(self, axes):
         if len(axes) <= 10 or not all(math.isfinite(v) for v in (axes[9], axes[10])):
@@ -19,8 +19,8 @@ class ManualGainInput:
         current = tuple(1 if v > 0.5 else -1 if v < -0.5 else 0
                         for v in (axes[9], axes[10]))
         events = tuple(value if value != old else 0
-                       for value, old in zip(current, self.previous))
-        self.previous = current
+                       for value, old in zip(current, self._previous_directions))
+        self._previous_directions = current
         return events
 
     def adjust_step(self, direction):

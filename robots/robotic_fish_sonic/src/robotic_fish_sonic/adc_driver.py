@@ -124,8 +124,8 @@ def wait_conversion_ready(
     validate_timeout(timeout)
     validate_timeout(poll_interval)
 
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    deadline_monotonic_s = time.monotonic() + timeout
+    while time.monotonic() < deadline_monotonic_s:
         if conversion_ready(bus, address):
             return
         time.sleep(poll_interval)
@@ -133,10 +133,10 @@ def wait_conversion_ready(
 
 
 def read_conversion(bus, address=DEFAULT_ADDRESS):
-    raw = read_register(bus, address, REG_CONVERSION)
-    if raw & 0x8000:
-        raw -= 1 << 16
-    return raw, raw * LSB_V
+    raw_code = read_register(bus, address, REG_CONVERSION)
+    if raw_code & 0x8000:
+        raw_code -= 1 << 16
+    return raw_code, raw_code * LSB_V
 
 
 def read_timed_channel(
@@ -149,7 +149,7 @@ def read_timed_channel(
     clock_ns=time.monotonic_ns,
 ):
     """Read one channel and retain separate timing bounds for that conversion."""
-    started_ns = clock_ns()
+    conversion_started_monotonic_ns = clock_ns()
     start_conversion(bus, channel, address=address, data_rate=data_rate)
     wait_conversion_ready(
         bus,
@@ -159,9 +159,9 @@ def read_timed_channel(
         timeout=timeout,
         poll_interval=poll_interval,
     )
-    raw, voltage = read_conversion(bus, address=address)
-    completed_ns = clock_ns()
-    return AdcReading(channel, raw, voltage, started_ns, completed_ns)
+    raw_code, raw_voltage_v = read_conversion(bus, address=address)
+    conversion_completed_monotonic_ns = clock_ns()
+    return AdcReading(channel, raw_code, raw_voltage_v, conversion_started_monotonic_ns, conversion_completed_monotonic_ns)
 
 
 def read_channel(

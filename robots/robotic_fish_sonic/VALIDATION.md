@@ -1,5 +1,60 @@
 # robotic_fish_sonic 合并验证
 
+## 2026-11-12 包内命名整理与 ADC 重复发布移除
+
+本轮仅修改 `robots/robotic_fish_sonic/`，未修改 `robotic_fish`、`spinal`
+或其他模块。规则与旧名／新名对照见 [命名与数据出口](docs/naming_conventions.md)。
+
+- ADC、DAC、增益节点及采集／校准／声学算法的内部物理量名称明确含义、单位和时钟。
+  增益请求值与 DAC 确认值分开命名，固定窗口和周期判据的分母含义分开命名。
+- 新的私有参数别名优先于旧名，仍支持当前 launch/YAML 和历史 `agc` 参数；
+  显式 `false`、零值和空字符串不会被错误地忽略。
+- 移除单通道 `adc/sample` 发布器和对应配置，仅发布完整 `adc/samples`。
+  旧 `publish_array=false` 给出警告并仍发布批数据，防止唯一数据出口被意外关闭。
+- 全部 10 个消息和 2 个服务定义、校准 JSON 文件逐字节未变；
+  周期控制器公开参数、数据类字段、适配字典与配置 JSON 的旧键保持兼容。
+  配置 `topics` 中删除已不存在的单通道 `sample` 条目。
+- 没有实施跨包的运动消息重构、周期决策新话题、配置话题合并或调参事件开关。
+
+| 验证 | 本轮结果 |
+| --- | --- |
+| 修改前声学包基线 | 167 项通过 |
+| 修改后声学包单元测试 | 173 项通过，含 6 项新接口／发布回归 |
+| 未修改的运动包测试 | 65 项通过 |
+| 独立 CMake 构建、消息生成、安装 | 通过，输出全部位于 `/tmp` |
+| CMake `run_tests` XML | 12 份 XML，173 项，0 errors、0 failures、0 skipped |
+| 安装环境单元测试 | 173 项通过；核心算法与参数模块实际从 install 路径导入 |
+| 新旧 bag 兼容集成测试 | 4 项通过，含旧包 12／14 字段、新包 14 字段及候选拒绝路径 |
+| ADC 实际 ROS + `record -a` 回读 | 源码与安装可执行文件均通过：无单通道话题、完整批数据、校准、DAC 标记、一秒均值、晚订阅配置 |
+| 声学隔离 ROS 通信 | 无模型比较、质量回退、未来帧拒绝及恢复通过 |
+| 未修改运动节点的隔离 ROS 通信 | 源码／安装声学环境均通过，含 1.5／2 Hz、两种舵机符号、保持／停止／恢复、Share 和真实录包回读 |
+| 原始实验 bag 的算法差分 | 7 包共 27,233 组，适配结果、固定窗口输出与周期控制器结果逐组相同 |
+| 静态检查与范围 | Python 3.8 语法、文档链接、差异格式与修改目录检查通过 |
+
+6 项新增回归覆盖：新名优先及显式零／假值、ADC 新旧参数与真实配置快照、
+DAC 新旧参数快照、gain 旧 launch 参数和新别名、只发布完整 ADC 组、
+中途转换失败不发布残缺组。构造测试使用实际生成消息与真实节点代码，
+mock ROS 通信和硬件打开操作；通信测试另使用真实 localhost ROS 传输。
+
+算法差分以修改前源码副本为基线，对同一输入与同一时间映射分别运行两版。
+周期控制器使用固定 1.5 Hz 和相同的离线接收时间映射；该检查证明重命名前后
+计算行为一致，不声称重建了现场的 Joy 模式切换或所有在线周期决策。
+ADC 通信测试仅把 I²C 打开操作替换为模拟总线；不会访问 `/dev/i2c-*`。
+未启动真实 DAC、spinal 桥或执行器，也未部署到现场运行节点。
+
+本轮工作目录为 `/tmp/fish-sonic-naming-5qis6pbs`，包括 `build`、`devel`、
+`install`、修改前 `baseline`、临时测试依赖及差分复查脚本 `compare_bags.py`。
+日志为同目录下的 `cmake.log`、`build.log`、`cmake-tests.log`、`install.log`、
+`motion-tests.log`、`bag-compatibility.log`、`bag-differential.log`、
+`adc-ros.log`、`acoustic-ros.log`、`cycle-ros.log`、
+`installed-adc-ros.log` 和 `installed-cycle-ros.log`。
+单元测试日志另位于 `/tmp/fish-sonic-naming-tests.log`。
+测试依赖仅安装于该临时目录；CMake 使用的临时 nose 启动器补齐
+Python 3.10 的 `collections.Callable` 兼容，不修改系统 Python 或项目算法。
+
+可复查的包内入口见 [命名文档中的验证命令](docs/naming_conventions.md#6-验证入口)。
+主工作空间的 build/devel/install 未更新；现场使用前需重新构建声学包并重启相关声学节点。
+
 ## 2026-11-12 速度限幅与 DAC 请求校验修复
 
 按用户确认的范围修复下方检查中的问题 4、5。共享串口桥暂缓，旧控制器的

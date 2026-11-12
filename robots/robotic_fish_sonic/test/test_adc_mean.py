@@ -47,7 +47,7 @@ class MeanTests(unittest.TestCase):
         exec(compile(ast.Module(body=[n for n in tree.body if isinstance(n, ast.ClassDef)],
                                 type_ignores=[]), str(path), 'exec'), ns)
         node = ns['AdcNode'].__new__(ns['AdcNode'])
-        node.raw_means = {i: RawVoltageMean(.2) for i in range(3)}
+        node.raw_voltage_means = {i: RawVoltageMean(.2) for i in range(3)}
         node.bus = None
         for tick in range(21):
             samples = [NS(channel_id=i, timestamp=NS(to_sec=lambda: tick / 20.),

@@ -49,12 +49,12 @@ class NodeSafetyTests(unittest.TestCase):
         n.joy_topic = "/joy"
         n.lock = threading.RLock()
         n.command_lock = threading.Lock()
-        n.last_sample_stamps = {}
-        n.last_adc_monotonic_s = None
-        n.latest_batch_valid = False
-        n.adc_timeout = 1.
-        n.current_dac_voltage = 1.
-        n.adjustments = n.error_count = 0
+        n.last_accepted_sample_stamps = {}
+        n.last_valid_adc_received_monotonic_s = None
+        n.latest_sample_group_valid = False
+        n.adc_timeout_s = 1.
+        n.confirmed_dac_voltage_v = 1.
+        n.adjustment_count = n.error_count = 0
         n.last_error = ''
         n._publish_state = lambda: None
         n.calls = []
@@ -74,13 +74,13 @@ class NodeSafetyTests(unittest.TestCase):
     def test_stale_manual_and_closed_loop(self):
         for mode in ('manual', 'closed_loop'):
             n = self.make_node(mode)
-            n._adc_callback(self.message(stamp=1.))
+            n._on_adc_samples(self.message(stamp=1.))
             self.assertEqual(n.calls, [])
             self.assertFalse(n._adc_is_valid())
 
     def test_fresh_can_control(self):
         n = self.make_node()
-        n._adc_callback(self.message())
+        n._on_adc_samples(self.message())
         self.assertEqual(n.calls, [1.05])
         self.assertTrue(n._adc_is_valid())
 
@@ -88,21 +88,21 @@ class NodeSafetyTests(unittest.TestCase):
         n = self.make_node()
         msg = self.message()
         msg.samples[1].timestamp = Stamp(1.)
-        n._adc_callback(msg)
+        n._on_adc_samples(msg)
         self.assertEqual(n.calls, [])
 
     def test_repeated_and_future_rejected(self):
         n = self.make_node()
-        n.last_sample_stamps = {i: Stamp(99.9) for i in range(3)}
+        n.last_accepted_sample_stamps = {i: Stamp(99.9) for i in range(3)}
         for stamp in (99.9, 101.):
-            n._adc_callback(self.message(stamp=stamp))
+            n._on_adc_samples(self.message(stamp=stamp))
         self.assertEqual(n.calls, [])
 
     def test_missing_channel_does_not_mask_protection(self):
         n = self.make_node()
         msg = self.message(values=(4.05, .1, .1))
         msg.samples.pop()
-        n._adc_callback(msg)
+        n._on_adc_samples(msg)
         self.assertEqual(n.calls, [.9])
         self.assertFalse(n._adc_is_valid())
 
@@ -110,24 +110,24 @@ class NodeSafetyTests(unittest.TestCase):
         n = self.make_node()
         msg = self.message()
         msg.samples[1].adc_code = MAX_RAW
-        n._adc_callback(msg)
+        n._on_adc_samples(msg)
         self.assertEqual(n.calls, [.9])
 
     def test_unknown_dac_and_invalid_data_no_initialization(self):
         n = self.make_node()
-        n.current_dac_voltage = None
-        n._adc_callback(self.message(stamp=1.))
+        n.confirmed_dac_voltage_v = None
+        n._on_adc_samples(self.message(stamp=1.))
         self.assertEqual(n.calls, [])
 
     def test_nonfinite_dac_invalidates_state(self):
         n = self.make_node()
-        n._dac_state_callback(SimpleNamespace(dac_volt=float('nan'), status_dac_feedback=False))
-        self.assertIsNone(n.current_dac_voltage)
+        n._on_dac_state(SimpleNamespace(dac_volt=float('nan'), status_dac_feedback=False))
+        self.assertIsNone(n.confirmed_dac_voltage_v)
 
     def test_other_dac_channel_rejected_before_io(self):
         cls = node_class('dac_node.py', 'DacNode')
         n = cls.__new__(cls)
-        n.default_channel = 1
+        n.dac_channel_id = 1
         n._publish_result = lambda *args: None
         n._close_locked = lambda: None
         n._apply_voltage_locked.__globals__["serial"] = __import__("serial")
@@ -135,7 +135,7 @@ class NodeSafetyTests(unittest.TestCase):
             n._apply_voltage_locked(1., 2)
 
     def test_gain_services_finish_after_inflight_dac_command(self):
-        for service_name in ('_enable_callback', '_reset_safety_callback'):
+        for service_name in ('_on_set_enabled', '_on_reset_safety'):
             with self.subTest(service=service_name):
                 n = self.make_node()
                 n._publish_config = lambda: None
@@ -169,7 +169,7 @@ class NodeSafetyTests(unittest.TestCase):
 
                 def run_adc():
                     try:
-                        n._adc_callback(self.message())
+                        n._on_adc_samples(self.message())
                     except Exception as exc:
                         errors.append(exc)
 
@@ -200,13 +200,13 @@ class NodeSafetyTests(unittest.TestCase):
                 self.assertFalse(adc.is_alive() or service.is_alive())
                 self.assertEqual(errors, [])
                 self.assertEqual(order, [('dac', 1.05, 'manual'), ('response', True)])
-                if service_name == '_enable_callback':
+                if service_name == '_on_set_enabled':
                     n.calls.clear()
                     n._set_dac_voltage = lambda value: n.calls.append(value) or value
-                    n._adc_callback(self.message(stamp=99.95))
+                    n._on_adc_samples(self.message(stamp=99.95))
                     self.assertEqual(n.controller.mode, 'off')
                     self.assertEqual(n.calls, [])
-                    n._adc_callback(self.message(stamp=99.99, values=(4.05, .1, .1)))
+                    n._on_adc_samples(self.message(stamp=99.99, values=(4.05, .1, .1)))
                     self.assertEqual(n.calls, [.95])  # Off mode still protects the ADC.
 
 
@@ -216,12 +216,12 @@ class DacCommandTests(unittest.TestCase):
         cls._apply_voltage_locked.__globals__['serial'] = __import__('serial')
         node = cls.__new__(cls)
         node.lock = threading.RLock()
-        node.default_channel = 1
+        node.dac_channel_id = 1
         node.dac = Mock()
         node.dac.write.return_value = 5
         node.verify_echo = True
-        node.applied_voltage = 1.23
-        node.last_command_ns = 1234
+        node.applied_voltage_v = 1.23
+        node.last_command_monotonic_ns = 1234
         node.watchdog_fired = True
         node.error_count, node.last_error = 0, ''
         node._open_locked = Mock()
@@ -238,13 +238,13 @@ class DacCommandTests(unittest.TestCase):
                 self.assertFalse(success)
                 self.assertTrue(math.isnan(applied))
                 self.assertTrue(message)
-                self.assertEqual(node.applied_voltage, 1.23)
+                self.assertEqual(node.applied_voltage_v, 1.23)
                 self.assertIs(node.dac, connection)
                 node._open_locked.assert_not_called()
                 connection.write.assert_not_called()
                 connection.close.assert_not_called()
                 node._publish_result.assert_not_called()
-                self.assertEqual(node.last_command_ns, 1234)
+                self.assertEqual(node.last_command_monotonic_ns, 1234)
                 self.assertTrue(node.watchdog_fired)
 
     def test_valid_request_after_rejection_still_writes_and_confirms_voltage(self):
@@ -256,11 +256,11 @@ class DacCommandTests(unittest.TestCase):
         success, applied, _ = node._set_voltage(1.2, 1)
         self.assertTrue(success)
         self.assertEqual(applied, 1.2)
-        self.assertEqual(node.applied_voltage, 1.2)
+        self.assertEqual(node.applied_voltage_v, 1.2)
         connection.write.assert_called_once_with(command)
         connection.close.assert_not_called()
         node._publish_result.assert_called_once_with(1.2, 1.2, True, '')
-        self.assertGreater(node.last_command_ns, 1234)
+        self.assertGreater(node.last_command_monotonic_ns, 1234)
         self.assertFalse(node.watchdog_fired)
 
     def test_transport_failures_still_invalidate_state_and_close_connection(self):
@@ -274,7 +274,7 @@ class DacCommandTests(unittest.TestCase):
                 self.assertFalse(success)
                 self.assertTrue(math.isnan(applied))
                 self.assertIn(str(error), message)
-                self.assertIsNone(node.applied_voltage)
+                self.assertIsNone(node.applied_voltage_v)
                 self.assertIsNone(node.dac)
                 connection.close.assert_called_once_with()
                 result = node._publish_result.call_args[0]
@@ -288,7 +288,7 @@ class DacCommandTests(unittest.TestCase):
         success, _, message = node._set_voltage(1.2, 1)
         self.assertFalse(success)
         self.assertIn('echo mismatch', message)
-        self.assertIsNone(node.applied_voltage)
+        self.assertIsNone(node.applied_voltage_v)
         self.assertIsNone(node.dac)
         connection.close.assert_called_once_with()
         self.assertFalse(node._publish_result.call_args[0][2])
@@ -302,9 +302,9 @@ class DacWatchdogTests(unittest.TestCase):
         ns['time'] = SimpleNamespace(monotonic_ns=lambda: 10_000_000_000)
         n = cls.__new__(cls)
         n.lock = threading.RLock()
-        n.command_timeout, n.last_command_ns = 2., 1_000_000_000
+        n.command_timeout_s, n.last_command_monotonic_ns = 2., 1_000_000_000
         n.watchdog_fired = False
-        n.safe_voltage, n.default_channel = 0., 1
+        n.safe_voltage_v, n.dac_channel_id = 0., 1
         n.error_count, n.last_error = 0, ''
         n.calls = []
         n._apply_voltage_locked = lambda *args, **kw: n.calls.append((args, kw))
@@ -315,7 +315,7 @@ class DacWatchdogTests(unittest.TestCase):
 
         class NewCommandLock:
             def __enter__(self):
-                n.last_command_ns = 9_990_000_000
+                n.last_command_monotonic_ns = 9_990_000_000
                 n.watchdog_fired = False
 
             def __exit__(self, *args):
@@ -332,7 +332,7 @@ class DacWatchdogTests(unittest.TestCase):
                                      (2., 9_000_000_000, False), (2., 1, True)):
             with self.subTest(timeout=timeout, last=last, fired=fired):
                 n = self.make_node()
-                n.command_timeout, n.last_command_ns, n.watchdog_fired = timeout, last, fired
+                n.command_timeout_s, n.last_command_monotonic_ns, n.watchdog_fired = timeout, last, fired
                 n._watchdog_callback(None)
                 self.assertEqual(n.calls, [])
 
@@ -342,7 +342,7 @@ class DacWatchdogTests(unittest.TestCase):
         n._watchdog_callback(None)
         self.assertEqual(n.calls, [((0., 1), dict(mark_command=False))])
         self.assertTrue(n.watchdog_fired)
-        self.assertEqual(n.last_command_ns, 1_000_000_000)
+        self.assertEqual(n.last_command_monotonic_ns, 1_000_000_000)
 
     def test_failed_watchdog_write_remains_retryable(self):
         n = self.make_node()
@@ -376,16 +376,16 @@ class AdcSchemaTests(unittest.TestCase):
     def test_timestamp_is_read_completion_and_dac_is_start_snapshot(self):
         n, _ = self.make_node()
         n.bus = None
-        n.address = 0x48
-        n.data_rate = 128
-        n.timeout = .1
-        n.poll_interval = .001
-        n.frame_id = 'ads1115'
+        n.i2c_address = 0x48
+        n.conversion_rate_sps = 128
+        n.conversion_timeout_s = .1
+        n.ready_poll_interval_s = .001
+        n.device_id = 'ads1115'
         n.sample_sequence = 7
-        n.gain_control_state = (True, .8)
+        n.dac_voltage_state = (True, .8)
         n._ros_time_from_anchor = lambda anchor, mono, value: value
         def read(*args, **kwargs):
-            n.gain_control_state = (True, .9)
+            n.dac_voltage_state = (True, .9)
             return SimpleNamespace(channel=1, raw=16000, voltage=2.,
                                    started_ns=100, completed_ns=300)
         n._sample_channel.__globals__['adc_driver'] = SimpleNamespace(read_timed_channel=read)
@@ -396,7 +396,7 @@ class AdcSchemaTests(unittest.TestCase):
         self.assertEqual(msg.adc_code, 16000)
         self.assertEqual(msg.dac_volt, .8)
         self.assertTrue(msg.status_dac_feedback)
-        n.gain_control_state = (False, 0.)
+        n.dac_voltage_state = (False, 0.)
         msg = n._sample_channel(1)
         self.assertTrue(math.isnan(msg.dac_volt))
         self.assertFalse(msg.status_dac_feedback)
@@ -435,13 +435,13 @@ class CompactRecordingTests(unittest.TestCase):
         n = self.make_node('off')
         first = self.message(stamp=99.7)
         first.samples[0].timestamp = Stamp(99.5)
-        n._adc_callback(first)
+        n._on_adc_samples(first)
         second = self.message(stamp=99.9)
         second.samples[0].timestamp = Stamp(99.6)
-        n._adc_callback(second)
+        n._on_adc_samples(second)
         self.assertTrue(n._adc_is_valid())
-        self.assertEqual(n.last_sample_stamps[0], Stamp(99.6))
-        n._adc_callback(second)
+        self.assertEqual(n.last_accepted_sample_stamps[0], Stamp(99.6))
+        n._on_adc_samples(second)
         self.assertFalse(n._adc_is_valid())
 
     def test_gain_state_deduplicates_and_reports_staleness_and_safety(self):
@@ -450,14 +450,14 @@ class CompactRecordingTests(unittest.TestCase):
         n._state_message.__globals__['GainControlState'] = type('State', (), {
             '__slots__': ('timestamp', 'mode', 'state', 'log')})
         published = []
-        n.state_pub = SimpleNamespace(publish=published.append)
+        n.state_publisher = SimpleNamespace(publish=published.append)
         n.last_state_key = None
         n._publish_state()
         n._publish_state()
         self.assertEqual(len(published), 1)
-        n._adc_callback(self.message())
+        n._on_adc_samples(self.message())
         self.assertEqual(published[-1].state, 'off')
-        n.last_adc_monotonic_s = time.monotonic() - 2
+        n.last_valid_adc_received_monotonic_s = time.monotonic() - 2
         n._publish_state()
         self.assertEqual(published[-1].state, 'adc_stale')
         n.controller.safety_active = True
@@ -468,8 +468,8 @@ class CompactRecordingTests(unittest.TestCase):
     def test_config_contains_normalized_effective_controller_settings(self):
         n = self.make_node()
         n._publish_config.__globals__['GainController'] = GainController
-        for key, value in dict(start_voltage=0., dac_channel=1, service_timeout=1.,
-            adc_topic='/adc', dac_state_topic='/dac', dac_service_name='/set').items():
+        for key, value in dict(start_voltage_v=0., dac_channel_id=1, service_timeout_s=1.,
+            adc_samples_topic='/adc', dac_state_topic='/dac', set_dac_voltage_service_name='/set').items():
             setattr(n, key, value)
         records = []
         n.config_recorder = SimpleNamespace(publish=records.append)
@@ -491,13 +491,13 @@ class CompactRecordingTests(unittest.TestCase):
         ns['serial'] = __import__('serial')
         ns['DacState'] = type('Result', (), {'__slots__': (
             'timestamp', 'dac_volt_target', 'dac_volt', 'status_dac_feedback', 'log')})
-        n.default_channel = 1
+        n.dac_channel_id = 1
         n.verify_echo = True
         n.dac = FakeDac()
         n._open_locked = lambda: None
         n._close_locked = lambda: None
         records = []
-        n.state_pub = SimpleNamespace(publish=records.append)
+        n.state_publisher = SimpleNamespace(publish=records.append)
         n._apply_voltage_locked(.85, 1)
         self.assertEqual(len(records), 1)
         self.assertEqual(records[-1].dac_volt_target, .85)
@@ -517,9 +517,9 @@ class CompactRecordingTests(unittest.TestCase):
 
     def test_adc_rejects_false_feedback_even_with_finite_voltage(self):
         n, _ = AdcSchemaTests().make_node()
-        n.gain_control_state = (True, .8)
-        n._gain_control_callback(SimpleNamespace(dac_volt=.9, status_dac_feedback=False))
-        self.assertFalse(n.gain_control_state[0])
+        n.dac_voltage_state = (True, .8)
+        n._on_dac_state(SimpleNamespace(dac_volt=.9, status_dac_feedback=False))
+        self.assertFalse(n.dac_voltage_state[0])
 
     def test_config_recorder_is_latched_and_only_publishes_changes(self):
         import json

@@ -140,48 +140,48 @@ class AdcCalibration:
             if declared_max != float(nodes[-1]["raw_voltage_v"]):
                 raise ValueError(f"ADC{channel}输入上限与末节点不一致")
 
-    def _interpolate_channel(self, channel, raw_voltage):
-        voltage = self._finite_number(raw_voltage, f"ADC{channel}电压")
-        raw_nodes = self.raw_nodes[channel]
-        minimum, maximum = self.input_ranges[channel]
-        if voltage < minimum - self.endpoint_tolerance_v:
+    def _interpolate_channel(self, channel_id, raw_voltage_v):
+        bounded_raw_voltage_v = self._finite_number(raw_voltage_v, f"ADC{channel_id}电压")
+        raw_voltage_nodes_v = self.raw_nodes[channel_id]
+        minimum_raw_voltage_v, maximum_raw_voltage_v = self.input_ranges[channel_id]
+        if bounded_raw_voltage_v < minimum_raw_voltage_v - self.endpoint_tolerance_v:
             raise ValueError(
-                f"ADC{channel}电压{voltage:.6f} V低于校准范围{minimum:.6f} V"
+                f"ADC{channel_id}电压{bounded_raw_voltage_v:.6f} V低于校准范围{minimum_raw_voltage_v:.6f} V"
             )
-        if voltage > maximum + self.endpoint_tolerance_v:
+        if bounded_raw_voltage_v > maximum_raw_voltage_v + self.endpoint_tolerance_v:
             raise ValueError(
-                f"ADC{channel}电压{voltage:.6f} V高于校准范围{maximum:.6f} V"
+                f"ADC{channel_id}电压{bounded_raw_voltage_v:.6f} V高于校准范围{maximum_raw_voltage_v:.6f} V"
             )
-        voltage = min(maximum, max(minimum, voltage))
-        right = bisect.bisect_left(raw_nodes, voltage)
+        bounded_raw_voltage_v = min(maximum_raw_voltage_v, max(minimum_raw_voltage_v, bounded_raw_voltage_v))
+        right = bisect.bisect_left(raw_voltage_nodes_v, bounded_raw_voltage_v)
         if right == 0:
-            return self.curves[channel][0]["reference_voltage_v"]
-        if right == len(raw_nodes):
-            return self.curves[channel][-1]["reference_voltage_v"]
-        if raw_nodes[right] == voltage:
-            return self.curves[channel][right]["reference_voltage_v"]
+            return self.curves[channel_id][0]["reference_voltage_v"]
+        if right == len(raw_voltage_nodes_v):
+            return self.curves[channel_id][-1]["reference_voltage_v"]
+        if raw_voltage_nodes_v[right] == bounded_raw_voltage_v:
+            return self.curves[channel_id][right]["reference_voltage_v"]
         left = right - 1
-        fraction = (voltage - raw_nodes[left]) / (
-            raw_nodes[right] - raw_nodes[left]
+        fraction = (bounded_raw_voltage_v - raw_voltage_nodes_v[left]) / (
+            raw_voltage_nodes_v[right] - raw_voltage_nodes_v[left]
         )
-        left_reference = self.curves[channel][left]["reference_voltage_v"]
-        right_reference = self.curves[channel][right]["reference_voltage_v"]
-        return left_reference + fraction * (right_reference - left_reference)
+        left_reference_voltage_v = self.curves[channel_id][left]["reference_voltage_v"]
+        right_reference_voltage_v = self.curves[channel_id][right]["reference_voltage_v"]
+        return left_reference_voltage_v + fraction * (right_reference_voltage_v - left_reference_voltage_v)
 
     def apply(self, adc_voltages):
         """仅根据三个通道自身ADC电压进行校准，不接收DAC参数。"""
         if not isinstance(adc_voltages, (list, tuple)) or len(adc_voltages) != 3:
             raise ValueError("ADC电压必须按ADC0、ADC1、ADC2提供三个值")
-        values = [
+        raw_voltages_v = [
             self._finite_number(value, f"ADC{channel}电压")
             for channel, value in enumerate(adc_voltages)
         ]
-        corrected = [
+        calibrated_voltages_v = [
             self._interpolate_channel(channel, value)
-            for channel, value in enumerate(values)
+            for channel, value in enumerate(raw_voltages_v)
         ]
         effective_gains = [
-            corrected_value / raw_value if raw_value != 0 else 1.0
-            for raw_value, corrected_value in zip(values, corrected)
+            calibrated_voltage_v / raw_voltage_v if raw_voltage_v != 0 else 1.0
+            for raw_voltage_v, calibrated_voltage_v in zip(raw_voltages_v, calibrated_voltages_v)
         ]
-        return corrected, effective_gains
+        return calibrated_voltages_v, effective_gains

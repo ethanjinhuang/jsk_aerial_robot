@@ -1,5 +1,10 @@
 # robotic_fish_sonic
 
+Current naming and ADC publication update: see
+[naming and interface compatibility](naming_conventions.md). ADC now publishes
+sample groups only; the historical single-sample topic has been removed.
+Existing message/service fields and launch parameter names remain compatible.
+
 ## Manual joystick gain control
 
 Start IO and the joystick publisher in separate terminals:
@@ -133,10 +138,12 @@ DacState fields:
 | status_dac_feedback | bool | Software execution confirmation, not analog measurement |
 | log | string | Failure explanation; empty on success |
 
-The DAC publishes one result for each service, watchdog, or shutdown setting
-attempt, including rejected requests and serial failures. The last result is
-latched; no result is invented merely because the serial port opened. A rejected
-request conservatively invalidates the cached DAC state. The existing service
+The DAC publishes a result for each successful setting or hardware communication
+failure, including watchdog and shutdown attempts. Invalid voltage/channel
+requests are rejected before hardware access and do not replace the confirmed
+state, close the connection, or refresh the command watchdog. The last published
+result is latched; opening the serial port alone does not create a result. The
+existing service
 request fields (`channel`, `voltage`) and response fields (`success`,
 `applied_voltage`, `message`) remain unchanged; failed responses use NaN voltage.
 
@@ -162,7 +169,8 @@ There is no dynamic parameter-update API beyond the existing mode service.
 This changes the ROS definitions for AdcSampleArray, GainControlState and the DAC
 state topic. Rebuild and source all consumers; old bags need schema adapters.
 Default recording keeps samples, DAC results, gain state, and config alongside
-existing motion topics. Diagnostics are opt-in for recording only.
+existing motion topics. Diagnostics are recorded by default and can be disabled
+with `record_diagnostics:=false`.
 
 ## 1. System relationship
 
@@ -521,8 +529,7 @@ Advanced settings are under `gain_control` in `config/io.yaml`:
 
 | Topic | Type | Publisher/subscriber | Content |
 | --- | --- | --- | --- |
-| `/robotic_fish/adc/sample` | `robotic_fish_sonic/AdcSample` | Published by `/adc` | One channel conversion |
-| `/robotic_fish/adc/samples` | `robotic_fish_sonic/AdcSampleArray` | Published by `/adc` | Complete three-channel group |
+| `/robotic_fish/adc/samples` | `robotic_fish_sonic/AdcSampleArray` | Published by `/adc` | Sole ADC data output; complete three-channel group |
 | `/robotic_fish/dac/state` | `robotic_fish_sonic/DacState` | Published by `/dac` | One completed or failed setting operation |
 | `/robotic_fish/gain_control/state` | `robotic_fish_sonic/GainControlState` | Published by `/gain_control` | Mode, state and log; published only when changed |
 | `/robotic_fish/gain_control/config` | `robotic_fish_sonic/RuntimeConfig` | Published by each IO node | Latched effective settings, identified by device |
@@ -554,7 +561,11 @@ rostopic echo /diagnostics
 
 ## 8. Full-system startup
 
-The current system uses three independent launch files. Run them in separate terminals.
+For cycle-steering experiments, run `robotic_fish/sonic_vim4.launch` on VIM4,
+`robotic_fish/joy.launch` on the joystick PC, and `robotic_fish/record.launch`
+in another VIM4 terminal. See the [current system instructions](../../robotic_fish/README.md#65-周期趋声控制).
+The lower-level IO/motion launches below are an alternative single-machine setup;
+do not start them alongside the combined VIM4 launch.
 
 Terminal 1 — embedded bridge, ADC, DAC, and gain control:
 
@@ -591,11 +602,28 @@ roslaunch robotic_fish record.launch
 /robotic_fish/dac/state
 /robotic_fish/gain_control/state
 /robotic_fish/gain_control/config
+/robotic_fish/acoustic/quadrant_probabilities
+/robotic_fish/acoustic/channel_comparison
+/robotic_fish/acoustic/steering_state
+/robotic_fish/sonic/status_snapshot
+/robotic_fish/sonic/motion_state
+/robotic_fish/sonic/config
+/robotic_fish/acoustic/steering_events
+/rosout
+/diagnostics
 /joy
 /imu
 /servo/target_states
 /servo/states
 ```
+
+Diagnostics are enabled by default (`record_diagnostics:=false` disables their
+subscription). Fixed-window comparison/probability topics require the separate
+quadrant publisher; steering state requires acoustic steering to be enabled.
+Share snapshots and parameter events are emitted only when their triggers occur.
+An event topic with zero messages is not automatically a recording failure.
+See [recording audit and organization plan](rosbag_audit/README.md) for the actual
+`exp20261022` inventory, time anomalies, quality filtering and proposed profiles.
 
 Start recording with:
 
@@ -632,7 +660,11 @@ Gain control uses a service to command the DAC, and ROS service requests are not
 /robotic_fish/adc/samples[*].dac_volt
 ```
 
-DAC service requests are represented by execution-result messages, including the requested target and failed attempts. To also record diagnostics, use `roslaunch robotic_fish record.launch record_diagnostics:=true`. Diagnostics remain available live regardless of this recording option.
+Successful DAC settings and hardware failures are represented by execution-result
+messages, including the target. Invalid parameter requests only return service
+errors and do not overwrite the confirmed state topic, so topics do not provide
+a complete audit of every service request. Diagnostics remain available live
+regardless of the recording option.
 
 ## 10. Stable DAC device name
 

@@ -38,6 +38,8 @@ class SteeringFault(ValueError):
 
 @dataclass(frozen=True)
 class SteeringSettings:
+    # Public fields/constructor are consumed by robotic_fish, including vars().
+    # Keep these legacy names at the compatibility boundary.
     threshold: float
     bias: float
     lr_voltage_offset_v: float
@@ -45,6 +47,7 @@ class SteeringSettings:
 
 @dataclass(frozen=True)
 class CycleDecision:
+    # Public result attributes are also read directly by the motion adapter.
     cycle: int
     start: float
     end: float
@@ -103,22 +106,22 @@ class CycleSteering:
     def gain_warmup(self):
         return self.waiting_status == 'gain_warmup'
 
-    def _settings(self, threshold, bias, lr_voltage_offset_v):
-        threshold, bias = number(threshold, 'threshold'), number(bias, 'bias')
-        lr_voltage_offset_v = number(lr_voltage_offset_v, 'lr_voltage_offset_v')
-        if not 0 <= threshold <= 2 or not 0 <= bias <= self.max_bias:
+    def _settings(self, turn_threshold_ratio, turn_offset_magnitude_ticks, left_right_voltage_offset_v):
+        turn_threshold_ratio, turn_offset_magnitude_ticks = number(turn_threshold_ratio, 'threshold'), number(turn_offset_magnitude_ticks, 'bias')
+        left_right_voltage_offset_v = number(left_right_voltage_offset_v, 'lr_voltage_offset_v')
+        if not 0 <= turn_threshold_ratio <= 2 or not 0 <= turn_offset_magnitude_ticks <= self.max_bias:
             raise ValueError('threshold must be in [0,2] and bias in [0,max_bias]')
-        return SteeringSettings(threshold, bias, lr_voltage_offset_v)
+        return SteeringSettings(turn_threshold_ratio, turn_offset_magnitude_ticks, left_right_voltage_offset_v)
 
     def configure(self, threshold, bias, lr_voltage_offset_v):
         """Validate the entire triplet now; apply it at the next valid decision."""
         self.pending = self._settings(threshold, bias, lr_voltage_offset_v)
 
-    def _set_frequency(self, frequency):
-        frequency = number(frequency, 'frequency')
-        if frequency <= 0 or not math.isfinite(1. / frequency):
+    def _set_frequency(self, tailbeat_frequency_hz):
+        tailbeat_frequency_hz = number(tailbeat_frequency_hz, 'frequency')
+        if tailbeat_frequency_hz <= 0 or not math.isfinite(1. / tailbeat_frequency_hz):
             raise ValueError('frequency must have a positive finite period')
-        self.frequency, self.period = frequency, 1. / frequency
+        self.frequency, self.period = tailbeat_frequency_hz, 1. / tailbeat_frequency_hz
 
     def _reject(self, reason):
         self.latest_error = reason
@@ -131,36 +134,36 @@ class CycleSteering:
         """Check timing on every group; only usable groups enter a decision."""
         try:
             received, ros_now = number(received, 'receipt'), number(ros_now, 'ROS time')
-            g = adapt(message)
+            sample_group = adapt(message)
             # These quality states pause decisions while fresh timing still
             # distinguishes incoming unusable data from a disconnected ADC.
-            waiting = g['status'] & (Status.GAIN_TRANSITION |
+            waiting_quality_flags = sample_group['status'] & (Status.GAIN_TRANSITION |
                                      Status.CALIBRATION_FALLBACK | Status.GAIN_UNKNOWN)
-            invalid = g['status'] & ~waiting
-            if invalid:
-                return self._reject('|'.join(flag.name.lower() for flag in Status if flag & invalid))
-            age = ros_now - g['t']
-            if age < -self.future_tolerance_s:
+            invalid_quality_flags = sample_group['status'] & ~waiting_quality_flags
+            if invalid_quality_flags:
+                return self._reject('|'.join(flag.name.lower() for flag in Status if flag & invalid_quality_flags))
+            sample_age_s = ros_now - sample_group['t']
+            if sample_age_s < -self.future_tolerance_s:
                 return self._reject('future_sample')
-            if age > self.max_age_s:
+            if sample_age_s > self.max_age_s:
                 return self._reject('stale_sample')
-            if self.last_sensor_stamp is not None and g['t'] <= self.last_sensor_stamp:
-                self.last_sensor_stamp = g['t']
+            if self.last_sensor_stamp is not None and sample_group['t'] <= self.last_sensor_stamp:
+                self.last_sensor_stamp = sample_group['t']
                 return self._reject('sample_time_reset')
-            offset = received - ros_now
-            if self.clock_offset is not None and abs(offset - self.clock_offset) > self.future_tolerance_s:
-                self.clock_offset = offset
-                self.last_sensor_stamp = g['t']
+            ros_to_monotonic_offset_s = received - ros_now
+            if self.clock_offset is not None and abs(ros_to_monotonic_offset_s - self.clock_offset) > self.future_tolerance_s:
+                self.clock_offset = ros_to_monotonic_offset_s
+                self.last_sensor_stamp = sample_group['t']
                 return self._reject('clock_changed')
-            acquisition = min(received, g['t'] + offset)
-            if self.latest_time is not None and acquisition <= self.latest_time:
+            acquired_monotonic_s = min(received, sample_group['t'] + ros_to_monotonic_offset_s)
+            if self.latest_time is not None and acquired_monotonic_s <= self.latest_time:
                 self.latest_time = None
                 return self._reject('receipt_time_reset')
-            if not waiting:
-                total = g['volts'][1] + g['volts'][2]
-                if not math.isfinite(total):
+            if not waiting_quality_flags:
+                side_voltage_sum_v = sample_group['volts'][1] + sample_group['volts'][2]
+                if not math.isfinite(side_voltage_sum_v):
                     return self._reject('invalid_signal_sum')
-                if total < self.low_signal_v:
+                if side_voltage_sum_v < self.low_signal_v:
                     return self._reject('low_signal')
         except (ValueError, TypeError, AttributeError, OverflowError) as exc:
             return self._reject('invalid_input: ' + str(exc))
@@ -170,7 +173,7 @@ class CycleSteering:
         if self.latest_time is not None:
             if received - self.latest_time > self.max_age_s + 1e-9:
                 continuity_error = 'adc_timeout'
-            elif acquisition - self.latest_time > self.gap_s + 1e-9:
+            elif acquired_monotonic_s - self.latest_time > self.gap_s + 1e-9:
                 continuity_error = 'adc_gap'
         if continuity_error:
             self.rows.clear()
@@ -178,44 +181,44 @@ class CycleSteering:
                 self.fault = continuity_error
         # Compare usable signatures only: fallback IDs and unknown DAC values
         # must not turn normal quality recovery into a calibration-change fault.
-        calibration_changed = (not waiting and self.signature is not None and
-                               g['signature'][0] != self.signature[0])
-        gain_changed = (not waiting and self.signature is not None and
-                        g['signature'][1] != self.signature[1])
-        recovering = self._unusable_reason
+        calibration_changed = (not waiting_quality_flags and self.signature is not None and
+                               sample_group['signature'][0] != self.signature[0])
+        gain_changed = (not waiting_quality_flags and self.signature is not None and
+                        sample_group['signature'][1] != self.signature[1])
+        previous_unusable_reason = self._unusable_reason
         if calibration_changed:
             self.rows.clear()
             if self.epoch is not None:
                 self.fault = 'gain_or_calibration_changed'
-        if waiting or gain_changed or recovering:
+        if waiting_quality_flags or gain_changed or previous_unusable_reason:
             self.rows.clear()
             if self.epoch is not None:
-                if waiting:
-                    self.waiting_status = ('gain_warmup' if waiting == Status.GAIN_TRANSITION else
-                                           '|'.join(flag.name.lower() for flag in Status if flag & waiting))
+                if waiting_quality_flags:
+                    self.waiting_status = ('gain_warmup' if waiting_quality_flags == Status.GAIN_TRANSITION else
+                                           '|'.join(flag.name.lower() for flag in Status if flag & waiting_quality_flags))
                 else:
-                    self.waiting_status = ('data_warmup' if recovering and recovering != 'gain_transition'
+                    self.waiting_status = ('data_warmup' if previous_unusable_reason and previous_unusable_reason != 'gain_transition'
                                            else 'gain_warmup')
-                self._stable_since = None if waiting else acquisition
-        self._unusable_reason = '|'.join(flag.name.lower() for flag in Status if flag & waiting)
-        if not waiting:
-            self.signature = g['signature']
-        self.clock_offset = offset
-        self.last_sensor_stamp = self.latest_stamp = g['t']
-        self.latest_time = acquisition
+                self._stable_since = None if waiting_quality_flags else acquired_monotonic_s
+        self._unusable_reason = '|'.join(flag.name.lower() for flag in Status if flag & waiting_quality_flags)
+        if not waiting_quality_flags:
+            self.signature = sample_group['signature']
+        self.clock_offset = ros_to_monotonic_offset_s
+        self.last_sensor_stamp = self.latest_stamp = sample_group['t']
+        self.latest_time = acquired_monotonic_s
         self.latest_error = ''
-        if not waiting:
+        if not waiting_quality_flags:
             # Raw voltages are diagnostics only. Missing values in older input
             # schemas must remain unavailable, without changing steering health.
-            raw = {}
+            raw_voltage_by_channel_v = {}
             for sample in message.samples:
-                channel = int(sample.channel if hasattr(sample, 'calibrated_voltage') else sample.channel_id)
+                channel_id = int(sample.channel if hasattr(sample, 'calibrated_voltage') else sample.channel_id)
                 try:
-                    raw[channel] = number(getattr(sample, 'volt_raw', None), 'raw voltage')
+                    raw_voltage_by_channel_v[channel_id] = number(getattr(sample, 'volt_raw', None), 'raw voltage')
                 except ValueError:
-                    raw[channel] = float('nan')
-            self.rows.append((acquisition, *g['volts'], *(raw[i] for i in range(3))))
-        while self.rows and acquisition - self.rows[0][0] > self.period + 2. * self.gap_s:
+                    raw_voltage_by_channel_v[channel_id] = float('nan')
+            self.rows.append((acquired_monotonic_s, *sample_group['volts'], *(raw_voltage_by_channel_v[i] for i in range(3))))
+        while self.rows and acquired_monotonic_s - self.rows[0][0] > self.period + 2. * self.gap_s:
             self.rows.popleft()
         if len(self.rows) > 10000:
             return self._reject('sample_buffer_overflow')
@@ -255,56 +258,68 @@ class CycleSteering:
         if self.fault:
             raise SteeringFault(self.fault)
         self._health(now)
-        elapsed = now - self.epoch
-        if elapsed < 0:
+        elapsed_s = now - self.epoch
+        if elapsed_s < 0:
             raise SteeringFault('clock_rewind')
-        cycles = elapsed / self.period
-        if not math.isfinite(cycles):
+        elapsed_cycle_count = elapsed_s / self.period
+        if not math.isfinite(elapsed_cycle_count):
             raise SteeringFault('phase_overflow')
-        cycle = math.floor(cycles + 1e-9)
-        if cycle <= self.cycle:
+        cycle_index = math.floor(elapsed_cycle_count + 1e-9)
+        if cycle_index <= self.cycle:
             return None
-        if cycle != self.cycle + 1:
+        if cycle_index != self.cycle + 1:
             raise SteeringFault('missed_cycle')
-        start, end = self.epoch + (cycle - 1) * self.period, self.epoch + cycle * self.period
+        window_start_monotonic_s = self.epoch + (cycle_index - 1) * self.period
+        window_end_monotonic_s = self.epoch + cycle_index * self.period
         if (self.waiting_status and self.waiting_status != 'voltage_compensation_out_of_range'
-                and (self._stable_since is None or start < self._stable_since - 1e-9)):
+                and (self._stable_since is None or window_start_monotonic_s < self._stable_since - 1e-9)):
             # Advance the cycle counter without resetting the oscillator epoch.
             # Keep the held decision until an entire aligned cycle is usable.
-            self.cycle = cycle
+            self.cycle = cycle_index
             return None
-        rows = [row for row in self.rows if start <= row[0] < end]
-        times = [start] + [row[0] for row in rows] + [end]
-        if len(rows) < 2 or max(b - a for a, b in zip(times, times[1:])) > self.gap_s + 1e-9:
+        rows = [row for row in self.rows if window_start_monotonic_s <= row[0] < window_end_monotonic_s]
+        sample_times_monotonic_s = (
+            [window_start_monotonic_s] + [row[0] for row in rows] + [window_end_monotonic_s])
+        if len(rows) < 2 or max(
+                b - a for a, b in zip(sample_times_monotonic_s, sample_times_monotonic_s[1:])
+        ) > self.gap_s + 1e-9:
             raise SteeringFault('incomplete_cycle')
-        head, left, right = [math.fsum(row[i] / len(rows) for row in rows) for i in (1, 2, 3)]
-        raw_means = tuple(math.fsum(row[i] / len(rows) for row in rows) for i in (4, 5, 6))
-        if not math.isfinite(left + right):
+        head_voltage_mean_v, left_voltage_mean_v, right_voltage_mean_v = [
+            math.fsum(row[i] / len(rows) for row in rows) for i in (1, 2, 3)]
+        raw_voltage_means_v = tuple(math.fsum(row[i] / len(rows) for row in rows) for i in (4, 5, 6))
+        if not math.isfinite(left_voltage_mean_v + right_voltage_mean_v):
             raise SteeringFault('invalid_signal_sum')
-        if left + right < self.low_signal_v:
+        if left_voltage_mean_v + right_voltage_mean_v < self.low_signal_v:
             raise SteeringFault('low_signal')
         # Offset compensates L-R once; it does not alter the measured means.
-        mean = (left + right) / 2.
-        difference = (left - right) / mean
+        side_voltage_mean_v = (left_voltage_mean_v + right_voltage_mean_v) / 2.
+        left_right_difference_ratio = (left_voltage_mean_v - right_voltage_mean_v) / side_voltage_mean_v
         candidate = self.settings if self.pending is None else self.pending
         # Retain symmetric diagnostic channels and their nonnegative-envelope
         # check. Half on each side changes their difference by exactly offset.
-        compensated_left = left + candidate.lr_voltage_offset_v / 2.
-        compensated_right = right - candidate.lr_voltage_offset_v / 2.
-        if (not all(math.isfinite(v) and v >= 0 for v in (compensated_left, compensated_right))):
+        compensated_left_voltage_v = left_voltage_mean_v + candidate.lr_voltage_offset_v / 2.
+        compensated_right_voltage_v = right_voltage_mean_v - candidate.lr_voltage_offset_v / 2.
+        if not all(math.isfinite(v) and v >= 0
+                   for v in (compensated_left_voltage_v, compensated_right_voltage_v)):
             # A voltage correction may not invent a negative envelope. Retry at
             # the next full cycle, keeping the last bias, gait epoch and pending
             # triplet. Fresh ADC / Joy health checks continue during this hold.
-            self.cycle = cycle
+            self.cycle = cycle_index
             self.waiting_status = 'voltage_compensation_out_of_range'
             return None
-        compensated = (left - right + candidate.lr_voltage_offset_v) / mean
+        turn_decision_ratio = (
+            left_voltage_mean_v - right_voltage_mean_v + candidate.lr_voltage_offset_v
+        ) / side_voltage_mean_v
         self.settings, self.pending = candidate, None
-        direction = steering_direction(compensated, self.settings.threshold)
-        self.cycle = cycle
-        self.last_decision = CycleDecision(cycle, start, end, head, left, right, difference,
-                                           direction * self.left_bias_sign * self.settings.bias, len(rows),
-                                           self.settings.lr_voltage_offset_v,
-                                           compensated_left, compensated_right, compensated, raw_means)
+        direction = steering_direction(turn_decision_ratio, self.settings.threshold)
+        self.cycle = cycle_index
+        self.last_decision = CycleDecision(
+            cycle_index, window_start_monotonic_s, window_end_monotonic_s,
+            head_voltage_mean_v, left_voltage_mean_v, right_voltage_mean_v,
+            left_right_difference_ratio,
+            direction * self.left_bias_sign * self.settings.bias, len(rows),
+            self.settings.lr_voltage_offset_v,
+            compensated_left_voltage_v, compensated_right_voltage_v,
+            turn_decision_ratio, raw_voltage_means_v)
         self.waiting_status, self._stable_since = '', None
         return self.last_decision

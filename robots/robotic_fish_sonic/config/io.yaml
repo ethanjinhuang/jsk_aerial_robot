@@ -8,8 +8,8 @@ adc:
   ready_poll_interval: 0.001
   reconnect_interval: 1.0
   frame_id: ads1115
-  publish_array: true
-  sample_topic: /robotic_fish/adc/sample
+  # ADC sample groups are the sole data output. Old parameter names below remain
+  # valid for existing launch files; unit-qualified aliases are documented.
   samples_topic: /robotic_fish/adc/samples
   gain_control_topic: /robotic_fish/dac/state
   calibration:

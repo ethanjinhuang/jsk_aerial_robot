@@ -36,40 +36,40 @@ def stamp_seconds(stamp):
 def adapt(message):
     rows = []
     flags = Status(0)
-    ids = []
-    gains = []
-    semantics = set()
-    for s in sorted(message.samples, key=lambda sample: int(sample.channel if hasattr(sample, 'calibrated_voltage') else sample.channel_id)):
-        old = hasattr(s, 'calibrated_voltage')
-        channel = int(s.channel if old else s.channel_id)
-        t = stamp_seconds(s.header.stamp if old else s.timestamp)
-        value = float(s.calibrated_voltage if old else s.volt_cali)
-        if not bool(s.calibration_applied if old else s.status_cali):
+    calibration_ids = []
+    dac_voltages_v = []
+    timestamp_semantics = set()
+    for sample in sorted(message.samples, key=lambda sample: int(sample.channel if hasattr(sample, 'calibrated_voltage') else sample.channel_id)):
+        uses_legacy_schema = hasattr(sample, 'calibrated_voltage')
+        channel_id = int(sample.channel if uses_legacy_schema else sample.channel_id)
+        sample_time_s = stamp_seconds(sample.header.stamp if uses_legacy_schema else sample.timestamp)
+        calibrated_voltage_v = float(sample.calibrated_voltage if uses_legacy_schema else sample.volt_cali)
+        if not bool(sample.calibration_applied if uses_legacy_schema else sample.status_cali):
             flags |= Status.CALIBRATION_FALLBACK
-        ids.append(s.calibration_id if old else s.cali_id)
-        known = bool(s.gain_control_voltage_valid if old else s.status_dac_feedback)
-        gain = float(s.gain_control_voltage if old else s.dac_volt)
-        if not known or not math.isfinite(gain):
+        calibration_ids.append(sample.calibration_id if uses_legacy_schema else sample.cali_id)
+        dac_voltage_valid = bool(sample.gain_control_voltage_valid if uses_legacy_schema else sample.status_dac_feedback)
+        dac_voltage_v = float(sample.gain_control_voltage if uses_legacy_schema else sample.dac_volt)
+        if not dac_voltage_valid or not math.isfinite(dac_voltage_v):
             flags |= Status.GAIN_UNKNOWN
-            gain = None
-        gains.append(gain)
-        if abs(int(s.raw if old else s.adc_code)) >= 32767:
+            dac_voltage_v = None
+        dac_voltages_v.append(dac_voltage_v)
+        if abs(int(sample.raw if uses_legacy_schema else sample.adc_code)) >= 32767:
             flags |= Status.SATURATED
-        semantics.add('conversion_midpoint' if old else 'read_completion')
-        rows.append((channel, t, value))
+        timestamp_semantics.add('conversion_midpoint' if uses_legacy_schema else 'read_completion')
+        rows.append((channel_id, sample_time_s, calibrated_voltage_v))
     rows.sort()
-    if [r[0] for r in rows] != [0, 1, 2] or len(semantics) != 1:
+    if [row[0] for row in rows] != [0, 1, 2] or len(timestamp_semantics) != 1:
         raise ValueError('expected one channel each and one timestamp schema')
-    if not all(math.isfinite(t) and t >= 0 and math.isfinite(v) and v >= 0 for _, t, v in rows):
+    if not all(math.isfinite(sample_time_s) and sample_time_s >= 0 and math.isfinite(v) and v >= 0 for _, sample_time_s, v in rows):
         raise ValueError('nonfinite/negative sample')
-    if max(r[1] for r in rows) - min(r[1] for r in rows) > .05:
+    if max(row[1] for row in rows) - min(row[1] for row in rows) > .05:
         raise ValueError('ADC group spans more than 50 ms')
-    if len(set(gains)) > 1:
+    if len(set(dac_voltages_v)) > 1:
         flags |= Status.GAIN_TRANSITION
     # Preserve a deterministic reference time without pretending simultaneous sampling.
-    return dict(t=max(r[1] for r in rows), volts=[r[2] for r in rows],
-                status=flags, signature=(tuple(ids), tuple(gains), int(flags & Status.CALIBRATION_FALLBACK)),
-                semantics=next(iter(semantics)))
+    return dict(t=max(row[1] for row in rows), volts=[row[2] for row in rows],
+                status=flags, signature=(tuple(calibration_ids), tuple(dac_voltages_v), int(flags & Status.CALIBRATION_FALLBACK)),
+                semantics=next(iter(timestamp_semantics)))
 
 
 class Model:
@@ -89,12 +89,12 @@ class Model:
         self.id = str(d['model_id'])
 
     def predict(self, features):
-        d = self.data
-        x = [(v - m) / s for v, m, s in zip(features, d['mean'], d['scale'])]
-        logits = [(sum(w * v for w, v in zip(row, x)) + b) / d['temperature']
-                  for row, b in zip(d['weights'], d['bias'])]
-        exps = [math.exp(v - max(logits)) for v in logits]
-        return [v / sum(exps) for v in exps]
+        model_data = self.data
+        normalized_features = [(v - m) / s for v, m, s in zip(features, model_data['mean'], model_data['scale'])]
+        logits = [(sum(w * v for w, v in zip(row, normalized_features)) + b) / model_data['temperature']
+                  for row, b in zip(model_data['weights'], model_data['bias'])]
+        unnormalized_probabilities = [math.exp(v - max(logits)) for v in logits]
+        return [v / sum(unnormalized_probabilities) for v in unnormalized_probabilities]
 
 
 class Estimator:
@@ -149,48 +149,58 @@ class Estimator:
         try:
             if not math.isfinite(now) or now < 0:
                 raise ValueError('invalid receipt time')
-            g = adapt(message)
-            if g['t'] - now > self.future_tolerance_s:
+            sample_group = adapt(message)
+            if sample_group['t'] - now > self.future_tolerance_s:
                 raise ValueError('sample timestamp is in the future')
         except (ValueError, TypeError, AttributeError, OverflowError):
             self.rows.clear()
             return self.snapshot(now, Status.INVALID_INPUT)
-        t, flags = g['t'], g['status']
+        sample_time_s, flags = sample_group['t'], sample_group['status']
         if self.last_input is not None:
-            if t <= self.last_input:
+            if sample_time_s <= self.last_input:
                 self.rows.clear()
                 flags |= Status.TIME_RESET
-            elif t - self.last_input > self.gap_s:
+            elif sample_time_s - self.last_input > self.gap_s:
                 self.rows.clear()
-        if self.signature is not None and self.signature != g['signature']:
+        if self.signature is not None and self.signature != sample_group['signature']:
             self.rows.clear()
-            if self.signature[1] != g['signature'][1]:
+            if self.signature[1] != sample_group['signature'][1]:
                 flags |= Status.GAIN_TRANSITION
-            if (self.signature[0], self.signature[2]) != (g['signature'][0], g['signature'][2]):
+            if (self.signature[0], self.signature[2]) != (sample_group['signature'][0], sample_group['signature'][2]):
                 flags |= Status.CALIBRATION_CHANGE
-        self.signature, self.last_input = g['signature'], t
-        self.rows.append(g)
-        while self.rows and t - self.rows[0]['t'] > self.window_s:
+        self.signature, self.last_input = sample_group['signature'], sample_time_s
+        self.rows.append(sample_group)
+        while self.rows and sample_time_s - self.rows[0]['t'] > self.window_s:
             self.rows.popleft()
-        if len(self.rows) < 2 or t - self.rows[0]['t'] < self.window_s * .8:
+        if len(self.rows) < 2 or sample_time_s - self.rows[0]['t'] < self.window_s * .8:
             flags |= Status.WARMUP
         for row in self.rows:
             flags |= row['status']
-        h, l, r = [sum(row['volts'][i] for row in self.rows) / len(self.rows) for i in range(3)]
-        s = h + l + r
-        if min(s, l + r, h + (l + r) / 2) < self.low_signal_v:
+        head_voltage_mean_v, left_voltage_mean_v, right_voltage_mean_v = [
+            sum(row['volts'][i] for row in self.rows) / len(self.rows)
+            for i in range(3)]
+        total_voltage_v = head_voltage_mean_v + left_voltage_mean_v + right_voltage_mean_v
+        side_voltage_sum_v = left_voltage_mean_v + right_voltage_mean_v
+        side_voltage_mean_v = side_voltage_sum_v / 2
+        head_sides_voltage_sum_v = head_voltage_mean_v + side_voltage_mean_v
+        if min(total_voltage_v, side_voltage_sum_v, head_sides_voltage_sum_v) < self.low_signal_v:
             flags |= Status.LOW_SIGNAL
         # Assumed sensor mapping: ADC0=head, ADC1=left, ADC2=right.
         # Compare voltage window means, independently of any direction model.
-        sides = (l + r) / 2
-        lr_difference = (l - r) / (l + r) if l + r > 0 else 0.
-        head_sides_difference = (h - sides) / (h + sides) if h + sides > 0 else 0.
-        self.last_comparison = dict(sample_stamp=t,
-                                    left_right_normalized_difference=lr_difference,
-                                    head_sides_normalized_difference=head_sides_difference)
-        if min(s, l + r, h + sides) <= 0:
+        left_right_sum_difference_ratio = (
+            (left_voltage_mean_v - right_voltage_mean_v) / side_voltage_sum_v
+            if side_voltage_sum_v > 0 else 0.)
+        head_sides_difference_ratio = (
+            (head_voltage_mean_v - side_voltage_mean_v) / head_sides_voltage_sum_v
+            if head_sides_voltage_sum_v > 0 else 0.)
+        self.last_comparison = dict(sample_stamp=sample_time_s,
+                                    left_right_normalized_difference=left_right_sum_difference_ratio,
+                                    head_sides_normalized_difference=head_sides_difference_ratio)
+        if min(total_voltage_v, side_voltage_sum_v, head_sides_voltage_sum_v) <= 0:
             return self.snapshot(now, flags | Status.INVALID_INPUT, comparison_updated=True)
-        features = [h / s, l / s, lr_difference, head_sides_difference]
+        features = [head_voltage_mean_v / total_voltage_v,
+                    left_voltage_mean_v / total_voltage_v,
+                    left_right_sum_difference_ratio, head_sides_difference_ratio]
         result = self.snapshot(now, flags, comparison_updated=True)
         result['features'] = features
         if self.model:
@@ -200,10 +210,10 @@ class Estimator:
                     raise ValueError('nonfinite prediction')
             except (ValueError, OverflowError, ZeroDivisionError):
                 return self.snapshot(now, flags | Status.INVALID_INPUT, comparison_updated=True)
-            self.last = dict(probabilities=probabilities, estimate_stamp=t,
-                             window_start=self.rows[0]['t'], window_end=t,
+            self.last = dict(probabilities=probabilities, estimate_stamp=sample_time_s,
+                             window_start=self.rows[0]['t'], window_end=sample_time_s,
                              valid_sample_count=len(self.rows), estimate_status=int(flags),
-                             timestamp_semantics=g['semantics'])
+                             timestamp_semantics=sample_group['semantics'])
             result = self.snapshot(now, flags, True, comparison_updated=True)
             result['features'] = features
         return result

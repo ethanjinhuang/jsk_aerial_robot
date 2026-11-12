@@ -19,14 +19,14 @@ class ManualGainTests(unittest.TestCase):
     def node(self, mode="manual"):
         n = node_tests.NodeSafetyTests().make_node(mode)
         n.controller.manual_target_v = 1.
-        n.latest_batch_valid = True
-        n.last_adc_monotonic_s = time.monotonic()
+        n.latest_sample_group_valid = True
+        n.last_valid_adc_received_monotonic_s = time.monotonic()
         n._publish_config = lambda: None
         return n
 
     def press(self, n, horizontal=0, vertical=0):
-        n._joy_callback(joy())
-        n._joy_callback(joy(horizontal, vertical))
+        n._on_joy(joy())
+        n._on_joy(joy(horizontal, vertical))
 
     def test_removed_fixed_mode_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -42,17 +42,17 @@ class ManualGainTests(unittest.TestCase):
         self.assertEqual(n.manual_input.step_v, .02)
         self.press(n, vertical=1)
         self.assertEqual(n.controller.manual_target_v, 1.02)
-        n._joy_callback(joy(vertical=1))
+        n._on_joy(joy(vertical=1))
         self.assertEqual(n.controller.manual_target_v, 1.02)
         self.press(n, vertical=-1)
         self.assertEqual(n.controller.manual_target_v, 1.)
         self.press(n, horizontal=-1)
         self.assertEqual(n.manual_input.step_v, .01)
         self.assertEqual(n.calls, [])  # ADC callback alone executes hardware commands.
-        n._adc_callback(node_tests.NodeSafetyTests().message())
+        n._on_adc_samples(node_tests.NodeSafetyTests().message())
         self.assertEqual(n.calls, [])
         self.press(n, vertical=1)
-        n._adc_callback(node_tests.NodeSafetyTests().message(stamp=99.95))
+        n._on_adc_samples(node_tests.NodeSafetyTests().message(stamp=99.95))
         self.assertEqual(n.calls, [1.01])
 
     def test_step_and_voltage_bounds(self):
@@ -84,8 +84,8 @@ class ManualGainTests(unittest.TestCase):
         self.assertEqual(i.events(joy(vertical=1).axes), (0, 0))
 
     def test_blocked_input_does_not_queue_a_target(self):
-        for field, value in (("latest_batch_valid", False),
-                             ("current_dac_voltage", None), ("last_error", "failed")):
+        for field, value in (("latest_sample_group_valid", False),
+                             ("confirmed_dac_voltage_v", None), ("last_error", "failed")):
             n = self.node()
             setattr(n, field, value)
             self.press(n, vertical=1)
@@ -98,9 +98,9 @@ class ManualGainTests(unittest.TestCase):
     def test_protection_discards_target_and_requires_new_press(self):
         n = self.node()
         n.controller.manual_target_v = 2.
-        n._adc_callback(node_tests.NodeSafetyTests().message(values=(4.05, .1, .1)))
-        self.assertEqual(n.current_dac_voltage, .9)
-        n._adc_callback(node_tests.NodeSafetyTests().message(stamp=99.95))
+        n._on_adc_samples(node_tests.NodeSafetyTests().message(values=(4.05, .1, .1)))
+        self.assertEqual(n.confirmed_dac_voltage_v, .9)
+        n._on_adc_samples(node_tests.NodeSafetyTests().message(stamp=99.95))
         self.assertTrue(n.controller.manual_limited)
         self.assertEqual(n.controller.manual_target_v, .9)
         self.assertIsNone(n.controller.observe([.1]*3, .9, time.monotonic()+10))
