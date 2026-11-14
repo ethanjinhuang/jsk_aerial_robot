@@ -241,11 +241,14 @@ rosrun robotic_fish_sonic calibrate_from_bag.py sweep.bag --output /tmp/fish-cal
 与线上在达到阈值时即触发保护的判定一致。当前默认触发值为 4.00 V，
 恢复值 3.30 V 仍单独保留用于滞回。
 
-当前默认使用 2026-11-12 新电路的 0–1.30 V 补完整校准表：131 个平台中位数节点，
-加上训练数据实测上下边界的两个模型估计节点，每通道共 133 个节点。
+当前默认使用 2026-11-14 **电池供电**校准表。0–1.30 V 共扫描 131 档，
+其中 121 个正电压平台用于拟合，加上训练数据实测上下边界，每通道共 123 个节点。
 边界只取自训练样本，不使用独立复测扩大范围，也不将边界内读数统一压到平台中位数。
-18 个独立复测平台的 3,562 组稳定样本全部可校准；相对差异 P95 从 4.90% 降至 0.49%。
-详见[实测边界补充报告](docs/calibration_20261112_measured_support.md)。
+独立复测的 15 个支持平台共 3,507 组窗口样本，3,502 组成功校准、5 组回退，
+覆盖率 99.857%；配对样本的绝对差异 P95 从旧表 4.96 mV 降至 3.48 mV。
+低信号 0.10/0.15 V 档相对差异 P95 仍约 11%/14%，非正读数仍回退；不能视为全量程精密校准。
+完整边界、夹紧统计、原始数据与重建命令见[电池校准报告](docs/calibration_20261114_battery.md)。
+11 月 12 日的[稳压电源校准表](docs/calibration_20261112_measured_support.md)保持原样；切回该供电条件应选择并验证对应配置。
 初次 0–1.24 V 扫描记录保留在[原始校准报告](docs/calibration_20261112_new_circuit.md)。
 本机 DAC 当前使用已确认的 CH340 稳定路径
 `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`；原物理端口规则下的
@@ -254,7 +257,7 @@ rosrun robotic_fish_sonic calibrate_from_bag.py sweep.bag --output /tmp/fish-cal
 单个扫描 bag 可用 `calibrate_from_bag.py --include-measured-endpoints` 生成实测支持边界。
 原始曲线仍为分段线性插值；边界节点的参考值由最近两个中位数节点线性估计，
 不是新增的精密参考电压测量。未使用该选项时保留原端点处理。
-本轮多 bag 合并与独立验证可通过 `rebuild_new_circuit_calibration.py` 重建，命令见补充报告。
+11 月 12 日多 bag 合并可通过 `rebuild_new_circuit_calibration.py` 重建；电池版使用随实验数据归档的 `rebuild.py`，命令见各自报告。
 
 ## 测试与限制
 

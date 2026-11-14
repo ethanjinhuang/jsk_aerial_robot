@@ -1,6 +1,7 @@
 # 2026-11-12：补全 1.30 V 与实测支持边界
 
-默认校准 ID：`adc_independent_transfer_20261112_060020_new_circuit_psu_130_observed_support`。
+稳压电源版本校准 ID：`adc_independent_transfer_20261112_060020_new_circuit_psu_130_observed_support`。
+当前默认已切换为[2026-11-14 电池供电校准](calibration_20261114_battery.md)，本表保持原样用于追溯和供电条件切换。
 原 125 节点表和仅补节点但覆盖率不足的候选均保留，未覆盖原始数据。
 
 ## 数据与阈值

@@ -299,7 +299,7 @@ The three channels are sequential and retain separate timestamps. The outer
 The current default calibration is:
 
 ```text
-config/calibration/adc_independent_transfer_20261112_060020_new_circuit_psu_130_observed_support.json
+config/calibration/adc_independent_transfer_20261114_battery_common_5mvpp.json
 ```
 
 It is selected in `config/io.yaml`:
@@ -309,12 +309,12 @@ adc:
   calibration:
     enabled: true
     required: true
-    file: calibration/adc_independent_transfer_20261112_060020_new_circuit_psu_130_observed_support.json
+    file: calibration/adc_independent_transfer_20261114_battery_common_5mvpp.json
 ```
 
 A relative path is resolved against this package's `config/` directory. An absolute path is also accepted. With `required: true`, a missing, malformed, or incompatible calibration file prevents the ADC node from starting instead of silently using invalid calibration data.
 
-ADC0, ADC1, and ADC2 each use their own piecewise-linear transfer curve. The calibration does not use DAC voltage as an input. The current table has 131 plateau-median nodes plus two measured-support boundary nodes per channel. Boundary raw voltages come only from settled training data; their reference values are linear estimates using the nearest two median nodes. Runtime still interpolates between stored nodes and does not extend the curve beyond its declared support (apart from the documented endpoint-clamping tolerance). If any channel in a group is outside the calibration range, the entire group falls back to raw voltages:
+ADC0, ADC1, and ADC2 each use their own piecewise-linear transfer curve. The calibration does not use DAC voltage as an input. The current battery-powered table has 121 plateau-median nodes plus two measured-support boundary nodes per channel. Boundary raw voltages come only from settled training data; their reference values are linear estimates using the nearest two median nodes. Runtime still interpolates between stored nodes and does not extend the curve beyond its declared support (apart from the documented endpoint-clamping tolerance). If any channel in a group is outside the calibration range, the entire group falls back to raw voltages:
 
 ```text
 status_cali = false

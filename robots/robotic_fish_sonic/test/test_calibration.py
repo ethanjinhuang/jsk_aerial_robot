@@ -82,9 +82,10 @@ class CalibrationTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             self.calibration.apply(values, 0.5)
 
-    def test_default_new_circuit_calibration_has_independent_validation(self):
+    def test_bench_new_circuit_calibration_retains_independent_validation(self):
         settings = yaml.safe_load((PACKAGE_ROOT / 'config/io.yaml').read_text())
-        calibration = AdcCalibration.load(PACKAGE_ROOT / 'config' / settings['adc']['calibration']['file'])
+        calibration = AdcCalibration.load(PACKAGE_ROOT / 'config/calibration/'
+            'adc_independent_transfer_20261112_060020_new_circuit_psu_130_observed_support.json')
         self.assertEqual([len(c) for c in calibration.curves], [133] * 3)
         self.assertEqual(calibration.document['processing']['nominal_plateau_count'], 131)
         self.assertEqual(settings['gain_control']['dac_max_v'], 5.0)
@@ -100,6 +101,23 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(validation['calibrated']['count'], 3562)
         for plateau in validation['per_plateau']:
             self.assertLess(plateau['calibrated']['p95_spread_v'], plateau['raw']['p95_spread_v'])
+
+    def test_default_battery_calibration_has_passed_independent_validation(self):
+        settings = yaml.safe_load((PACKAGE_ROOT / 'config/io.yaml').read_text())
+        calibration = AdcCalibration.load(PACKAGE_ROOT / 'config' / settings['adc']['calibration']['file'])
+        self.assertEqual(calibration.document['conditions']['power_source'], 'battery')
+        self.assertEqual(calibration.document['validation']['deployment_status'], 'independent_validation_passed')
+        result = calibration.document['validation']['independent_repeat']
+        self.assertEqual(result['status'], 'passed')
+        self.assertTrue(result['recommended_for_deployment'])
+        total = result['calibrated']['count'] + result['rejected_stable_groups']
+        self.assertGreater(total, 0)
+        self.assertGreaterEqual(result['calibrated']['count'] / total, .99)
+        for plateau in result['per_plateau']:
+            self.assertGreaterEqual(plateau['calibrated_coverage'], .95)
+            self.assertLess(plateau['calibrated']['p95_spread_v'], plateau['raw']['p95_spread_v'])
+        self.assertEqual(settings['gain_control']['dac_max_v'], 5.0)
+        self.assertEqual(settings['gain_control']['adc_safety_limit_v'], 4.0)
 
     def test_malformed_curves_are_rejected_as_a_whole(self):
         cases = []
