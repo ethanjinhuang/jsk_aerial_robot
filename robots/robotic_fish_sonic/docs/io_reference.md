@@ -39,15 +39,21 @@ or non-finite mapped axes are ignored with a throttled warning.
 `manual_gain_voltage:=0.0` sets the initial target and overrides YAML
 `gain_control/manual_voltage`. Targets are clamped to configured DAC limits
 (default 0–5 V). Actual output follows the existing `manual_ramp_step_v` and
-`manual_ramp_interval_s` settings, driven only by accepted ADC batches.
+`manual_ramp_interval_s` settings, driven by an independent timer in the gain
+node. Initialization, target edits and normal ramping do not require ADC messages
+or valid/nonnegative ADC readings. The timer checks at most every 0.05 s and
+respects the configured ramp interval; no additional ROS node is needed.
 Terminal logs identify LEFT/RIGHT/UP/DOWN, the step, target and confirmed DAC
 voltage; blocked voltage presses print the reason. Actual DAC adjustments have
 separate execution logs. Changed step/target settings are recorded in the
 latched runtime config (target field: `manual_target_v`).
 
 Raw-ADC protection retains priority in manual mode. Voltage presses are blocked
-while protection is active, ADC is invalid/stale, DAC is unknown, or an error
-is present; blocked presses are not queued. Protection discards the old target.
+while protection is active; blocked presses are not queued. Missing, stale,
+negative or non-finite ADC readings remain visible in diagnostics but do not
+block manual control. Targets can be edited before DAC initialization; actual
+output changes still require successful DAC service confirmation, and failed
+commands are retried. Protection discards the old target.
 After protection releases, a new Up/Down press resumes adjustment from the
 confirmed DAC voltage. Manual mode never automatically recovers the old target. The reset service does not restore the pre-protection target.
 
@@ -68,8 +74,9 @@ appropriate to the recorded version. No ROS message definition has changed.
   another channel is invalid or missing. Raw code 32767 is treated as saturation,
   even if the accompanying voltage is inconsistent. Thresholds above 4.095875 V
   are rejected. Saturation means the true peak is unknown, not exactly 4.095875 V.
-- Stale, repeated, future, or invalid batches cannot increase gain or release
-  protection. Nested sample timestamps are checked too; diagnostic validity only
+- Stale, repeated, future, or invalid batches cannot drive closed-loop gain
+  increases or release protection. Manual control runs independently of these
+  batches. Nested sample timestamps are checked too; diagnostic validity only
   reports accepted fresh batches. Such batches may still trigger protective reduction.
 - DAC service requests must address the configured common-gain output channel.
   All three ADC channels share this gain. Failed serial commands publish an invalid
@@ -149,8 +156,10 @@ request fields (`channel`, `voltage`) and response fields (`success`,
 
 GainControlState contains only `time timestamp`, `string mode`, `string state`,
 and `string log`. It publishes at startup and when mode/state/log changes.
-Priority is active protection, invalid/stale ADC, unknown DAC, error, then normal
-action. While protection is active the state is `safety_active` (or
+Priority is active protection, invalid/stale ADC (outside manual mode), unknown
+DAC, error, then normal action. In manual mode invalid/stale ADC remains in the
+log and diagnostic fields while `state` reports the actual DAC control action.
+While protection is active the state is `safety_active` (or
 `adc_overrange_at_dac_min`); log retains simultaneous input/DAC/error problems.
 The diagnostic timer observes stale transitions but does not repeat identical
 state messages. Counters and measurement summaries remain in /diagnostics.

@@ -147,11 +147,12 @@ class GainControllerTests(unittest.TestCase):
     def test_manual_mode_ramps_and_holds(self):
         controller = self.make_gain_controller()
         safe = [1.0, 1.1, 1.2]
-        self.assertEqual(controller.observe(safe, 0.0, 1.0), 0.05)
-        self.assertIsNone(controller.observe(safe, 0.05, 1.05))
+        self.assertIsNone(controller.observe(safe, 0.0, 1.0))
+        self.assertEqual(controller.manual_tick(0.0, 1.0), 0.05)
+        self.assertIsNone(controller.manual_tick(0.05, 1.05))
         self.assertEqual(controller.last_action, "manual_waiting")
-        self.assertEqual(controller.observe(safe, 0.05, 1.1), 0.10)
-        self.assertIsNone(controller.observe(safe, 1.0, 2.0))
+        self.assertEqual(controller.manual_tick(0.05, 1.1), 0.10)
+        self.assertIsNone(controller.manual_tick(1.0, 2.0))
         self.assertEqual(controller.last_action, "manual_holding")
 
     def test_exact_safety_limit_immediately_overrides_normal_interval(self):

@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_node_safety as node_tests
@@ -48,11 +49,13 @@ class ManualGainTests(unittest.TestCase):
         self.assertEqual(n.controller.manual_target_v, 1.)
         self.press(n, horizontal=-1)
         self.assertEqual(n.manual_input.step_v, .01)
-        self.assertEqual(n.calls, [])  # ADC callback alone executes hardware commands.
+        self.assertEqual(n.calls, [])  # Only the manual timer executes normal commands.
         n._on_adc_samples(node_tests.NodeSafetyTests().message())
         self.assertEqual(n.calls, [])
         self.press(n, vertical=1)
         n._on_adc_samples(node_tests.NodeSafetyTests().message(stamp=99.95))
+        self.assertEqual(n.calls, [])
+        n._manual_callback(None)
         self.assertEqual(n.calls, [1.01])
 
     def test_step_and_voltage_bounds(self):
@@ -83,13 +86,21 @@ class ManualGainTests(unittest.TestCase):
                 i.events(axes)
         self.assertEqual(i.events(joy(vertical=1).axes), (0, 0))
 
-    def test_blocked_input_does_not_queue_a_target(self):
+    def test_manual_target_independent_of_adc_or_dac_initialization(self):
         for field, value in (("latest_sample_group_valid", False),
                              ("confirmed_dac_voltage_v", None), ("last_error", "failed")):
             n = self.node()
             setattr(n, field, value)
             self.press(n, vertical=1)
-            self.assertEqual(n.controller.manual_target_v, 1.)
+            self.assertEqual(n.controller.manual_target_v, 1.01)
+        n = self.node()
+        self.press(n, vertical=1)
+        n.confirmed_dac_voltage_v = 1.
+        n.latest_sample_group_valid = False
+        n._manual_callback(None)
+        self.assertEqual(n.calls, [1.01])
+
+    def test_active_protection_does_not_queue_a_target(self):
         n = self.node()
         n.controller.safety_active = True
         self.press(n, vertical=1)
@@ -108,12 +119,75 @@ class ManualGainTests(unittest.TestCase):
         self.assertEqual(n.controller.manual_target_v, .89)
         self.assertFalse(n.controller.manual_limited)
 
-    def test_manual_ramp_stale_and_safety_priority(self):
+    def test_manual_timer_and_safety_priority(self):
         c = GainController(mode="manual", manual_target_v=1.)
         self.assertIsNone(c.observe([.1]*3, 0., 1., data_valid=False))
-        self.assertEqual(c.observe([.1]*3, 0., 2.), .05)
+        self.assertIsNone(c.observe([.1]*3, 0., 2.))
+        self.assertEqual(c.manual_tick(0., 2.), .05)
         self.assertEqual(c.last_action, "manual_ramping_up")
         self.assertEqual(c.observe([4.05, .1, .1], .5, 2.01), .4)
+        self.assertIsNone(c.manual_tick(.4, 3.))
+
+    def test_manual_initializes_without_any_adc_then_ramps(self):
+        n = self.node()
+        n.confirmed_dac_voltage_v = None
+        n.latest_sample_group_valid = False
+        n._manual_callback(None)
+        self.assertEqual(n.calls, [0.])
+        n._manual_callback(None)
+        self.assertEqual(n.calls, [0., .05])
+        self.assertFalse(n._adc_is_valid())
+
+    def test_bad_or_stale_adc_cannot_block_manual_ramp(self):
+        fixtures = node_tests.NodeSafetyTests()
+        for msg in (fixtures.message(values=(-.005, -.006, -.007)),
+                    fixtures.message(values=(float('nan'), .1, .1)),
+                    fixtures.message(stamp=1.)):
+            with self.subTest(msg=msg):
+                n = self.node()
+                n.controller.manual_target_v = 1.1
+                n._on_adc_samples(msg)
+                self.assertFalse(n._adc_is_valid())
+                self.assertEqual(n.last_error, '')
+                self.assertTrue(n.adc_error)
+                self.assertEqual(n.calls, [])
+                n._manual_callback(None)
+                self.assertEqual(n.calls, [1.05])
+
+    def test_closed_loop_still_rejects_bad_or_missing_adc(self):
+        n = self.node('closed_loop')
+        n._manual_callback(None)
+        self.assertEqual(n.calls, [])
+        n._on_adc_samples(node_tests.NodeSafetyTests().message(values=(-.005, .1, .1)))
+        n._manual_callback(None)
+        self.assertEqual(n.calls, [])
+        self.assertTrue(n.last_error)
+
+    def test_timer_respects_interval_and_retries_failed_commands(self):
+        n = self.node()
+        n.controller.manual_target_v = 1.1
+        with patch('time.monotonic', return_value=1.):
+            n._set_dac_voltage = Mock(side_effect=OSError('DAC disconnected'))
+            n._manual_callback(None)
+            self.assertIn('DAC disconnected', n.last_error)
+            self.assertEqual(n.confirmed_dac_voltage_v, 1.)
+            n._set_dac_voltage = lambda voltage: n.calls.append(voltage) or voltage
+            n._manual_callback(None)
+            self.assertEqual(n.calls, [])
+        with patch('time.monotonic', return_value=1.11):
+            n._manual_callback(None)
+            self.assertEqual(n.calls, [1.05])
+            self.assertEqual(n.last_error, '')
+
+    def test_shutdown_stops_timer_and_prevents_late_writes(self):
+        n = self.node()
+        n._shutdown()
+        n.manual_timer.shutdown.assert_called_once()
+        n.controller.manual_target_v = 2.
+        n._manual_callback(None)
+        self.assertEqual(n.calls, [])
+        n._on_adc_samples(node_tests.NodeSafetyTests().message(values=(4.05, .1, .1)))
+        self.assertEqual(n.calls, [])
 
 
 if __name__ == "__main__":

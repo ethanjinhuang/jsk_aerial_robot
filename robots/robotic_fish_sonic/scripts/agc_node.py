@@ -99,9 +99,13 @@ class GainControlNode:
         self.last_accepted_sample_stamps = {}
         self.last_state_key = None
         self.latest_sample_group_valid = False
+        self.adc_error = ""
         self.adjustment_count = 0
         self.error_count = 0
         self.last_error = ""
+        self._stopping = False
+        self.manual_timer = None
+        self.manual_control_period_s = min(.05, self.controller.manual_ramp_interval_s)
 
         self.config_recorder = ConfigRecorder("gain_control")
         self._publish_config()
@@ -127,6 +131,10 @@ class GainControlNode:
         )
         self.diagnostic_timer = rospy.Timer(
             rospy.Duration(1.0), self._diagnostic_callback
+        )
+        rospy.on_shutdown(self._shutdown)
+        self.manual_timer = rospy.Timer(
+            rospy.Duration(self.manual_control_period_s), self._manual_callback
         )
         self._publish_state()
         rospy.loginfo("Gain control started in '%s' mode", self.mode)
@@ -213,7 +221,7 @@ class GainControlNode:
                 if self.controller.mode == "manual":
                     rospy.logwarn_throttle(5.0, "%s", exc)
                 return
-            if self.controller.mode != "manual":
+            if self._stopping or self.controller.mode != "manual":
                 return
             if step_direction:
                 self.manual_input.adjust_step(step_direction)
@@ -223,20 +231,20 @@ class GainControlNode:
                               self.confirmed_dac_voltage_v)
             if voltage_direction:
                 key = "UP" if voltage_direction > 0 else "DOWN"
-                if (self.controller.safety_active or not self._adc_is_valid() or
-                        self.confirmed_dac_voltage_v is None or self.last_error):
+                if self.controller.safety_active:
                     rospy.loginfo("Manual gain %s blocked: safety=%s, ADC valid=%s, DAC=%s, error=%s",
                                   key, self.controller.safety_active, self._adc_is_valid(),
                                   self.confirmed_dac_voltage_v, self.last_error)
                 else:
                     base_voltage_v = (self.confirmed_dac_voltage_v if self.controller.manual_limited
+                            and self.confirmed_dac_voltage_v is not None
                             else self.controller.manual_target_v)
                     self.controller.manual_target_v = self.controller._target(
                         base_voltage_v + voltage_direction * self.manual_input.step_v)
                     self.controller.manual_limited = False
                     self.controller.reset_counts()
                     self.controller.last_action = "manual_target_changed"
-                    rospy.loginfo("Manual gain %s: step=%.2f V, target=%.2f V, DAC=%.2f V",
+                    rospy.loginfo("Manual gain %s: step=%.2f V, target=%.2f V, DAC=%s",
                                   key, self.manual_input.step_v,
                                   self.controller.manual_target_v, self.confirmed_dac_voltage_v)
             if step_direction or voltage_direction:
@@ -292,11 +300,49 @@ class GainControlNode:
             self.last_error = str(message)
         rospy.logerr_throttle(2.0, "Gain control: %s", message)
 
+    def _manual_callback(self, _event):
+        """Execute manual DAC commands even when the ADC stream is absent."""
+        with self.command_lock:
+            with self.lock:
+                if self._stopping or self.controller.mode != 'manual' or self.controller.safety_active:
+                    return
+                initializing = self.confirmed_dac_voltage_v is None
+                if initializing:
+                    requested = (self.controller.dac_min_v if self.controller.manual_limited
+                                 else self.start_voltage_v)
+                else:
+                    requested = self.controller.manual_tick(self.confirmed_dac_voltage_v, time.monotonic())
+            if requested is None:
+                self._publish_state()
+                return
+            try:
+                applied = self._set_dac_voltage(requested)
+            except OSError as exc:
+                self._record_error(exc)
+                self._publish_state()
+                return
+            with self.lock:
+                self.confirmed_dac_voltage_v = applied
+                self.requested_dac_voltage_v = requested
+                self.adjustment_count += 1
+                self.last_error = ''
+                if initializing:
+                    self.controller.last_action = 'initialized_dac'
+            rospy.loginfo('Manual gain %s: DAC %.2f V', self.controller.last_action, applied)
+            self._publish_state()
+
+    def _shutdown(self):
+        with self.command_lock, self.lock:
+            self._stopping = True
+        if self.manual_timer is not None:
+            self.manual_timer.shutdown()
+
     def _on_adc_samples(self, msg):
         try:
             raw_voltages_v = self._ordered_raw_voltages(msg)
         except ValueError as exc:
-            self._record_error(exc)
+            if self.controller.mode != 'manual':
+                self._record_error(exc)
             # A malformed batch must not hide an independently observed overrange.
             observed_raw_voltages_v = [MAX_VOLTAGE_V if s.adc_code == MAX_RAW else float(s.volt_raw)
                         for s in msg.samples if s.channel_id in (0, 1, 2)]
@@ -304,6 +350,8 @@ class GainControlNode:
             raw_voltages_v = [max(overrange_voltages_v) if overrange_voltages_v else float("nan"), float("nan"), float("nan")]
 
         with self.command_lock:
+            if self._stopping:
+                return
             received_monotonic_s = time.monotonic()
             with self.lock:
                 # Stale/repeated batches cannot accumulate recovery dwell time.
@@ -324,8 +372,11 @@ class GainControlNode:
                         for sample in msg.samples)
                 if not recovery_batch_valid:
                     self.controller.reset_counts()
-                    self.last_error = "Invalid or stale ADC batch; normal control blocked"
+                    self.adc_error = "Invalid or stale ADC batch"
+                    if self.controller.mode != 'manual':
+                        self.last_error = self.adc_error + "; normal control blocked"
                 else:
+                    self.adc_error = ""
                     self.last_accepted_sample_stamps = {sample.channel_id: sample.timestamp for sample in msg.samples}
                     self.last_valid_adc_received_monotonic_s = received_monotonic_s
                 self.latest_sample_group_valid = recovery_batch_valid
@@ -334,6 +385,12 @@ class GainControlNode:
 
             if confirmed_voltage_v is None:
                 maximum_raw_voltage_v = max((v for v in raw_voltages_v if math.isfinite(v)), default=float("nan"))
+                if mode == 'manual' and not maximum_raw_voltage_v >= self.controller.safety_limit_v:
+                    # The manual timer initializes DAC without waiting for ADC.
+                    with self.lock:
+                        self.controller.current_max_raw_v = maximum_raw_voltage_v
+                    self._publish_state()
+                    return
                 if not recovery_batch_valid and not maximum_raw_voltage_v >= self.controller.safety_limit_v:
                     self._record_error("Invalid or stale ADC; initialization blocked")
                     self._publish_state()
@@ -403,7 +460,7 @@ class GainControlNode:
                 )
             else:
                 with self.lock:
-                    if recovery_batch_valid:
+                    if recovery_batch_valid and mode != 'manual':
                         self.last_error = ""
             self._publish_state()
 
@@ -423,16 +480,20 @@ class GainControlNode:
                         adc_topic=self.adc_samples_topic, dac_state_topic=self.dac_state_topic,
                         dac_service=self.set_dac_voltage_service_name)
         settings.update(joy_topic=self.joy_topic, manual_step_v=self.manual_input.step_v)
+        settings.update(manual_control_source='timer', manual_adc_required=False,
+                        manual_control_period_s=self.manual_control_period_s)
         self.config_recorder.publish(settings)
 
     def _state_message(self):
         msg = GainControlState()
         msg.timestamp = rospy.Time.now()
         msg.mode = self.controller.mode
-        # Priority: active protection > invalid/stale input > DAC unknown > error > action.
+        # ADC quality remains visible without blocking manual DAC control.
         details = []
         if not self._adc_is_valid():
             details.append("ADC invalid or stale")
+            if self.adc_error:
+                details.append(self.adc_error)
         if self.confirmed_dac_voltage_v is None:
             details.append("DAC state unknown")
         if self.last_error:
@@ -440,7 +501,7 @@ class GainControlNode:
         if self.controller.safety_active:
             msg.state = ("adc_overrange_at_dac_min" if self.controller.last_action ==
                          "adc_overrange_at_dac_min" else "safety_active")
-        elif not self._adc_is_valid():
+        elif self.controller.mode != 'manual' and not self._adc_is_valid():
             msg.state = "adc_stale"
         elif self.confirmed_dac_voltage_v is None:
             msg.state = "waiting_for_dac_state"

@@ -112,6 +112,11 @@ roslaunch robotic_fish joy.launch
 两端使用同一 VIM4 ROS master，并 source 各自更新后的工作空间。
 周期统计、运动相位、时间检查及 Share 快照都在 VIM4；PC 的 Joy 时间戳不参与控制超时计算。
 手动增益默认目标为 0 V，按原十字键方式调整，或指定已经确认的 `manual_gain_voltage`。
+手动 DAC 初始化和调压由增益节点内的独立定时器执行，不依赖 ADC 是否有数据或是否有效；
+ADC 的负值、无效值和超时只报告诊断，不阻止手动调压。DAC 指令仍须执行确认并限制在
+配置电压范围内，明确检测到原始 ADC 超压时仍优先降压；保护期间不接受调压按键，
+有效新 ADC 确认恢复后，须重新按键设定目标，不会自动恢复保护前的高电压。
+闭环模式仍要求有效且新鲜的 ADC 数据。
 仍由 Circle 进入跟踪、Cross 停止。原 `sonic_teleop.launch` 的组合方式保留；
 VIM4 已单独运行传感器和桥时，可仅启动运动：`sonic_teleop.launch enable_joy:=false acoustic_steering:=true`。
 每台设备的操作与切换说明见[周期趋声控制](../robotic_fish/README.md#65-周期趋声控制)。

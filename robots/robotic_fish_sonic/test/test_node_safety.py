@@ -52,6 +52,11 @@ class NodeSafetyTests(unittest.TestCase):
         n.last_accepted_sample_stamps = {}
         n.last_valid_adc_received_monotonic_s = None
         n.latest_sample_group_valid = False
+        n.adc_error = ''
+        n._stopping = False
+        n.manual_timer = Mock()
+        n.manual_control_period_s = .05
+        n.start_voltage_v = 0.
         n.adc_timeout_s = 1.
         n.confirmed_dac_voltage_v = 1.
         n.adjustment_count = n.error_count = 0
@@ -81,6 +86,8 @@ class NodeSafetyTests(unittest.TestCase):
     def test_fresh_can_control(self):
         n = self.make_node()
         n._on_adc_samples(self.message())
+        self.assertEqual(n.calls, [])  # Manual output belongs to the timer.
+        n._manual_callback(None)
         self.assertEqual(n.calls, [1.05])
         self.assertTrue(n._adc_is_valid())
 
@@ -169,7 +176,7 @@ class NodeSafetyTests(unittest.TestCase):
 
                 def run_adc():
                     try:
-                        n._on_adc_samples(self.message())
+                        n._manual_callback(None)
                     except Exception as exc:
                         errors.append(exc)
 
@@ -478,6 +485,8 @@ class CompactRecordingTests(unittest.TestCase):
         self.assertIn('window_high_fraction', records[0])
         self.assertIn('manual_target_v', records[0])
         self.assertIn('manual_ramp_step_v', records[0])
+        self.assertFalse(records[0]['manual_adc_required'])
+        self.assertEqual(records[0]['manual_control_source'], 'timer')
         self.assertFalse(any(key.startswith('fixed_') for key in records[0]))
         n.controller.set_mode('off')
         n._publish_config()

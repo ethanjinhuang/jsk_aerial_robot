@@ -284,6 +284,32 @@ class GainController:
             self.reset_counts()
             raise
 
+    def manual_tick(self, current_dac_v, now_s):
+        """Ramp the manual target independently of ADC arrival or validity.
+
+        ADC observations can still activate protection. Neither this method nor
+        a new manual target can clear an active protection latch.
+        """
+        current = self._bounded_dac(current_dac_v, 'current DAC voltage')
+        now = self._finite(now_s, 'monotonic time')
+        if self.mode != 'manual' or self.safety_active:
+            return None
+        if self.manual_limited:
+            self.last_action = 'manual_limited'
+            return None
+        delta = self.manual_target_v - current
+        if abs(delta) < .005:
+            self.last_action = 'manual_holding'
+            return None
+        if now - self.last_adjustment_s < self.manual_ramp_interval_s:
+            self.last_action = 'manual_waiting'
+            return None
+        direction = 1. if delta > 0. else -1.
+        target = self._target(current + direction * min(abs(delta), self.manual_ramp_step_v))
+        self.last_adjustment_s = now
+        self.last_action = 'manual_ramping_up' if direction > 0 else 'manual_ramping_down'
+        return target
+
     def _observe(self, raw_voltages, current_dac_v, now_s, data_valid=True):
         """Return the next DAC voltage, or ``None`` when no change is due."""
         if not isinstance(raw_voltages, (list, tuple)) or len(raw_voltages) != 3:
@@ -307,6 +333,10 @@ class GainController:
             return self._safety_decision(maximum_raw_voltage_v, confirmed_dac_voltage_v, observed_monotonic_s)[1]
         if len(valid_raw_voltages_v) != 3 or not data_valid:
             self.reset_counts()
+            if self.mode == 'manual':
+                # ADC quality is diagnostic in manual mode; only valid samples
+                # can release protection. Normal commands use manual_tick().
+                return None
             self.last_action = "invalid_adc"
             if len(valid_raw_voltages_v) != 3:
                 raise ValueError("ADC voltages must be finite and nonnegative")
@@ -321,24 +351,8 @@ class GainController:
             return None
 
         if self.mode == "manual":
-            self.below_count = self.above_count = 0
-            if self.manual_limited:
-                self.last_action = "manual_limited"
-                return None
-            target_voltage_delta_v = self.manual_target_v - confirmed_dac_voltage_v
-            if abs(target_voltage_delta_v) < 0.005:
-                self.last_action = self.mode + "_holding"
-                return None
-            if observed_monotonic_s - self.last_adjustment_s < self.manual_ramp_interval_s:
-                self.last_action = self.mode + "_waiting"
-                return None
-            direction = 1.0 if target_voltage_delta_v > 0.0 else -1.0
-            target_voltage_v = self._target(
-                confirmed_dac_voltage_v + direction * min(abs(target_voltage_delta_v), self.manual_ramp_step_v)
-            )
-            self.last_adjustment_s = observed_monotonic_s
-            self.last_action = self.mode + ("_ramping_up" if direction > 0 else "_ramping_down")
-            return target_voltage_v
+            # ADC callbacks only handle protection in manual mode.
+            return None
 
         if observed_monotonic_s < self.settle_until_s:
             self.reset_counts()

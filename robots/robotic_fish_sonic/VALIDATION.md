@@ -1,5 +1,30 @@
 # robotic_fish_sonic 合并验证
 
+## 2026-11-15 手动 DAC 与 ADC 解耦
+
+手动目标输入、DAC 初始化及正常升降压不再以 ADC 有效为前提。正常调压迁入
+增益节点内部定时器，保持原电压上下限、步长和间隔，不增加 ROS 节点。
+ADC 回调在手动模式只处理原始电压超限保护；无数据、负值、非有限值、过期或重复
+消息不再阻止手动调压。ADC 无效信息仍通过状态日志和诊断保留，原始采样不截断。
+
+保护保持优先：任一可用通道超限或原始码正向饱和，即使其他通道无效仍触发降压；
+无效／过期 ADC 不释放保护。保护清除后仍需重新按键，不自动恢复旧高增益目标。
+闭环控制继续依赖有效新鲜 ADC；DAC 服务确认失败仍记录错误并由手动定时器重试。
+退出时停用手动定时器，并阻止后续定时器／ADC 回调继续写 DAC。
+
+- 传感器包 180 项、运动包 82 项单元测试通过，共 262 项。
+- 源码隔离 ROS 测试通过：未发布任何 ADC 时自动初始化并执行目标电压、
+  负电压和过期 ADC 时手柄仍可调压、超压优先降压及保护后重新按键、
+  闭环无效输入阻断、off 模式及正常退出。
+- 传感器包独立构建和安装通过；安装后增益节点及 Python 模块通过相同 ROS 测试。
+- 所有 ROS 测试均使用隔离 master、模拟 DAC 服务和合成 ADC/Joy，不连接真实硬件。
+
+日志：`/tmp/fish-manual-independent-unit.log`、`/tmp/fish-manual-independent-motion.log`、
+`/tmp/fish-manual-independent-ros.log`、`/tmp/fish-manual-independent-installed-ros.log`、
+`/tmp/fish-manual-independent-install.log`。可复测：
+`python3 robots/robotic_fish_sonic/test/manual_gain_ros_smoke.py`。
+本节替代历史记录中“手动调压依赖有效 ADC 回调”的行为描述。
+
 ## 2026-11-15 手柄断联继续运动
 
 新增 `joy_timeout_action`，项目 `motion.yaml` 默认为 `continue`；Python 未配置时仍为
