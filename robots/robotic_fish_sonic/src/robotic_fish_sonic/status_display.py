@@ -39,6 +39,13 @@ def format_status(data):
                                        for i, (cell, width) in enumerate(zip(cells, widths))) + ' |')
 
     row('Mode / state', '%s / %s' % (data['mode'], data['status']))
+    sign = data.get('left_bias_sign')
+    if sign in (-1, 1):
+        row('Sound mode', '%s; left_bias_sign=%+d' % ('FOLLOW' if sign == -1 else 'AVOID', sign))
+        pending_sign = data.get('pending_left_bias_sign')
+        if pending_sign in (-1, 1) and pending_sign != sign:
+            row('Pending mode', '%s; left_bias_sign=%+d' %
+                ('FOLLOW' if pending_sign == -1 else 'AVOID', pending_sign))
     row('Direction', '%s; bias=(%s/%s)' %
         (data['direction'].upper(), numeric(data['bias'], 1, True), numeric(data['bias_limit'], 1)))
     row('ADC quality', data['quality'])

@@ -6,6 +6,9 @@ float64 bias
 # Volts: (left_mean-right_mean+value)/((left_mean+right_mean)/2).
 # Must be finite; if left+value/2 or right-value/2 is negative, wait without applying.
 float64 lr_voltage_offset_v
+# -1 or +1 changes polarity; 0 keeps the currently effective polarity.
+# All four resolved settings apply atomically at the next valid full cycle.
+int8 left_bias_sign
 ---
 bool success
 string message
@@ -22,9 +25,12 @@ float64 command_bias
 float64 active_threshold
 float64 active_bias
 float64 active_lr_voltage_offset_v
+int8 active_left_bias_sign
 bool parameters_pending
 # Zero ID and NaN values when no request is pending.
 uint64 pending_request_id
 float64 pending_threshold
 float64 pending_bias
 float64 pending_lr_voltage_offset_v
+# 0 when no request is pending (float pending values above are NaN).
+int8 pending_left_bias_sign

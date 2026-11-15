@@ -19,6 +19,7 @@ auto_button: 3
 manual_button: 0
 tracking_button: 2
 status_button: 8
+polarity_toggle_button: 9  # Option: -1 follows sound, +1 avoids sound.
 status_local_echo: false
 amplitude_buttons: [6, 7]
 

@@ -24,6 +24,7 @@
   <arg name="manual_button" default=""/>
   <arg name="tracking_button" default=""/>
   <arg name="status_button" default=""/>
+  <arg name="polarity_toggle_button" default=""/>
   <arg name="status_local_echo" default=""/>
   <arg name="amplitude_buttons" default=""/>
 
@@ -49,6 +50,7 @@
     <param if="$(eval arg('manual_button') != '')" name="manual_button" type="int" value="$(arg manual_button)"/>
     <param if="$(eval arg('tracking_button') != '')" name="tracking_button" type="int" value="$(arg tracking_button)"/>
     <param if="$(eval arg('status_button') != '')" name="status_button" type="int" value="$(arg status_button)"/>
+    <param if="$(eval arg('polarity_toggle_button') != '')" name="polarity_toggle_button" type="int" value="$(arg polarity_toggle_button)"/>
     <param if="$(eval arg('status_local_echo') != '')" name="status_local_echo" type="bool" value="$(arg status_local_echo)"/>
     <rosparam if="$(eval arg('amplitude_buttons') != '')" param="amplitude_buttons" subst_value="true">$(arg amplitude_buttons)</rosparam>
   </node>

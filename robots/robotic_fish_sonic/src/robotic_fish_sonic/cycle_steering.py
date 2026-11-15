@@ -43,6 +43,7 @@ class SteeringSettings:
     threshold: float
     bias: float
     lr_voltage_offset_v: float
+    left_bias_sign: int = -1
 
 
 @dataclass(frozen=True)
@@ -84,10 +85,7 @@ class CycleSteering:
         self.low_signal_v = number(low_signal_v, 'low_signal_v')
         if min(self.max_bias, self.gap_s, self.max_age_s, self.low_signal_v) <= 0 or self.future_tolerance_s < 0:
             raise ValueError('limits must be positive; future tolerance nonnegative')
-        if isinstance(left_bias_sign, bool) or left_bias_sign not in (-1, 1):
-            raise ValueError('left_bias_sign must be -1 or 1')
-        self.left_bias_sign = int(left_bias_sign)
-        self.settings = self._settings(threshold, bias, lr_voltage_offset_v)
+        self.settings = self._settings(threshold, bias, lr_voltage_offset_v, left_bias_sign)
         self.pending = None
         self._set_frequency(frequency)
         self.rows = deque()
@@ -106,16 +104,31 @@ class CycleSteering:
     def gain_warmup(self):
         return self.waiting_status == 'gain_warmup'
 
-    def _settings(self, turn_threshold_ratio, turn_offset_magnitude_ticks, left_right_voltage_offset_v):
+    @property
+    def left_bias_sign(self):
+        """Effective polarity; pending edits never affect the current output."""
+        return self.settings.left_bias_sign
+
+    def _settings(self, turn_threshold_ratio, turn_offset_magnitude_ticks,
+                  left_right_voltage_offset_v, left_bias_sign):
         turn_threshold_ratio, turn_offset_magnitude_ticks = number(turn_threshold_ratio, 'threshold'), number(turn_offset_magnitude_ticks, 'bias')
         left_right_voltage_offset_v = number(left_right_voltage_offset_v, 'lr_voltage_offset_v')
         if not 0 <= turn_threshold_ratio <= 2 or not 0 <= turn_offset_magnitude_ticks <= self.max_bias:
             raise ValueError('threshold must be in [0,2] and bias in [0,max_bias]')
-        return SteeringSettings(turn_threshold_ratio, turn_offset_magnitude_ticks, left_right_voltage_offset_v)
+        if isinstance(left_bias_sign, bool) or left_bias_sign not in (-1, 1):
+            raise ValueError('left_bias_sign must be -1 or 1')
+        return SteeringSettings(turn_threshold_ratio, turn_offset_magnitude_ticks,
+                                left_right_voltage_offset_v, int(left_bias_sign))
 
-    def configure(self, threshold, bias, lr_voltage_offset_v):
-        """Validate the entire triplet now; apply it at the next valid decision."""
-        self.pending = self._settings(threshold, bias, lr_voltage_offset_v)
+    def configure(self, threshold, bias, lr_voltage_offset_v, left_bias_sign=None):
+        """Validate all settings now; apply together at the next valid decision.
+
+        Omitting polarity retains its currently effective value, including for
+        callers using the original three-argument Python interface.
+        """
+        if left_bias_sign is None:
+            left_bias_sign = self.left_bias_sign
+        self.pending = self._settings(threshold, bias, lr_voltage_offset_v, left_bias_sign)
 
     def _set_frequency(self, tailbeat_frequency_hz):
         tailbeat_frequency_hz = number(tailbeat_frequency_hz, 'frequency')
@@ -303,7 +316,7 @@ class CycleSteering:
                    for v in (compensated_left_voltage_v, compensated_right_voltage_v)):
             # A voltage correction may not invent a negative envelope. Retry at
             # the next full cycle, keeping the last bias, gait epoch and pending
-            # triplet. Fresh ADC / Joy health checks continue during this hold.
+            # settings. Fresh ADC / Joy health checks continue during this hold.
             self.cycle = cycle_index
             self.waiting_status = 'voltage_compensation_out_of_range'
             return None

@@ -176,7 +176,11 @@ rostopic echo /robotic_fish/acoustic/channel_comparison
 舵机映射默认 `left_bias_sign=-1`：判断左侧强时输出负中心偏置，右侧强时输出正中心偏置，
 适配当前尾舵需要反向偏转的安装。Share／状态中的 `LEFT`、`RIGHT` 仍表示声学判断方向；
 符号参数与电压补偿相互独立。两个运动 launch 和直接运行脚本均采用该默认值，
-可在启动时用 `left_bias_sign:=1` 显式切回相反舵机映射，修改后重启运动节点。
+可在启动时用 `left_bias_sign:=1` 指定初值，也可通过在线服务在下一有效完整周期
+切换到 `-1`／`+1`，不重启运动节点或重置摆尾相位；服务中的 `0` 保持当前生效符号。
+默认 Option（`buttons[9]`）每次新按下也会翻转符号，长按只触发一次；
+按当前实机定义 −1 跟随、+1 远离。基于待生效符号翻转，并保留已有阈值／偏置／补偿。
+手动／停止时仅预选，不自动进入跟踪；当前和待生效模式可用 Share 查看。
 声源居中时可用多个稳定周期估计 `delta=R-L`。相同数值的补偿效果是旧版左加右减定义的一半；
 若需保留旧效果，新值取旧值的两倍；不自动转换配置。
 Share 的三通道表只显示原始瞬时电压、原始周期均值、校准文件处理后的周期均值。
@@ -185,7 +189,9 @@ Share 的三通道表只显示原始瞬时电压、原始周期均值、校准�
 `Diff before [%]` 展开 `(L-R)/AVG`，
 `Diff after/T [%]` 展开 `(L-R+offset)/AVG` 并显示结果／阈值百分比。
 分子只增加一次 offset；结果使用控制器已记录的未舍入判据。
-另保留电压补偿值、方向与输出偏置及 ADC 质量，正常跟踪共 17 行。
+另保留电压补偿值、方向与输出偏置及 ADC 质量；Sound mode 显示当前
+FOLLOW（−1，跟随）／AVOID（+1，远离），正常跟踪共 18 行。
+待生效符号与当前不同时额外显示 Pending mode。
 停止原因、历史／无周期标记和待生效补偿仅按需出现。状态话题仍完整保存电压差、
 补偿前后相对差及时间信息；消息和服务仍使用比例数值。
 诊断中间量 `Lc=L+delta/2`、`Rc=R-delta/2` 的差为 `L-R+delta`，平均值不变。
@@ -213,11 +219,14 @@ VIM4 运动节点按 Share 发布纯文本快照，整机入口默认启动 `sta
 
 新增接口：
 
-- `srv/SetAcousticSteering`：统一接收 `threshold`、`bias` 和 `lr_voltage_offset_v`，
-  三项整组验证、暂存，在下一有效周期一起生效；补偿为有限有符号伏特值，周期内须满足 `-2L<=delta<=2R`。
+- `srv/SetAcousticSteering`：接收 `threshold`、`bias`、`lr_voltage_offset_v` 和 `left_bias_sign`，
+  四项整组验证、暂存，在下一有效周期一起生效。符号为 `-1`／`+1`，省略或 `0`
+  使用当前生效符号；响应给出 `active_left_bias_sign` 和 `pending_left_bias_sign`，
+  后者无待生效请求时为 0。补偿为有限有符号伏特值，周期内须满足 `-2L<=delta<=2R`。
 - `msg/AcousticSteeringState`：记录周期窗口、方向差值、偏置、参数及模式状态。
 - `msg/SonicMotionState`：记录每个控制周期的运动输出、摆幅／相位、输入年龄及 ADC 质量。
-- `msg/AcousticSteeringEvent`：记录调参请求接受／拒绝／替换、实际生效周期及关机取消。
+- `msg/AcousticSteeringEvent`：记录调参请求接受／拒绝／替换、实际生效周期及关机取消，
+  包含解析后的 `left_bias_sign`；拒绝事件保留无效请求符号。
 - `/robotic_fish/sonic/config`：复用 `RuntimeConfig`，锁存完整控制配置及待生效请求。
 - `/robotic_fish/acoustic/steering_state`：启用功能后的运行状态，可随 bag 记录。
 
@@ -225,7 +234,9 @@ VIM4 运动节点按 Share 发布纯文本快照，整机入口默认启动 `sta
 ADC 年龄、未来时间戳检查均在 VIM4 本机进行，未来容差继续默认 0.05 秒；
 `acoustic_future_tolerance_s` 在启动时显式设置，启动日志显示主机名和实际时间限值。
 补偿可通过运动 launch 的 `acoustic_lr_voltage_offset_v` 设置初值，运行时调用
-`/sonic_teleop_node/set_acoustic_steering` 并填写三项；具体命令见运动包说明。
+`/sonic_teleop_node/set_acoustic_steering` 填写前三项，并按需指定方向符号；具体命令见运动包说明。
+新增符号字段改变服务与事件的 ROS MD5；两端须重新编译 `robotic_fish_sonic robotic_fish`、
+source 并重启节点。新版本仍接受省略符号的三字段 YAML 调用，旧二进制客户端需重新生成。
 调用后直接返回当前模式、数据质量、方向、控制偏置、正在使用及待生效参数；
 真正生效时 VIM4 运动终端打印请求编号、周期和参数。服务成功表示接受请求，仍等待有效周期。
 旧无量纲 `lr_offset` 及其启动参数已移除，新补偿名称同时用于配置、事件和服务响应。

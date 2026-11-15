@@ -408,6 +408,7 @@ IMU 名称、平面和范围按本次提供的映射记录。
 | `buttons[0]` 的新按下 | 方块 `□` | 进入手动位置模式，或从停止恢复手动 |
 | `buttons[1]` | 叉号 `×` | 停止摆尾、回中并锁存；优先于其他输入 |
 | `buttons[8]` 的新按下 | Share | 发布状态快照，由 VIM4 的 IO 终端显示对齐表格；长按只打印一次 |
+| `buttons[9]` 的新按下 | Option | 切换声学行为：`-1` 跟随／`+1` 远离声源；长按不重复，下一有效完整周期生效 |
 | `buttons[6]` 或 `buttons[7]` 按住 | L2 或 R2 | 用 R2 模拟轴 `axes[4]` 增幅、L2 模拟轴 `axes[3]` 减幅，沿用原映射 |
 
 各模式通过独立按键选择：方块手动、三角普通自动、圆圈声源跟踪；
@@ -464,7 +465,8 @@ roslaunch robotic_fish sonic_vim4.launch joy_timeout_action:=stop joy_timeout_s:
 | `amplitude_decrease_axis` / `amplitude_increase_axis` | 3 / 4 | 调幅轴索引 |
 | `stop_button` / `auto_button` / `manual_button` | 1 / 3 / 0 | 模式按键索引 |
 | `tracking_button` | 2 | 声源跟踪模式按键索引，默认圆圈 |
-| `status_button` | 8 | 状态查看按键索引，默认 Share；不能与运动按键重叠 |
+| `status_button` | 8 | 状态查看按键索引，默认 Share；不能与运动／Option 按键重叠 |
+| `polarity_toggle_button` | 9 | 跟随／远离切换键索引，默认 Option；不能与运动／Share 按键重叠，可在 motion.yaml 或 sonic_teleop.launch 中覆盖 |
 | `status_local_echo` | false | 同时在运动节点所在终端显示 Share 快照 |
 | `amplitude_buttons` | `[6, 7]` | 调幅使能按键列表 |
 
@@ -578,15 +580,25 @@ d_corrected = (L - R + delta) / mean
 例如中心 2048、`bias=128` 时，左右判断对应的摆尾中心分别为 1920、2176。
 Share／状态话题的 `LEFT`、`RIGHT` 表示声学判断方向，舵机偏转符号看 `bias`，两者不能混同。
 该默认值按当前尾舵安装方向反转；如换用相反安装，可通过 `left_bias_sign:=1` 覆盖。
-此参数启动时读取，修改后需重启运动 launch；若启动命令仍显式填写 `left_bias_sign:=1`，将覆盖新默认值。
+启动参数决定初值；运行中也可通过下述服务修改 `left_bias_sign`，无需重启。
+在线修改不写回 YAML，重启后仍以启动配置为准。
+按当前实机定义，`-1=FOLLOW`（跟随声源），`+1=AVOID`（远离声源）。
+**Option（`buttons[9]`）** 每次新按下在两者间翻转；长按不重复，松开再按才再次切换。
+有待生效请求时，基于待生效符号翻转，并保留该请求的阈值、偏置、补偿；
+所以同一周期内按两次会回到原目标符号，原待生效调参不会丢失。
+手动／停止状态也可预选，但仍需由圆圈进入跟踪、完成有效周期才生效，不解除停止锁存。
+同时按 Cross 或冲突模式键不切换；缺失／无效手柄帧不重置按下沿，重连时持续按住也不会额外切换。
+声学功能未启用时 Option 无操作。接受事件的 detail 带 `source=joystick_option`，
+终端打印请求的 FOLLOW／AVOID，配置与事件沿用在线服务记录方式。
 阈值、偏置幅度与水中实际转向效果仍需现场确认。
 偏置使用舵机刻度，靠近软件边界时仍按原规则缩小摆幅。
 
-现场通过同一条命令调整阈值、转向偏置及左右补偿（无需重启，在下一次有效周期决策生效）：
+现场通过同一条命令调整阈值、转向偏置、左右补偿及舵机方向符号
+（无需重启，在下一次有效完整周期决策一起生效，不重置摆尾相位）：
 
 ```bash
 rosservice call /sonic_teleop_node/set_acoustic_steering \
-  "{threshold: 0.15, bias: 128.0, lr_voltage_offset_v: -0.01}"
+  "{threshold: 0.15, bias: 128.0, lr_voltage_offset_v: -0.01, left_bias_sign: 1}"
 ```
 
 命令终端直接返回请求处理时的状态快照。例如当前正使用阈值 0.1、偏置 256、无补偿，
@@ -606,37 +618,46 @@ command_bias: -256.0
 active_threshold: 0.1
 active_bias: 256.0
 active_lr_voltage_offset_v: 0.0
+active_left_bias_sign: -1
 parameters_pending: True
 pending_request_id: 1
 pending_threshold: 0.15
 pending_bias: 128.0
 pending_lr_voltage_offset_v: -0.01
+pending_left_bias_sign: 1
 ```
 
 `success` 表示请求被接受；`active_*` 是正在使用的参数，`pending_*` 是等待生效的参数，
 `command_bias` 是控制器当前偏置。服务查询不推进摆尾周期、不发送舵机命令，也不自动进入跟踪。
 手动／停止或数据预热期间可以接受参数，继续等待下一次有效完整周期。
 参数实际生效后，VIM4 运动终端打印一次 `Acoustic steering applied: request=... cycle=...`
-以及本次生效的三项参数，可用请求编号与调用返回、录包事件对应。
+以及本次生效的四项参数，可用请求编号与调用返回、录包事件对应。
 拒绝请求时也返回当前状态和此前保留的待生效参数；没有待生效请求时，
-`parameters_pending=false`、`pending_request_id=0`，三个 `pending_*` 数值为 NaN。
-本次替换了服务补偿字段并扩展状态消息，两端需重新编译两包、source 并重启相关节点后使用。
+`parameters_pending=false`、`pending_request_id=0`，三个浮点 `pending_*` 数值为 NaN，`pending_left_bias_sign=0`。
+本次扩展了 `SetAcousticSteering` 服务和 `AcousticSteeringEvent` 消息，ROS MD5 已改变；
+PC／VIM4 必须更新到同一版本，重新编译两包、source 并重启相关节点后使用。
+升级后的三字段 YAML 调用可继续使用（新增整数默认 0）；旧二进制服务客户端不能直接混用。
+Python `ServiceProxy` 的位置参数调用需补第四项，例如 `configure(.15, 128., -.01, 1)`。
 旧的无量纲 `lr_offset` 和启动参数 `acoustic_lr_offset` 已移除，旧数值不能直接沿用为伏特。
 
-每次调用请同时填写三项：阈值范围 `[0,2]`（0%～200%），偏置范围 `[0,servo_range]`，
+每次调用请同时填写前三项：阈值范围 `[0,2]`（0%～200%），偏置范围 `[0,servo_range]`，
 电压补偿须为有限有符号数，`lr_voltage_offset_v: 0.0` 表示取消补偿。
+`left_bias_sign` 填 `-1`／`+1` 切换映射；省略或填 `0` 保持当前生效符号，
+不读取原启动参数，也不沿用上一请求中尚未生效的符号。最新有效请求仍覆盖整组待生效配置。
+只有符号要改变时，其余三项仍填写希望保留的当前值；查看响应的
+`active_left_bias_sign`／`pending_left_bias_sign`，以及状态话题、配置快照和事件确认生效。
 整组校验通过后，在下一有效周期决策一起应用；任何一项无效都不覆盖此前已接受的配置。
 多次有效请求以最新一组为准；`parameters_pending` 表示等待生效，预热或质量等待期间继续暂存。
 为保留非负包络检查，诊断中间量定义为 `Lc=L+delta/2`、`Rc=R-delta/2`；
 其差值等于 `L-R+delta`，平均值仍为 `(L+R)/2`。每个周期要求这两个量非负，
 即 `delta` 位于该周期的 `[-2L,2R]` 内。
 补偿越界时显示 `voltage_compensation_out_of_range`／`HOLDING`，保持摆尾和上一偏置，
-整组三项待生效参数继续暂存；后续完整周期恢复有效或替换参数后自动继续判断。
+整组四项待生效参数继续暂存；后续完整周期恢复有效或替换参数后自动继续判断。
 不会把负电压截成零。尚无有效判断时保持零偏置；Cross、Joy／ADC 超时及饱和等检查继续生效。
 补偿保持摆尾相位和转向偏置上限，头部电压保持原值。
 重启后使用启动参数；例如在 VIM4 的启动命令中增加 `acoustic_lr_voltage_offset_v:=-0.01`。
-这三项支持运行时服务；`rosparam set` 不会更新控制器，
-摆频和方向符号通过 launch 设置，修改后重启并重新积累周期数据。
+这四项支持运行时服务；`rosparam set` 不会更新控制器。
+摆频仍通过 launch 设置，修改后重启并重新积累周期数据。
 
 进入声源跟踪模式前需要已有新鲜、结构有效且未饱和的三通道数据。
 校准或 DAC 状态尚未就绪时，可以进入跟踪并以零偏置摆尾等待；
@@ -702,6 +723,7 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 周期统计、判断及快照均在 VIM4 完成，显示节点只打印快照。输出包括：
 
 - 当前运动模式、声学状态和判断方向；方向行同时显示 `bias=(当前输出偏置/修改上限)`。
+- `Sound mode` 显示当前生效的 FOLLOW／AVOID 和 `left_bias_sign`；待生效符号不同时额外显示 `Pending mode`，不会把请求值误当作已生效值。
 - ADC 数据质量，以及 ADC0／ADC1／ADC2（头／左／右）的最新原始电压。
 - `Raw cycle mean` 为上一完整摆尾周期内三个通道的原始电压均值。
 - `Calibrated cycle mean` 为同一批采样经校准文件处理后的电压均值，先校准每次采样再平均。
@@ -714,7 +736,7 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 校准文件修正通道测量值；`lr_voltage_offset_v` 仅调整左右差异判据，不写回 ADC 数据，
 也不改变电压表里的三行数据。原始与校准周期均值使用同一窗口、同一批有效采样；
 若历史消息没有原始电压，原始均值显示 `--`，不会用校准值冒充原始值。
-正常跟踪输出 17 行。停止时额外显示 `Reason`；无完整周期或保留历史结果时显示 `Cycle` 提示。
+正常跟踪输出 18 行（包含 Sound mode）。停止时额外显示 `Reason`；无完整周期或保留历史结果时显示 `Cycle` 提示。
 时间戳、数据年龄、周期编号／窗口／样本数和上次方向移出终端显示，
 原有 ADC、周期状态、连续运动状态、配置与事件话题仍完整录包。
 
@@ -725,7 +747,8 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 |                            SONIC STATUS / SHARE                            |
 +----------------------------------------------------------------------------+
 | Mode / state    : tracking / active                                        |
-| Direction       : LEFT; bias=(-128.0/1024.0)                               |
+| Sound mode      : FOLLOW; left_bias_sign=-1                                |
+| Direction       : LEFT; bias=(-128.0/512.0)                                |
 | ADC quality     : valid                                                    |
 +----------------------------------------------------------------------------+
 | Voltage [V]            |     Head (ADC0) |     Left (ADC1) |  Right (ADC2) |
@@ -735,8 +758,8 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 +----------------------------------------------------------------------------+
 | AVG [V]         : (0.70000+0.40000)/2 = 0.55000                            |
 | Diff before [%] : (0.70000-0.40000)/AVG = +54.55%                          |
-| Diff after/T [%]: (0.70000-0.40000+(-0.01000))/AVG = +52.73% / 15.00%      |
-| LR offset [V]   : -0.01000                                                 |
+| Diff after/T [%]: (0.70000-0.40000+(+0.00000))/AVG = +54.55% / 10.00%      |
+| LR offset [V]   : +0.00000                                                 |
 +----------------------------------------------------------------------------+
 ```
 

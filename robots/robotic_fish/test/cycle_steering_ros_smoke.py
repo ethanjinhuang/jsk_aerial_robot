@@ -83,11 +83,15 @@ def verify_recording(directory):
     events = recorded['events']
     assert all(m.difference_reference == 'channel_mean' for m in events)
     assert {'accepted', 'rejected', 'applied'} <= {m.event for m in events}
+    assert {m.left_bias_sign for m in events if m.event == 'applied'} == {-1, 1}
+    option_requests = [m for m in events if m.event == 'accepted' and 'source=joystick_option' in m.detail]
+    assert [m.left_bias_sign for m in option_requests] == [1, -1], option_requests
     for applied in (m for m in events if m.event == 'applied'):
         assert applied.cycle_index > 0
         assert any(m.event == 'accepted' and m.request_id == applied.request_id and
-                   (m.threshold, m.turn_bias, m.lr_voltage_offset_v) ==
-                   (applied.threshold, applied.turn_bias, applied.lr_voltage_offset_v) for m in events)
+                   (m.threshold, m.turn_bias, m.lr_voltage_offset_v, m.left_bias_sign) ==
+                   (applied.threshold, applied.turn_bias, applied.lr_voltage_offset_v,
+                    applied.left_bias_sign) for m in events)
     print('PASS: actual record.launch bag readback: motion/phase/ADC quality, cycle means, '
           'late latched config, parameter request/application events and ROS logs; ' + str(paths[0]), flush=True)
 
@@ -329,7 +333,8 @@ def main():
                 assert re.search(r'Diff after/T \[%\]\s*:\s*\(2.00000-1.00000\+\(\+0.00000\)\)/AVG = \+66.67% / 10.00%', report)
                 assert re.search(r'Direction\s*:\s*LEFT', report)
                 assert set(map(len, report.splitlines())) == {78}
-                assert len(report.splitlines()) == 17
+                assert len(report.splitlines()) == 18
+                assert re.search(r'Sound mode\s*:\s*' + ('FOLLOW' if polarity == -1 else 'AVOID'), report)
                 # Re-press Circle: keep tracking and the existing phase/window.
                 set_input(button=2)
                 time.sleep(.1)
@@ -338,7 +343,11 @@ def main():
                     assert states[-1][1].status == 'active'
                 set_input(button=None)
                 rospy.wait_for_service('/' + name + '/set_acoustic_steering', timeout=3)
-                configure = rospy.ServiceProxy('/' + name + '/set_acoustic_steering', SetAcousticSteering)
+                configure_service = rospy.ServiceProxy('/' + name + '/set_acoustic_steering', SetAcousticSteering)
+
+                def configure(threshold, bias, offset, left_bias_sign=0):
+                    return configure_service(threshold, bias, offset, left_bias_sign)
+
                 assert not configure(-1., 64., 0.).success
                 response = configure(1.2, 64., 0.)
                 assert response.difference_reference == 'channel_mean'
@@ -347,6 +356,7 @@ def main():
                 assert response.adc_quality == 'valid'
                 assert (response.active_threshold, response.active_bias, response.active_lr_voltage_offset_v) == (.1, 128., 0.)
                 assert (response.pending_threshold, response.pending_bias, response.pending_lr_voltage_offset_v) == (1.2, 64., 0.)
+                assert (response.active_left_bias_sign, response.pending_left_bias_sign) == (polarity, polarity)
                 assert response.request_id == response.pending_request_id
                 wait_state(lambda s: s.parameters_pending)
                 state = wait_state(lambda s: s.cycle_index >= 2 and not s.parameters_pending)
@@ -402,10 +412,12 @@ def main():
                     assert abs((after.window_end - before.window_end).to_sec() - 1. / frequency) < 1e-6
                 before_hold = state
                 held_bias = state.command_bias
-                response = configure(.2, 96., -10.)
+                response = configure(.2, 96., -10., -polarity)
                 assert response.success and response.parameters_pending
+                assert response.pending_left_bias_sign == -polarity
                 state = wait_state(lambda s: s.status == 'voltage_compensation_out_of_range')
                 assert state.motion_mode == 'tracking' and state.command_bias == held_bias
+                assert state.left_bias_sign == polarity
                 assert state.parameters_pending and state.turn_bias == 64. and state.lr_voltage_offset_v == 0.
                 report = share_report()
                 assert 'HISTORICAL' in report and re.search(r'Direction\s*:\s*HOLDING', report)
@@ -415,6 +427,41 @@ def main():
                 assert state.command_bias == held_bias
                 skipped = (state.window_end - before_hold.window_end).to_sec() * frequency
                 assert abs(skipped - round(skipped)) < 1e-6
+                # Online polarity changes reverse only the servo mapping at a
+                # valid boundary, preserving acoustic direction and gait phase.
+                before_flip = state
+                response = configure(.1, 64., 0., -polarity)
+                assert response.success and response.parameters_pending
+                assert (response.active_left_bias_sign, response.pending_left_bias_sign) == (polarity, -polarity)
+                rejected = configure(.1, 64., 0., 2)
+                assert not rejected.success and rejected.pending_request_id == response.request_id
+                assert rejected.pending_left_bias_sign == -polarity
+                state = wait_state(lambda s: s.left_bias_sign == -polarity and not s.parameters_pending)
+                assert state.direction == 'right' and state.command_bias == -held_bias
+                cycles = (state.window_end - before_flip.window_end).to_sec() * frequency
+                assert abs(cycles - round(cycles)) < 1e-6
+                # Zero resolves to the now-effective sign, not the launch value.
+                response = configure(.1, 64., 0.)
+                assert (response.active_left_bias_sign, response.pending_left_bias_sign) == (-polarity, -polarity)
+                wait_state(lambda s: not s.parameters_pending and s.left_bias_sign == -polarity)
+                assert configure(.1, 64., 0., polarity).success
+                state = wait_state(lambda s: s.left_bias_sign == polarity and not s.parameters_pending)
+                assert state.command_bias == held_bias
+                # Option (button 9) flips once even when held across full cycles.
+                set_input(button=9)
+                state = wait_state(lambda s: s.left_bias_sign == -polarity and not s.parameters_pending)
+                assert state.command_bias == -held_bias and state.direction == 'right'
+                time.sleep(1. / frequency + .1)
+                with lock:
+                    assert states[-1][1].left_bias_sign == -polarity
+                    assert not states[-1][1].parameters_pending
+                report = share_report()  # Also releases Option before the next press.
+                assert re.search(r'Sound mode\s*:\s*' + ('FOLLOW' if -polarity == -1 else 'AVOID'), report)
+                time.sleep(.1)
+                set_input(button=9)
+                state = wait_state(lambda s: s.left_bias_sign == polarity and not s.parameters_pending)
+                assert state.command_bias == held_bias
+                set_input(button=None)
                 # Changing gain preserves motion/phase and holds the last bias.
                 # Mixed groups are excluded; stable data must fill an aligned cycle.
                 with lock:
@@ -518,7 +565,8 @@ def main():
                       'gain adjustment and unusable quality hold without stopping, '
                       'remote aligned/color Share snapshots, '
                       'Joy loss continues tracking, ADC loss stops, '
-                      'live voltage compensation, settings and fault recovery, '
+                      'Option toggles FOLLOW/AVOID once per press, '
+                      'live voltage compensation and polarity, settings and fault recovery, '
                       'remote Joy stamp %.3f s behind local clock' % (frequency, polarity, remote_joy_skew), flush=True)
             finally:
                 finish.set()

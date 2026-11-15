@@ -64,6 +64,16 @@ class DisplayTests(unittest.TestCase):
         self.assertIn('Reason', plain)
         self.assertIn('fault_', plain)
 
+    def test_follow_avoid_and_pending_modes_are_distinct_from_acoustic_direction(self):
+        for sign, active, pending in ((-1, 'FOLLOW', 'AVOID'), (1, 'AVOID', 'FOLLOW')):
+            plain = format_status(snapshot(left_bias_sign=sign, pending_left_bias_sign=-sign))
+            self.assertRegex(plain, r'Sound mode\s*:\s*' + active)
+            self.assertRegex(plain, r'Pending mode\s*:\s*' + pending)
+            self.assertRegex(plain, r'Direction\s*:\s*LEFT')
+            self.assertEqual(set(map(len, plain.splitlines())), {78})
+        applied = format_status(snapshot(left_bias_sign=1, pending_left_bias_sign=1))
+        self.assertNotIn('Pending mode', applied)
+
     def test_unavailable_values_and_historical_direction_are_explicit(self):
         plain = format_status(snapshot(raw=None, raw_means=None, means=None, quality='no_data', direction='warmup',
                                        difference=None, compensated_difference=None))

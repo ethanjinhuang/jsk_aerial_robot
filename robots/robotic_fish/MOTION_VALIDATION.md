@@ -1,5 +1,48 @@
 # 单舵机运动调整验证记录
 
+## 2026-11-15 Option 切换跟随／远离声源
+
+当前单舵机声学控制原未使用 `buttons[9]`。现默认将 Option 作为按下沿触发的
+方向符号切换键，按当前实机定义 −1 为 FOLLOW（跟随）、+1 为 AVOID（远离）。
+长按只切换一次；待生效期间连续新按基于待生效符号翻转，保留待生效的阈值、
+偏置和补偿。复用在线请求路径，在下一有效完整周期生效，不重置相位或解除停止。
+可通过 `polarity_toggle_button` 重映射；有效配置和事件来源同步保存。
+Share 增加当前 Sound mode，符号不同的待生效请求另显示 Pending mode。
+
+- 运动包 90 项、声学包 185 项单元测试通过，共 275 项。
+- 新增回归覆盖长按、同周期连续切换、保留待生效调参、缺失／无效 Joy 不重置按下沿、
+  Cross／冲突模式键优先、停止状态仅预选、禁用声学、关机及按键映射冲突。
+- 两包在 `/tmp/fish-option-toggle` 独立构建安装通过。
+- 安装版本在 1.5／2 Hz、两种初始符号下通过隔离 ROS 测试；Option 长按跨越完整周期
+  不重复，松开再按反向切换，Share、相位、既有故障处理正常。
+- 实际录包回读确认两次按键请求的符号和 `source=joystick_option`，并验证周期、配置及事件关联。
+
+测试仅使用隔离 master、合成 ADC/Joy，不连接真实硬件。
+日志：`/tmp/fish-option-motion-unit.log`、`/tmp/fish-option-sonic-unit.log`、
+`/tmp/fish-option-build.log`、`/tmp/fish-option-cycle-ros.log`。
+
+## 2026-11-15 方向符号在线调参
+
+`left_bias_sign` 现可与阈值、偏置和电压补偿一起通过
+`/sonic_teleop_node/set_acoustic_steering` 暂存，在下一有效完整周期原子生效。
+`-1`／`+1` 指定方向；服务中的 `0` 保持当前生效符号。不会重置摆尾相位、
+立即修改当前偏置或解除停止锁存。补偿越界时符号也继续等待，非法符号不覆盖已有请求。
+响应包含当前／待生效符号，配置快照、事件消息和应用日志同步记录。
+
+- 全部单元测试：运动包 84 项、声学包 184 项，共 268 项通过。
+- 两包在 `/tmp/fish-online-sign` 独立配置、构建和安装通过。
+- 安装后的真实 ROS 服务在 1.5／2 Hz、两种初始符号下通过在线反转与恢复、
+  周期对齐、无效符号拒绝、补偿等待、停止恢复和 ADC／Joy 异常路径。
+- 实际 `record.launch` 生成的 bag 回读通过；接受／生效事件的符号一致，
+  配置和状态正确记录符号改变。升级后的三字段 YAML 调用仍通过默认 0 保留当前符号。
+
+本次测试使用本机隔离 master、合成 ADC/Joy，不连接真实硬件。
+`SetAcousticSteering` 和 `AcousticSteeringEvent` 的 ROS MD5 已改变，两端需更新、
+重新编译两包、source 并重启节点；之后可在线切换，无需每次重启。
+日志：`/tmp/fish-online-sign-motion-unit-final.log`、`/tmp/fish-online-sign-sonic-unit-final.log`、
+`/tmp/fish-online-sign-build.log`、`/tmp/fish-online-sign-motion-build.log`、
+`/tmp/fish-online-sign-cycle-ros.log`。原有历史验证如下。
+
 验证日期：2026-10-20。
 
 本次将 `sonic_teleop.py` 的轨迹计算和手柄状态机提取到

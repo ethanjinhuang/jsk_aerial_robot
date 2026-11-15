@@ -11,5 +11,8 @@ string difference_reference
 float64 turn_bias
 # Volts: add once to L-R; positive favors left, negative favors right.
 float64 lr_voltage_offset_v
+# Resolved polarity: an accepted keep-current (0) request records -1 or +1.
+# Invalid requested values are retained on rejected events.
+int8 left_bias_sign
 # Nonzero only for an applied request: the cycle where it took effect.
 uint64 cycle_index

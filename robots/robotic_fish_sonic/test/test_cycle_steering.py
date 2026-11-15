@@ -172,6 +172,52 @@ class CycleTests(unittest.TestCase):
         self.assertEqual((result.bias,e.settings.bias), (0.,100.))
         self.assertIsNone(e.pending)
 
+    def test_online_polarity_applies_atomically_without_resetting_phase(self):
+        e = CycleSteering(2.)
+        self.start(e)
+        self.fill(e)
+        previous = e.evaluate(100.5)
+        e.configure(.2, 128., .1, left_bias_sign=1)
+        self.assertEqual((e.left_bias_sign, e.settings.threshold, e.settings.bias), (-1, .1, 256.))
+        self.assertIs(e.last_decision, previous)
+        self.assertIsNone(e.evaluate(100.51))
+        self.fill(e, .5, 1.)
+        current = e.evaluate(101.)
+        self.assertEqual((e.left_bias_sign, e.settings.threshold, e.settings.bias), (1, .2, 128.))
+        self.assertEqual((previous.bias, current.bias, e.epoch), (-256., 128., 100.))
+        self.assertEqual((current.cycle, current.start, current.end), (2, 100.5, 101.))
+
+    def test_invalid_online_polarity_preserves_pending_configuration(self):
+        e = CycleSteering(2.)
+        e.configure(.2, 128., .1, left_bias_sign=1)
+        pending = e.pending
+        for sign in (0, 2, -2, True, float('nan'), '1'):
+            with self.subTest(sign=sign), self.assertRaises(ValueError):
+                e.configure(.3, 64., 0., left_bias_sign=sign)
+            self.assertIs(e.pending, pending)
+            self.assertEqual(e.left_bias_sign, -1)
+
+    def test_compensation_hold_does_not_apply_pending_polarity(self):
+        e = CycleSteering(2.)
+        self.start(e)
+        self.fill(e)
+        previous = e.evaluate(100.5)
+        e.configure(.2, 128., -6., left_bias_sign=1)
+        self.fill(e, .5, 1.)
+        self.assertIsNone(e.evaluate(101.))
+        self.assertEqual(e.left_bias_sign, -1)
+        self.assertEqual(e.pending.left_bias_sign, 1)
+        self.assertIs(e.last_decision, previous)
+        e.configure(.2, 128., 0., left_bias_sign=1)
+        self.fill(e, 1., 1.5)
+        self.assertEqual(e.evaluate(101.5).bias, 128.)
+        self.assertEqual((e.left_bias_sign, e.epoch), (1, 100.))
+
+    def test_original_python_configuration_keeps_effective_polarity(self):
+        e = CycleSteering(2., left_bias_sign=1)
+        e.configure(.2, 128., .1)
+        self.assertEqual(e.pending.left_bias_sign, 1)
+
     def test_compensation_shifts_the_decision_without_changing_measured_means(self):
         cases = [(3., 1., -2., .1, 0.), (3., 1., -1., .1, 128.),
                  (3., 1., -3., .1, -128.), (1., 3., 2., .1, 0.),

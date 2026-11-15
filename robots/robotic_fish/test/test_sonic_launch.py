@@ -75,6 +75,12 @@ class SonicLaunchTests(unittest.TestCase):
         self.assertEqual(config.params['/joy_node/dev'].value, '/dev/input/js1')
         self.assertEqual(config.params['/joy_node/autorepeat_rate'].value, 30.)
 
+    def test_option_toggle_mapping_defaults_and_explicit_override(self):
+        default = self.load('sonic_vim4.launch')
+        self.assertEqual(default.params['/sonic_teleop_node/polarity_toggle_button'].value, 9)
+        remapped = self.load('sonic_teleop.launch', 'polarity_toggle_button:=10')
+        self.assertEqual(remapped.params['/sonic_teleop_node/polarity_toggle_button'].value, 10)
+
     def test_original_entry_keeps_joystick_and_motion(self):
         config = self.load('sonic_teleop.launch')
         self.assertCountEqual([node.type for node in config.nodes], ['joy_node','sonic_teleop.py'])
