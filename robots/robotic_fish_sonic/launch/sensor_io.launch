@@ -5,13 +5,14 @@
   <arg name="enable_dac" default="true"/>
   <arg name="enable_gain_control" default="true"/>
   <!-- Deprecated compatibility alias. true selects closed_loop. -->
-  <arg name="enable_agc" default="false"/>
-  <arg name="gain_mode" default="off"/>
-  <arg name="manual_gain_voltage" default="0.0"/>
-  <arg name="agc_target_min_v" default="2.5"/>
-  <arg name="agc_target_max_v" default="3.0"/>
-  <arg name="agc_step_v" default="0.01"/>
-  <arg name="adc_safety_limit_v" default="4.00"/>
+  <!-- Empty overrides preserve YAML; explicit CLI values use canonical keys. -->
+  <arg name="enable_agc" default=""/>
+  <arg name="gain_mode" default=""/>
+  <arg name="manual_gain_voltage" default=""/>
+  <arg name="agc_target_min_v" default=""/>
+  <arg name="agc_target_max_v" default=""/>
+  <arg name="agc_step_v" default=""/>
+  <arg name="adc_safety_limit_v" default=""/>
 
   <node if="$(arg enable_adc)"
         pkg="robotic_fish_sonic"
@@ -35,12 +36,12 @@
         name="gain_control"
         output="screen">
     <rosparam command="load" file="$(arg config)"/>
-    <param name="agc/enabled" value="$(arg enable_agc)"/>
-    <param name="gain_control/mode" type="str" value="$(arg gain_mode)"/>
-    <param name="gain_control/manual_voltage" value="$(arg manual_gain_voltage)"/>
-    <param name="gain_control/target_min_v" value="$(arg agc_target_min_v)"/>
-    <param name="gain_control/target_max_v" value="$(arg agc_target_max_v)"/>
-    <param name="gain_control/step_v" value="$(arg agc_step_v)"/>
-    <param name="gain_control/adc_safety_limit_v" value="$(arg adc_safety_limit_v)"/>
+    <param if="$(eval arg('enable_agc') != '')" name="agc/enabled" type="bool" value="$(arg enable_agc)"/>
+    <param if="$(eval arg('gain_mode') != '')" name="gain_control/mode" type="str" value="$(arg gain_mode)"/>
+    <param if="$(eval arg('manual_gain_voltage') != '')" name="gain_control/manual_target_voltage_v" type="double" value="$(arg manual_gain_voltage)"/>
+    <param if="$(eval arg('agc_target_min_v') != '')" name="gain_control/target_min_voltage_v" type="double" value="$(arg agc_target_min_v)"/>
+    <param if="$(eval arg('agc_target_max_v') != '')" name="gain_control/target_max_voltage_v" type="double" value="$(arg agc_target_max_v)"/>
+    <param if="$(eval arg('agc_step_v') != '')" name="gain_control/voltage_step_v" type="double" value="$(arg agc_step_v)"/>
+    <param if="$(eval arg('adc_safety_limit_v') != '')" name="gain_control/adc_safety_trigger_voltage_v" type="double" value="$(arg adc_safety_limit_v)"/>
   </node>
 </launch>

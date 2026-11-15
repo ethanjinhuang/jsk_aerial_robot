@@ -14,12 +14,15 @@ import tempfile
 import threading
 import time
 import xmlrpc.client
+import yaml
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--node-script', type=Path,
                         default=Path(__file__).resolve().parents[1] / 'scripts/sonic_teleop.py')
+    parser.add_argument('--motion-config', type=Path,
+                        help='Load real motion YAML into the isolated test node namespace')
     args = parser.parse_args()
     port = 11428
     try:
@@ -53,6 +56,13 @@ def main():
         from spinal.msg import ServoControlCmd
         rospy.init_node('sonic_motion_smoke', disable_signals=True)
         rospy.set_param('/use_sim_time', True)
+        settings = yaml.safe_load(args.motion_config.read_text()) if args.motion_config else {}
+        for key, value in settings.items():
+            rospy.set_param('/sonic_motion_under_test/' + key, value)
+        center = settings.get('servo_center', 2048.)
+        servo_range = settings.get('servo_range', 1024.)
+        amplitude = settings.get('auto_default_amplitude', 512.)
+        assert 0 < amplitude <= servo_range
         lock = threading.Lock()
         received = []
 
@@ -93,35 +103,39 @@ def main():
                 return [(t, value) for t, value in received if t >= begin + .06]
 
         def centered(rows):
-            assert len(rows) >= 3 and all(value == 2048 for _, value in rows), rows
+            assert len(rows) >= 3 and all(value == int(center) for _, value in rows), rows
 
         rows = send(.7, pressed=(3,))
-        assert len(rows) >= 20 and max(v for _, v in rows) > 2450 and min(v for _, v in rows) < 1650
+        assert len(rows) >= 20 and max(v for _, v in rows) > center+.75*amplitude and min(v for _, v in rows) < center-.75*amplitude
         intervals = sorted(b[0] - a[0] for a, b in zip(rows, rows[1:]))
         median = intervals[len(intervals) // 2]
         assert .01 < median < .04, median
-        assert all(1024 <= value <= 3072 for _, value in rows)
+        assert all(center-servo_range <= value <= center+servo_range for _, value in rows)
         print('PASS: automatic waveform and approximately 50 Hz output with paused ROS clock', flush=True)
         centered(send(.2, pressed=(1,)))
         centered(send(.2, pressed=(3,)))
         send(.1)
         centered(send(.15, pressed=(0,)))
-        for steering, target in [(-.25, 2304), (-1., 3072), (1., 1024), (0., 2048)]:
+        for steering in (-.25, -1., 1., 0.):
+            target = int(center-steering*servo_range)
             rows = send(.15, steering=steering)
             assert len(rows) >= 3 and all(v == target for _, v in rows), rows
         send(.12, pressed=(3,))
-        for steering, target in [(-1., 3072), (1., 1024)]:
+        for steering in (-1., 1.):
+            target = int(center-steering*servo_range)
             rows = send(.15, steering=steering)
             assert len(rows) >= 3 and all(v == target for _, v in rows), rows
         rows = send(.6, steering=-.25)
-        assert len(rows) >= 15 and max(v for _, v in rows) > 2750 and min(v for _, v in rows) < 1850, rows
+        bias_center = center+.25*servo_range
+        effective = min(amplitude,.75*servo_range)
+        assert len(rows) >= 15 and max(v for _, v in rows) > bias_center+.75*effective and min(v for _, v in rows) < bias_center-.75*effective, rows
         print('PASS: latched stop, direct manual positioning and direct auto center adjustment', flush=True)
         centered(send(.2, malformed=True))
         centered(send(.15, pressed=(3,)))
         send(.1)
         send(.1, pressed=(0,))
         rows = send(.2, steering=-1.)
-        assert rows[-1][1] == 3072
+        assert rows[-1][1] == int(center+servo_range)
         time.sleep(.55)
         with lock:
             tail = list(received[-5:])
@@ -129,7 +143,7 @@ def main():
         centered(send(.2, pressed=(3,)))
         send(.1)
         rows = send(.35, pressed=(3,))
-        assert any(abs(value - 2048) > 150 for _, value in rows)
+        assert any(abs(value - center) > .25*amplitude for _, value in rows)
         centered(send(.2, pressed=(1,)))
         print('PASS: malformed input and Joy loss stop motion; fresh messages cannot silently restart it', flush=True)
         node.send_signal(signal.SIGINT)

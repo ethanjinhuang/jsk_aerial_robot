@@ -193,11 +193,12 @@ roslaunch robotic_fish advance_teleop.launch dev:=pc
 
 声学采集与处理已经合并到 `robotic_fish_sonic`。趋声实验推荐采用
 [VIM4 集中控制、PC 只运行手柄](#65-周期趋声控制)的分工。
-`sonic_vim4.launch` 组合启动 IO、串口桥、运动和 Share 显示，不启动手柄或录包。
+`sonic_vim4.launch` 组合启动 IO、串口桥、运动和 Share 显示；PC 手柄单独运行，录包通过 `record:=true` 开启。
 `sonic_teleop.launch` 默认同时启动运动和手柄，使用 `enable_joy:=false` 时只启动运动。
 只运行一个运动命令发布者、一个手柄发布者和一个串口桥。
 
-录包建议在 VIM4 的另一终端运行，让录制时间与 ADC、运动状态使用同一台主机的时间：
+整机入口可用 `record:=true` 同时录包。独立 `record.launch` 仍用于已启动系统或调试录制，
+不要同时启动两个录包入口。录制在 VIM4 进行，与 ADC、运动状态使用同一台主机的时间：
 
 ```bash
 roslaunch robotic_fish record.launch
@@ -251,12 +252,51 @@ mkdir -p ~/bags
 roslaunch robotic_fish record.launch bag_prefix:=$HOME/bags/sonic
 ```
 
-不需录制时不启动 `record.launch`，也可使用该入口的 `enabled:=false`。
+整机录包默认关闭，可用 `record:=false` 保持关闭；独立录包入口也支持 `enabled:=false`。
 停止录包终端的 launch 后检查：
 
 ```bash
 rosbag info ~/sonic_*.bag
 ```
+
+### 5.4 日常入口与参数配置
+
+日常 VIM4 入口统一为 `sonic_vim4.launch`，PC 运行 `joy.launch`。
+原 `robotic_fish_sonic/io.launch` 的重复组合已移除，其“传感器＋桥＋显示”用途改用
+`sonic_vim4.launch enable_motion:=false`；需要保持原 IO 默认关闭普通增益调节时加 `gain_mode:=off`。
+
+| 配置 | 内容 |
+| --- | --- |
+| `robotic_fish/config/motion.yaml` | 舵机中心/范围、摆频/摆幅、手柄映射、超时、周期趋声 |
+| `robotic_fish_sonic/config/io.yaml` | ADC/DAC、校准、增益数值、保护与接口 |
+| `robotic_fish_sonic/config/acoustic.yaml` | 可选固定窗口分析，不参与运动节点的周期趋声配置 |
+
+数值参数按“显式命令行覆盖 > 所选 YAML > Python 缺省值”生效。未填写的覆盖参数为空，不再覆盖 YAML。
+自定义配置应从默认 YAML 复制后修改；选择配置是替换整份文件，缺失项会使用 Python 兜底值。
+IO 覆盖写入节点优先读取的规范名称，因此规范/旧名称的自定义 YAML 都可被显式命令行覆盖。
+私有参数树可能同时包含 YAML 旧名和覆盖后的新名，实际值以节点发布的锁存配置为准。
+场景选项单独管理：VIM4 默认 `gain_mode:=manual acoustic_steering:=true`；独立模块继承 YAML，
+随包 IO 默认为 `off`，运动 YAML 默认为关闭趋声。功能可用仍须按圆圈进入跟踪。
+
+| 整机参数 | 默认 | 作用 |
+| --- | --- | --- |
+| `io_config` | 声学包 `config/io.yaml` | IO 配置；兼容旧 `config`，同时提供时 `io_config` 优先 |
+| `motion_config` | 运动包 `config/motion.yaml` | 运动节点私有配置 |
+| `enable_motion` / `enable_bridge` | true / true | 分别启动运动或 spinal 桥 |
+| `enable_status_console` / `status_color` | true / auto | Share 显示及颜色 |
+| `record` / `record_diagnostics` | false / true | 是否录包、是否包含诊断 |
+| `bag_prefix` | `$HOME/sonic` | bag 文件前缀，目标目录须已存在 |
+
+```bash
+roslaunch robotic_fish sonic_vim4.launch record:=true bag_prefix:=$HOME/bags/fish
+roslaunch robotic_fish sonic_vim4.launch enable_motion:=false enable_bridge:=false gain_mode:=off
+roslaunch robotic_fish sonic_vim4.launch motion_config:=/absolute/path/motion.yaml auto_frequency:=1.0
+```
+
+各示例是独立启动方式，不应同时启动。关闭运动不会关闭增益节点的过压保护；只采集时没有运动节点发布 Share 快照。
+`sensor_io.launch`、`sonic_teleop.launch`、`quadrant.launch` 和 `status_console.launch` 保留独立调试用途。
+`robotic_fish_sonic/sonic.launch` 组合传感器与固定窗口分析，不自动加入日常运动入口。
+安装更新后重新 source 并重启相关节点；配置文件不热加载。使用旧 install 目录时也需清理其遗留的 `io.launch`。
 
 ## 6. 手柄控制
 
@@ -407,8 +447,8 @@ ROS 仿真时钟暂停或回拨不会暂停运动或手柄超时检查。
 | `status_local_echo` | false | 同时在运动节点所在终端显示 Share 快照 |
 | `amplitude_buttons` | `[6, 7]` | 调幅使能按键列表 |
 
-中心 2048、软件范围 ±1024、启动文件摆频 1.5 Hz、默认摆幅 512 和
-调幅速率 64 刻度／秒保留。直接 rosrun 时的摆频默认仍为 2 Hz。
+启动时从 `config/motion.yaml` 读取中心 2048、软件范围 ±512、摆频 1.5 Hz、默认摆幅 512 和
+调幅速率 64 刻度／秒。直接 rosrun 未加载配置时，Python 兜底范围仍为 ±1024、摆频为 2 Hz。
 位置、幅值和偏置使用舵机刻度，软件范围不等于已验证的机械限位。
 实际摆幅受当前中心位置的剩余余量限制；靠近位置边界时摆幅会缩小。
 常规日志显示模式切换和停止原因；详细数据通过 Share 查看。
@@ -467,7 +507,8 @@ PC 上不再启动运动节点。手柄设备可用 `joy_dev:=/dev/input/js1` �
 VIM4 启动日志打印 `Sonic host=...`、实际 ADC 最大年龄及未来时间戳容差；
 也可在任一端执行 `rosnode info /sonic_teleop_node`，确认节点 URI 指向 VIM4。
 
-若 VIM4 已单独运行 `robotic_fish_sonic io.launch`，可保留 IO，只在 VIM4 新终端运行：
+仅测试采集时，使用 `sonic_vim4.launch enable_motion:=false gain_mode:=off`。
+若已经单独启动传感器和串口桥，可只在 VIM4 新终端运行运动：
 
 ```bash
 roslaunch robotic_fish sonic_teleop.launch enable_joy:=false \
@@ -634,7 +675,7 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 
 按一下 **Share（`buttons[8]`）**，VIM4 运动节点生成一次快照，经
 `/robotic_fish/sonic/status_snapshot`（`std_msgs/String`）发送，
-由 **VIM4 的 `sonic_vim4.launch` 终端**打印（单独启动 IO 时为 `io.launch` 终端）。
+由 **VIM4 的 `sonic_vim4.launch` 终端**打印，单独调试可运行 `status_console.launch`。
 长按不重复打印，松开后再按可再次查看。
 快照不锁存，显示节点启动后等待下一次 Share，避免把旧结果当作新状态。
 周期统计、判断及快照均在 VIM4 完成，显示节点只打印快照。输出包括：
@@ -682,7 +723,7 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 公式右侧使用控制器记录的未舍入判据结果，代入数值仅按显示精度舍入。
 颜色用于辅助识别：数值青色，
 `LEFT` 黄色、`RIGHT` 洋红色、`STRAIGHT` 绿色，异常／停止红色，预热／历史结果黄色。
-`io.launch` 默认 `enable_status_console:=true status_color:=auto`：
+`sonic_vim4.launch` 默认 `enable_status_console:=true status_color:=auto`：
 交互终端启用颜色；重定向输出、`TERM=dumb` 或设置了 `NO_COLOR` 时输出纯文本。
 可显式设置 `status_color:=always` 或 `status_color:=never`，例如在 VIM4 强制彩色：
 
@@ -691,13 +732,13 @@ roslaunch robotic_fish sonic_vim4.launch acoustic_bias:=128 status_color:=always
 ```
 
 需要单独运行显示节点时，执行 `roslaunch robotic_fish_sonic status_console.launch color:=auto`；
-已有组合入口或 `io.launch` 显示节点时直接按 Share 即可。单机调试可给运动 launch 设置
+已有整机入口显示节点时直接按 Share 即可。单机调试可给运动 launch 设置
 `status_local_echo:=true`。快照话题始终是纯文本，`record.launch` 已包含它。
 
 周期均值与控制判断使用同一批数据，不是 ADC 的 `volt_raw_mean_1s`，也不会因查看而重算或重置相位。
-偏置分子为当前实际输出偏置；分母为允许设置的偏置绝对值上限 `servo_range`（默认 1024），
+偏置分子为当前实际输出偏置；分母为允许设置的偏置绝对值上限 `servo_range`（当前 YAML 为 512），
 各模式使用同一上限。在线调整声学 `bias` 不会改变分母。
-停止时显示 `(+0.0/1024.0)`（默认配置）。
+停止时当前 YAML 显示 `(+0.0/512.0)`。上方示例表格来自旧范围 1024 配置。
 首次进入跟踪尚未完成周期时显示 `UNAVAILABLE` 和 `WARMUP`，均值单元格为 `--`。
 停止后保留的周期结果标为 `HISTORICAL`，当前方向为 `STOPPED`；
 增益调整期间同样标为 `HISTORICAL`，当前方向为 `HOLDING`，表示继续摆尾并保持旧偏置；

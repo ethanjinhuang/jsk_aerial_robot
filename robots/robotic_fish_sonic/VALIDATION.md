@@ -1,5 +1,43 @@
 # robotic_fish_sonic 合并验证
 
+## 2026-11-15 启动入口与参数集中
+
+日常 VIM4 入口为 `robotic_fish/sonic_vim4.launch`，PC 继续单独运行 `joy.launch`。
+运动数值迁入 `robotic_fish/config/motion.yaml`，保留用户的中心 2048、范围 512、
+默认摆幅 512。IO、校准及保护数值仍由原 `config/io.yaml` 提供，校准 JSON 未修改。
+新配置目录已加入安装规则。
+
+- 整机入口直接组合传感器、串口桥、运动和显示，提供 `enable_motion`、
+  `enable_bridge`、`record`、`bag_prefix`、`io_config` 和 `motion_config`。
+  `io_config` 优先于旧 `config` 别名；VIM4 的手动增益和启用趋声属于显式场景默认。
+- 数值覆盖参数默认留空，保持所选 YAML。显式 IO 覆盖写入节点优先读取的规范名称，
+  避免规范 YAML 与旧名 CLI 的优先级倒置。零值、false 和旧 `enable_agc` 行为均测试。
+- 测试通过后删除纯重复组合 `robotic_fish_sonic/launch/io.launch`。
+  原 IO＋桥＋显示场景改为 `sonic_vim4.launch enable_motion:=false gain_mode:=off`。
+  独立采集、运动、固定窗口分析、Share 显示和录包入口均有独立用途，继续保留。
+  当前文档的旧调用已迁移，历史记录补充了迁移说明。
+
+验证结果：
+
+| 检查 | 结果 |
+| --- | --- |
+| 两包单元测试 | 运动包 75 项、传感器包 174 项，共 249 项通过 |
+| 真实 launch 解析 | 19 项，覆盖自定义 YAML、实际节点参数查找、别名、显式 0/false、模块关闭及录包 |
+| 默认行为对照 | 3 个原入口场景的节点及已有参数保持一致；未再写入的旧 `agc/enabled=false` 使用同义缺省值 |
+| 独立构建和安装 | 两包通过，安装目录为 `/tmp/fish-launch-refactor-check/install` |
+| 安装后入口展开 | 能找到安装后的 motion.yaml，范围为 512；开启录包为 7 个唯一节点，旧 io.launch 不再安装 |
+| 隔离 ROS 运动 | 安装后的程序加载实际 motion.yaml，验证波形、50 Hz 输出、±512 手动映射、停止锁存、超时与恢复 |
+| 隔离周期趋声与录包 | 1.5/2 Hz、两种方向符号、增益变化、在线调参、Share 显示通过；实际 record.launch 的 bag 回读通过 |
+| 差异格式 | `git diff --check` 通过 |
+
+单元测试日志为 `/tmp/fish_launch_refactor_motion_tests.log` 和
+`/tmp/fish_launch_refactor_sensor_tests.log`。ROS 日志为
+`/tmp/fish_launch_refactor_motion_ros.log`、`/tmp/fish_launch_refactor_cycle_ros.log`。
+通信测试仅在本机隔离 master 使用合成 Joy/ADC 和测试话题，不启动传感器硬件或串口桥，未驱动真实执行器。
+
+本次未更改运动算法、采集算法、消息/服务或保护判据。低端负 ADC 被增益控制拒绝的现有问题
+仍需独立修复；启动配置整理不会消除该报错。实际硬件联调仍需在确认配置后进行。
+
 ## 2026-11-14 电池供电重新校准
 
 完整实验、适用边界及重建命令见[电池校准报告](docs/calibration_20261114_battery.md)。

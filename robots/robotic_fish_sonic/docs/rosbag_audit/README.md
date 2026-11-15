@@ -76,7 +76,8 @@ flowchart LR
 代码提供的完整趋声实验入口是 `robotic_fish/sonic_vim4.launch`，
 另有指定话题录制入口 `robotic_fish/record.launch`，均不在声学包内。
 现场实际采用每项试验单独全量录包，并非使用这个指定话题 launch。
-`sonic_vim4.launch` 本身不录包；`robotic_fish_sonic/sonic.launch`
+审计当时的 `sonic_vim4.launch` 本身不录包；当前已支持 `record:=true`。
+`robotic_fish_sonic/sonic.launch`
 只组合 IO 与固定窗口声学处理，不包含运动和录制。
 `status_console.py` 只显示 Share 文本，不是记录器。
 

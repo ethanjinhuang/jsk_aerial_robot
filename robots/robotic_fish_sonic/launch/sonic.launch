@@ -7,13 +7,13 @@
   <arg name="enable_dac" default="true"/>
   <arg name="enable_gain_control" default="true"/>
   <arg name="enable_acoustic" default="true"/>
-  <arg name="enable_agc" default="false"/>
-  <arg name="gain_mode" default="off"/>
-  <arg name="manual_gain_voltage" default="0.0"/>
-  <arg name="agc_target_min_v" default="2.5"/>
-  <arg name="agc_target_max_v" default="3.0"/>
-  <arg name="agc_step_v" default="0.01"/>
-  <arg name="adc_safety_limit_v" default="4.00"/>
+  <arg name="enable_agc" default=""/>
+  <arg name="gain_mode" default=""/>
+  <arg name="manual_gain_voltage" default=""/>
+  <arg name="agc_target_min_v" default=""/>
+  <arg name="agc_target_max_v" default=""/>
+  <arg name="agc_step_v" default=""/>
+  <arg name="adc_safety_limit_v" default=""/>
   <arg name="model" default=""/>
   <arg name="window_s" default=""/>
   <arg name="gap_s" default=""/>

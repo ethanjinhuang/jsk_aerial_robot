@@ -7,16 +7,16 @@ Existing message/service fields and launch parameter names remain compatible.
 
 ## Manual joystick gain control
 
-Start IO and the joystick publisher in separate terminals:
+Start sensor IO and the joystick publisher in separate terminals:
 
 ```bash
-roslaunch robotic_fish_sonic io.launch dev:=vim4 gain_mode:=manual
-roslaunch robotic_fish sonic_teleop.launch
+roslaunch robotic_fish_sonic sensor_io.launch gain_mode:=manual
+roslaunch robotic_fish joy.launch
 ```
 
-`sonic_teleop.launch` also controls fish motion. For gain-only tests, start only
-`rosrun joy joy_node _dev:=/dev/input/js0` as the joystick publisher and use
-`sensor_io.launch gain_mode:=manual` for sensor IO without spinal.
+For full experiments use `robotic_fish/sonic_vim4.launch` on VIM4 and
+`robotic_fish/joy.launch` on the joystick PC. Motion is controlled by
+`sonic_teleop.launch`; it is not required for gain-only tests.
 Do not run two joystick publishers at once.
 
 The gain-control node subscribes directly to `/joy` (`gain_control/joy_topic`).
@@ -232,13 +232,14 @@ roslaunch robotic_fish_sonic sensor_io.launch \
 
 `/gain_control` is not started if either the ADC or DAC node is disabled.
 
-### 3.2 IO and embedded bridge: `io.launch`
+### 3.2 IO and embedded bridge: the system entry
 
 ```bash
-roslaunch robotic_fish_sonic io.launch dev:=vim4 gain_mode:=off
+roslaunch robotic_fish sonic_vim4.launch enable_motion:=false gain_mode:=off
 ```
 
-In addition to the three package nodes, this launch file includes:
+The redundant `robotic_fish_sonic/io.launch` has been removed after migration and testing.
+The system entry combines the sensor nodes, display and optional bridge directly:
 
 ```text
 spinal/launch/bridge.launch
@@ -251,7 +252,7 @@ Serial mode on the VIM4 starts `/rosserial_server` with:
 921600 baud
 ```
 
-Use `sensor_io.launch` when spinal is not needed. Otherwise, an unavailable embedded controller will cause repeated `Sync with device lost` warnings even if the ADC and DAC nodes are operating correctly.
+Use `sensor_io.launch` for package-only IO, or set `enable_bridge:=false` on the system entry when spinal is not needed. An unavailable embedded controller causes repeated `Sync with device lost` warnings even if ADC/DAC work correctly. The system entry also accepts `record:=true` and `bag_prefix:=...`; leave recording disabled when starting a separate recorder.
 
 ### 3.3 Common launch arguments
 
@@ -260,13 +261,15 @@ Use `sensor_io.launch` when spinal is not needed. Otherwise, an unavailable embe
 | `enable_adc` | `true` | Start the ADC node |
 | `enable_dac` | `true` | Start the DAC node |
 | `enable_gain_control` | `true` | Start gain control when both ADC and DAC are enabled |
-| `gain_mode` | `off` | Select `off`, `manual`, or `closed_loop` |
-| `manual_gain_voltage` | `0.0` | Target DAC voltage in manual mode |
-| `agc_target_min_v` | `2.5` | Lower raw-ADC target in closed-loop mode |
-| `agc_target_max_v` | `3.0` | Upper raw-ADC target in closed-loop mode |
-| `agc_step_v` | `0.01` | Normal closed-loop DAC adjustment step |
-| `adc_safety_limit_v` | `4.00` | Raw-ADC software safety threshold |
-| `enable_agc` | `false` | Deprecated compatibility argument; `true` selects closed-loop mode |
+| `gain_mode` | YAML (`off`) | Select `off`, `manual`, or `closed_loop`; the VIM4 scene explicitly defaults to `manual` |
+| `manual_gain_voltage` | YAML (`0.0`) | Explicit target override, written as `manual_target_voltage_v` |
+| `agc_target_min_v` | YAML (`2.5`) | Explicit lower target override, written as `target_min_voltage_v` |
+| `agc_target_max_v` | YAML (`3.0`) | Explicit upper target override, written as `target_max_voltage_v` |
+| `agc_step_v` | YAML (`0.01`) | Explicit step override, written as `voltage_step_v` |
+| `adc_safety_limit_v` | YAML (`4.00`) | Explicit raw-ADC threshold override, written as `adc_safety_trigger_voltage_v` |
+| `enable_agc` | inherit YAML | Deprecated compatibility argument; explicit `true` selects closed-loop mode |
+
+Unspecified overrides are empty and preserve YAML. Explicit numeric/boolean values override both canonical and legacy YAML keys, including zero and false. Canonical keys have node-read precedence; use the latched effective config for actual values when both spellings exist.
 
 New launch commands should use `gain_mode`. Do not combine `enable_agc:=true` with manual mode.
 
@@ -283,7 +286,7 @@ New launch commands should use `gain_mode`. Do not combine `enable_agc:=true` wi
 | Target group rate per channel | `20 Hz` |
 | Full-scale range | ADS1115 driver configuration of `±4.096 V` |
 
-The ADS1115 multiplexes and converts the three channels sequentially. A complete three-channel group is published at approximately 20 Hz, while the combined rate of the individual-sample topic is approximately 60 Hz.
+The ADS1115 multiplexes and converts the three channels sequentially. A complete three-channel group is published at approximately 20 Hz on `adc/samples`; no separate single-sample topic is published.
 
 ### 4.2 Timestamps
 
@@ -562,34 +565,22 @@ rostopic echo /diagnostics
 ## 8. Full-system startup
 
 For cycle-steering experiments, run `robotic_fish/sonic_vim4.launch` on VIM4,
-`robotic_fish/joy.launch` on the joystick PC, and `robotic_fish/record.launch`
-in another VIM4 terminal. See the [current system instructions](../../robotic_fish/README.md#65-周期趋声控制).
-The lower-level IO/motion launches below are an alternative single-machine setup;
-do not start them alongside the combined VIM4 launch.
-
-Terminal 1 — embedded bridge, ADC, DAC, and gain control:
+`robotic_fish/joy.launch` on the joystick PC. Enable recording on the system entry:
 
 ```bash
 source /home/khadas/ros/jsk_aerial_robot_ws/devel/setup.bash
-roslaunch robotic_fish_sonic io.launch \
-  dev:=vim4 \
-  gain_mode:=manual \
-  manual_gain_voltage:=0.20
+roslaunch robotic_fish sonic_vim4.launch record:=true
 ```
 
-Terminal 2 — joystick and sonic motion control:
+Joystick PC:
 
 ```bash
 source /home/khadas/ros/jsk_aerial_robot_ws/devel/setup.bash
-roslaunch robotic_fish sonic_teleop.launch
+roslaunch robotic_fish joy.launch
 ```
 
-Terminal 3 — rosbag recording:
-
-```bash
-source /home/khadas/ros/jsk_aerial_robot_ws/devel/setup.bash
-roslaunch robotic_fish record.launch
-```
+Alternatively leave `record:=false` and run `robotic_fish/record.launch` separately.
+See the [current system instructions](../../robotic_fish/README.md#54-日常入口与参数配置).
 
 `sonic_teleop` can publish a servo target as soon as joystick messages arrive. Secure the fish, keep the tail motion area clear, and verify stable spinal communication before starting the full system.
 

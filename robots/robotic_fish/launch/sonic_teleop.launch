@@ -2,54 +2,53 @@
 <launch>
   <arg name="enable_joy" default="true"/>
   <arg name="joy_dev" default="/dev/input/js0"/>
-  <arg name="auto_frequency" default="1.5"/>
-  <arg name="acoustic_steering" default="false"/>
-  <arg name="acoustic_threshold" default="0.1"/>
-  <arg name="acoustic_bias" default="256.0"/>
-  <arg name="acoustic_lr_voltage_offset_v" default="0.0"/>
-  <arg name="acoustic_max_age_s" default="0.5"/>
-  <arg name="acoustic_future_tolerance_s" default="0.05"/>
-  <arg name="left_bias_sign" default="-1"/>
-  <arg name="joy_timeout_s" default="0.5"/>
-  <arg name="update_rate" default="50.0"/>
+  <arg name="motion_config" default="$(find robotic_fish)/config/motion.yaml"/>
+  <!-- Empty overrides inherit the selected YAML. Explicit false/zero are valid. -->
+  <arg name="auto_frequency" default=""/>
+  <arg name="acoustic_steering" default=""/>
+  <arg name="acoustic_threshold" default=""/>
+  <arg name="acoustic_bias" default=""/>
+  <arg name="acoustic_lr_voltage_offset_v" default=""/>
+  <arg name="acoustic_max_age_s" default=""/>
+  <arg name="acoustic_future_tolerance_s" default=""/>
+  <arg name="left_bias_sign" default=""/>
+  <arg name="joy_timeout_s" default=""/>
+  <arg name="update_rate" default=""/>
   <arg name="joy_autorepeat_rate" default="20.0"/>
-  <arg name="steering_axis" default="2"/>
-  <arg name="amplitude_decrease_axis" default="3"/>
-  <arg name="amplitude_increase_axis" default="4"/>
-  <arg name="stop_button" default="1"/>
-  <arg name="auto_button" default="3"/>
-  <arg name="manual_button" default="0"/>
-  <arg name="tracking_button" default="2"/>
-  <arg name="status_button" default="8"/>
-  <arg name="status_local_echo" default="false"/>
-  <arg name="amplitude_buttons" default="[6, 7]"/>
+  <arg name="steering_axis" default=""/>
+  <arg name="amplitude_decrease_axis" default=""/>
+  <arg name="amplitude_increase_axis" default=""/>
+  <arg name="stop_button" default=""/>
+  <arg name="auto_button" default=""/>
+  <arg name="manual_button" default=""/>
+  <arg name="tracking_button" default=""/>
+  <arg name="status_button" default=""/>
+  <arg name="status_local_echo" default=""/>
+  <arg name="amplitude_buttons" default=""/>
 
   <node pkg="robotic_fish" type="sonic_teleop.py" name="sonic_teleop_node" output="screen">
-    <param name="joy_dead_zone" value="0.1"/>
-    <param name="servo_center" value="2048.0"/>
-    <param name="servo_range" value="1024.0"/>
-    <param name="auto_frequency" value="$(arg auto_frequency)"/>
-    <param name="acoustic_steering/enabled" type="bool" value="$(arg acoustic_steering)"/>
-    <param name="acoustic_steering/threshold" value="$(arg acoustic_threshold)"/>
-    <param name="acoustic_steering/bias" value="$(arg acoustic_bias)"/>
-    <param name="acoustic_steering/lr_voltage_offset_v" type="double" value="$(arg acoustic_lr_voltage_offset_v)"/>
-    <param name="acoustic_steering/max_age_s" type="double" value="$(arg acoustic_max_age_s)"/>
-    <param name="acoustic_steering/future_tolerance_s" type="double" value="$(arg acoustic_future_tolerance_s)"/>
-    <param name="acoustic_steering/left_bias_sign" type="int" value="$(arg left_bias_sign)"/>
-    <param name="auto_default_amplitude" value="512.0"/>
-    <param name="auto_amplitude_rate" value="64.0"/>
-    <param name="joy_timeout_s" value="$(arg joy_timeout_s)"/>
-    <param name="update_rate" value="$(arg update_rate)"/>
-    <param name="steering_axis" type="int" value="$(arg steering_axis)"/>
-    <param name="amplitude_decrease_axis" type="int" value="$(arg amplitude_decrease_axis)"/>
-    <param name="amplitude_increase_axis" type="int" value="$(arg amplitude_increase_axis)"/>
-    <param name="stop_button" type="int" value="$(arg stop_button)"/>
-    <param name="auto_button" type="int" value="$(arg auto_button)"/>
-    <param name="manual_button" type="int" value="$(arg manual_button)"/>
-    <param name="tracking_button" type="int" value="$(arg tracking_button)"/>
-    <param name="status_button" type="int" value="$(arg status_button)"/>
-    <param name="status_local_echo" type="bool" value="$(arg status_local_echo)"/>
-    <rosparam param="amplitude_buttons" subst_value="true">$(arg amplitude_buttons)</rosparam>
+    <rosparam command="load" file="$(arg motion_config)"/>
+    <param name="motion_config_file" type="str" value="$(arg motion_config)"/>
+    <param if="$(eval arg('auto_frequency') != '')" name="auto_frequency" type="double" value="$(arg auto_frequency)"/>
+    <param if="$(eval arg('acoustic_steering') != '')" name="acoustic_steering/enabled" type="bool" value="$(arg acoustic_steering)"/>
+    <param if="$(eval arg('acoustic_threshold') != '')" name="acoustic_steering/threshold" type="double" value="$(arg acoustic_threshold)"/>
+    <param if="$(eval arg('acoustic_bias') != '')" name="acoustic_steering/bias" type="double" value="$(arg acoustic_bias)"/>
+    <param if="$(eval arg('acoustic_lr_voltage_offset_v') != '')" name="acoustic_steering/lr_voltage_offset_v" type="double" value="$(arg acoustic_lr_voltage_offset_v)"/>
+    <param if="$(eval arg('acoustic_max_age_s') != '')" name="acoustic_steering/max_age_s" type="double" value="$(arg acoustic_max_age_s)"/>
+    <param if="$(eval arg('acoustic_future_tolerance_s') != '')" name="acoustic_steering/future_tolerance_s" type="double" value="$(arg acoustic_future_tolerance_s)"/>
+    <param if="$(eval arg('left_bias_sign') != '')" name="acoustic_steering/left_bias_sign" type="int" value="$(arg left_bias_sign)"/>
+    <param if="$(eval arg('joy_timeout_s') != '')" name="joy_timeout_s" type="double" value="$(arg joy_timeout_s)"/>
+    <param if="$(eval arg('update_rate') != '')" name="update_rate" type="double" value="$(arg update_rate)"/>
+    <param if="$(eval arg('steering_axis') != '')" name="steering_axis" type="int" value="$(arg steering_axis)"/>
+    <param if="$(eval arg('amplitude_decrease_axis') != '')" name="amplitude_decrease_axis" type="int" value="$(arg amplitude_decrease_axis)"/>
+    <param if="$(eval arg('amplitude_increase_axis') != '')" name="amplitude_increase_axis" type="int" value="$(arg amplitude_increase_axis)"/>
+    <param if="$(eval arg('stop_button') != '')" name="stop_button" type="int" value="$(arg stop_button)"/>
+    <param if="$(eval arg('auto_button') != '')" name="auto_button" type="int" value="$(arg auto_button)"/>
+    <param if="$(eval arg('manual_button') != '')" name="manual_button" type="int" value="$(arg manual_button)"/>
+    <param if="$(eval arg('tracking_button') != '')" name="tracking_button" type="int" value="$(arg tracking_button)"/>
+    <param if="$(eval arg('status_button') != '')" name="status_button" type="int" value="$(arg status_button)"/>
+    <param if="$(eval arg('status_local_echo') != '')" name="status_local_echo" type="bool" value="$(arg status_local_echo)"/>
+    <rosparam if="$(eval arg('amplitude_buttons') != '')" param="amplitude_buttons" subst_value="true">$(arg amplitude_buttons)</rosparam>
   </node>
 
   <include if="$(arg enable_joy)" file="$(find robotic_fish)/launch/joy.launch">

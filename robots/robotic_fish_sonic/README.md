@@ -61,7 +61,11 @@ ROS 话题和服务地址、消息字段、校准 JSON 和默认保护参数保�
 
 ## 启动
 
-统一启动 ADC、DAC、增益控制和声学比较：
+日常实验使用 `roslaunch robotic_fish sonic_vim4.launch`，需要同时录包时加 `record:=true`。
+运动数值集中在 `robotic_fish/config/motion.yaml`，传感器数值仍在本包 `config/io.yaml`；
+配置路径和模块开关见[整机入口与配置](../robotic_fish/README.md#54-日常入口与参数配置)。
+
+独立调试 ADC、DAC、增益控制和固定窗口声学比较：
 
 ```bash
 roslaunch robotic_fish_sonic sonic.launch
@@ -76,8 +80,12 @@ roslaunch robotic_fish_sonic sonic.launch
 | `sensor_io.launch` | ADC、DAC、增益控制 |
 | `quadrant.launch` | 声学比较和可选方向模型 |
 | `sonic.launch` | IO 和声学处理 |
-| `io.launch` | spinal 桥和 IO，沿用原用途 |
-| `robotic_fish/sonic_vim4.launch` | 在 VIM4 组合运行 IO、桥、运动控制和 Share 显示 |
+| `status_console.launch` | 独立显示 Share 快照 |
+| `robotic_fish/sonic_vim4.launch` | VIM4 整机入口，可关闭运动/桥、可选录包 |
+
+重复组合 `io.launch` 已移除。原 IO＋桥＋显示用法改为
+`roslaunch robotic_fish sonic_vim4.launch enable_motion:=false gain_mode:=off`。
+仅需本包传感器时继续使用 `sensor_io.launch`。
 
 `sonic.launch` 的 `enable_adc`、`enable_dac`、`enable_gain_control`、
 `enable_acoustic` 可分别关闭模块。仅处理外部 ADC 消息时：
@@ -105,10 +113,10 @@ roslaunch robotic_fish joy.launch
 周期统计、运动相位、时间检查及 Share 快照都在 VIM4；PC 的 Joy 时间戳不参与控制超时计算。
 手动增益默认目标为 0 V，按原十字键方式调整，或指定已经确认的 `manual_gain_voltage`。
 仍由 Circle 进入跟踪、Cross 停止。原 `sonic_teleop.launch` 的组合方式保留；
-VIM4 已有 `io.launch` 时，可仅启动运动：`sonic_teleop.launch enable_joy:=false acoustic_steering:=true`。
+VIM4 已单独运行传感器和桥时，可仅启动运动：`sonic_teleop.launch enable_joy:=false acoustic_steering:=true`。
 每台设备的操作与切换说明见[周期趋声控制](../robotic_fish/README.md#65-周期趋声控制)。
 只运行一个手柄发布者、一个运动命令发布者和一个 spinal 桥。
-录包建议在 VIM4 另开终端运行 `roslaunch robotic_fish record.launch`，
+录包可在整机入口设置 `record:=true`，或在 VIM4 另开终端运行 `roslaunch robotic_fish record.launch`，只选一种，
 让录制时间与采样、控制时间同源；PC 录包仍需要考虑两端时钟偏差。
 录包默认包含连续运动状态、三通道周期结果、锁存控制配置、在线调参事件、诊断和 ROS 日志，
 不依赖 Share。详见[录包字段与时序说明](../robotic_fish/README.md#53-控制程序选择)。
@@ -186,7 +194,7 @@ Share 的三通道表只显示原始瞬时电压、原始周期均值、校准�
 校准越界回退／未知增益同样保持摆尾与上一偏置并暂停决策，Share 显示具体原因及
 `HOLDING`；数据有效后以 `data_warmup` 重建完整周期并自动恢复判断。
 首次进入跟踪而数据尚不可用时，以零偏置等待。时间检查、饱和、Cross 和 Joy 超时等停止规则仍生效。
-VIM4 运动节点按 Share 发布纯文本快照，组合入口及 `io.launch` 默认启动 `status_console.py`，
+VIM4 运动节点按 Share 发布纯文本快照，整机入口默认启动 `status_console.py`，
 在 VIM4 终端用对齐表格显示三通道瞬时电压、上一完整周期均值、差值及方向。
 `status_color:=auto` 自动检测终端颜色，`always` 强制彩色，`never` 关闭；
 `enable_status_console:=false` 可关闭显示。独立显示可运行

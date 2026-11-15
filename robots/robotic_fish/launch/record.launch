@@ -10,7 +10,7 @@
         type="record"
         name="sonic_bag_recorder"
         output="screen"
-        args="-o $(arg bag_prefix)
+        args="-o &quot;$(arg bag_prefix)&quot;
               /robotic_fish/adc/samples
               /robotic_fish/dac/state
               /robotic_fish/gain_control/state
