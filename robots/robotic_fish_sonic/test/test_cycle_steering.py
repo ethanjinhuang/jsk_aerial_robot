@@ -8,7 +8,7 @@ from robotic_fish_sonic.cycle_steering import CycleSteering, SteeringFault
 
 def batch(t, left=2., right=1., head=1., **changes):
     samples = []
-    for channel, value in enumerate((head, left, right)):
+    for channel, value in enumerate((left, right, head)):
         data = dict(channel_id=channel, timestamp=NS(to_sec=lambda t=t: t),
                     volt_raw=value * .5, volt_cali=value, status_cali=True, cali_id='test',
                     adc_code=100, status_dac_feedback=True, dac_volt=.9)
@@ -63,15 +63,15 @@ class CycleTests(unittest.TestCase):
         self.assertAlmostEqual(first.head_mean, 1.)
         self.assertAlmostEqual(first.left_mean, 2.)
         self.assertAlmostEqual(first.right_mean, 1.)
-        self.assertEqual(first.raw_means, (.5, 1., .5))
+        self.assertEqual(first.raw_means, (1., .5, .5))
         self.assertEqual(first.sample_count, 10)
         self.fill(e, .5, 1., left=1., right=3.)
         second = e.evaluate(101.)
         self.assertAlmostEqual(second.head_mean, 1.3)
         self.assertAlmostEqual(second.left_mean, 1.)
         self.assertAlmostEqual(second.right_mean, 3.)
-        self.assertAlmostEqual(second.raw_means[0], .65)
-        self.assertEqual(second.raw_means[1:], (.5, 1.5))
+        self.assertEqual(second.raw_means[:2], (.5, 1.5))
+        self.assertAlmostEqual(second.raw_means[2], .65)
         self.assertEqual(second.sample_count, 10)
 
     def test_steering_offset_does_not_change_raw_or_file_calibrated_cycle_means(self):
@@ -82,7 +82,7 @@ class CycleTests(unittest.TestCase):
         e.configure(.1, 128., -1.5)
         self.fill(e, .5, 1.)
         after = e.evaluate(101.)
-        self.assertEqual(before.raw_means, (.5, 1., .5))
+        self.assertEqual(before.raw_means, (1., .5, .5))
         self.assertEqual(after.raw_means, before.raw_means)
         self.assertEqual((after.head_mean, after.left_mean, after.right_mean),
                          (before.head_mean, before.left_mean, before.right_mean))
@@ -104,7 +104,7 @@ class CycleTests(unittest.TestCase):
                 self.fill(e)
                 result = e.evaluate(100.5)
                 self.assertTrue(math.isnan(result.raw_means[0]))
-                self.assertEqual(result.raw_means[1:], (1., .5))
+                self.assertEqual(result.raw_means[1:], (.5, .5))
                 self.assertEqual(result.bias, -256.)
 
     def test_threshold_sign_and_neutral(self):

@@ -5,6 +5,8 @@ import re
 import sys
 import textwrap
 
+from robotic_fish_sonic.channel_mapping import channel_mapping
+
 
 WIDTH = 78
 TITLE = 'SONIC STATUS / SHARE'
@@ -52,8 +54,10 @@ def format_status(data):
     if data['mode'] == 'stopped':
         row('Reason', data['reason'])
     lines.append(border)
+    channels = channel_mapping()
     lines.append('| %-22s | %15s | %15s | %13s |' %
-                 ('Voltage [V]', 'Head (ADC0)', 'Left (ADC1)', 'Right (ADC2)'))
+                 ('Voltage [V]', 'Head (ADC%d)' % channels['head'],
+                  'Left (ADC%d)' % channels['left'], 'Right (ADC%d)' % channels['right']))
     voltages('Raw instant', data['raw'])
     voltages('Raw cycle mean', data['raw_means'])
     voltages('Calibrated cycle mean', data['means'])

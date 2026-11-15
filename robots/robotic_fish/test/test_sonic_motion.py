@@ -461,7 +461,7 @@ class RosAdapterTests(unittest.TestCase):
                               volt_raw=value*.5,
                               status_cali=True,cali_id='test',adc_code=100,
                               status_dac_feedback=True,dac_volt=.9)
-                           for i,value in enumerate((1.,2.,1.))])
+                           for i,value in enumerate((2.,1.,1.))])
 
     def test_acoustic_decision_and_atomic_runtime_parameters(self):
         module,ros,clock,published=self.make_node({'~acoustic_steering/enabled':True})
@@ -509,8 +509,8 @@ class RosAdapterTests(unittest.TestCase):
                 for i in range(11):
                     clock[0] = i * .05
                     frame = self.adc(clock[0])
-                    frame.samples[1].volt_cali = left
-                    frame.samples[2].volt_cali = right
+                    frame.samples[0].volt_cali = left
+                    frame.samples[1].volt_cali = right
                     node._adcCallback(frame)
                     self.send_status_joy(node, (2,) if i == 0 else ())
                 self.assertEqual(node.controller.applied_bias, bias)
@@ -604,7 +604,7 @@ class RosAdapterTests(unittest.TestCase):
             frame = self.adc(clock[0])
             for s in frame.samples:
                 s.dac_volt = 1.
-                s.volt_cali = (1., 1., 3.)[s.channel_id]
+                s.volt_cali = (1., 3., 1.)[s.channel_id]
             if i == 11:
                 frame.samples[0].dac_volt = .9  # Change part way through a group.
             node._adcCallback(frame)
@@ -666,7 +666,7 @@ class RosAdapterTests(unittest.TestCase):
                                 s.status_dac_feedback, s.dac_volt = False, float('nan')
                     elif i >= 31:
                         for s in frame.samples:
-                            s.volt_cali = (1., 1., 3.)[s.channel_id]
+                            s.volt_cali = (1., 3., 1.)[s.channel_id]
                     node._adcCallback(frame)
                     self.send_status_joy(node, (8,) if i in (12, 32) else ())
                     self.assertEqual((node.controller.mode, node.controller.auto_epoch), ('tracking', 0.))
@@ -729,7 +729,7 @@ class RosAdapterTests(unittest.TestCase):
         epoch, cycle = node.controller.auto_epoch, node.acoustic.cycle
         clock[0] = .52
         newest = self.adc(.52)
-        newest.samples[0].volt_cali = 4.
+        newest.samples[2].volt_cali = 4.
         node._adcCallback(newest)
         self.send_status_joy(node, (8,))
         report = self.status_reports(ros)[-1]
@@ -753,6 +753,28 @@ class RosAdapterTests(unittest.TestCase):
         self.assertRegex(report, r'Reason\s*:\s*stop_button')
         self.assertIn('(+0.0/1024.0)', report)
         self.assertEqual([message for message in published if hasattr(message, 'cmd')][-1].cmd, [2048])
+
+    def test_share_aligns_distinct_raw_and_calibrated_values_by_direction(self):
+        module, ros, clock, _ = self.make_node({'~acoustic_steering/enabled': True})
+        with patch.dict(sys.modules, module._mock_modules):
+            node = module.Teleop()
+        for i in range(11):
+            clock[0] = i * .05
+            frame = self.adc(clock[0])
+            for sample in frame.samples:
+                sample.volt_raw = (.25, .5, .75)[sample.channel_id]
+                sample.volt_cali = (3., 1., 2.)[sample.channel_id]
+            frame.samples.reverse()
+            node._adcCallback(frame)
+            self.send_status_joy(node, (2,) if i == 0 else ())
+        self.send_status_joy(node, (8,))
+        report = self.status_reports(ros)[-1]
+        self.assertRegex(report, r'Head \(ADC2\).*Left \(ADC0\).*Right \(ADC1\)')
+        for row in ('Raw instant', 'Raw cycle mean'):
+            self.assertRegex(report, row + r'\s*\|\s*0.75000\s*\|\s*0.25000\s*\|\s*0.50000')
+        self.assertRegex(report, r'Calibrated cycle mean\s*\|\s*2.00000\s*\|\s*3.00000\s*\|\s*1.00000')
+        self.assertEqual(node.acoustic.last_decision.bias, -256.)
+        self.assertEqual(node.acoustic.last_decision.raw_means, (.25, .5, .75))
 
     def test_share_works_with_tracking_disabled_and_marks_missing_or_stale_data(self):
         module, ros, clock, _ = self.make_node()
@@ -828,7 +850,9 @@ class RosAdapterTests(unittest.TestCase):
         configs = [m for m in published if hasattr(m, 'config_json')]
         self.assertEqual(len(configs), 1)
         values = json.loads(configs[0].config_json)
-        self.assertEqual(values['schema_version'], 4)
+        self.assertEqual(values['schema_version'], 5)
+        self.assertEqual(values['settings']['channel_layout'], 'left_right_head')
+        self.assertEqual(values['settings']['hydrophone_channels'], {'head': 2, 'left': 0, 'right': 1})
         self.assertEqual(values['settings']['acoustic_steering']['difference_reference'], 'channel_mean')
         self.assertEqual(values['settings']['acoustic_steering']['voltage_offset_reference'], 'left_minus_right')
         self.assertTrue(values['settings']['acoustic_steering']['threshold_inclusive'])

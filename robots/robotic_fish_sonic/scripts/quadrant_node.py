@@ -6,6 +6,8 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from robotic_fish_sonic.msg import AdcSampleArray
 from robotic_fish_sonic.msg import QuadrantProbabilities, ChannelComparison
 from robotic_fish_sonic.acoustic_core import CLASSES, Estimator, Model, Status
+from robotic_fish_sonic.channel_mapping import channel_mapping
+from robotic_fish_sonic.runtime_config import ConfigRecorder
 
 
 class Node:
@@ -16,6 +18,13 @@ class Node:
                                 rospy.get_param('~gap_s', .2),
                                 rospy.get_param('~low_signal_v', .001),
                                 rospy.get_param('~future_tolerance_s', .05))
+        self.config_recorder = ConfigRecorder('acoustic_quadrants')
+        self.config_recorder.publish(dict(
+            channel_layout=self.engine.channel_layout,
+            hydrophone_channels=channel_mapping(self.engine.channel_layout),
+            window_s=self.engine.window_s, gap_s=self.engine.gap_s,
+            low_signal_v=self.engine.low_signal_v,
+            future_tolerance_s=self.engine.future_tolerance_s, model=path))
         self.lock = threading.Lock()
         self.pub = rospy.Publisher('~probabilities', QuadrantProbabilities, queue_size=20)
         self.comparison_pub = rospy.Publisher('~comparison', ChannelComparison, queue_size=20)
@@ -67,7 +76,8 @@ class Node:
             diagnostic.message = ', '.join(flags) if flags else 'Channel comparison active'
             if result['status'] & Status.MODEL_UNAVAILABLE:
                 diagnostic.message += '; MODEL_UNAVAILABLE: comparison only, direction probabilities unavailable'
-            diagnostic.values = [KeyValue(key, str(result[key])) for key in ('model_id', 'has_estimate')]
+            diagnostic.values = [KeyValue(key, str(result[key])) for key in
+                                 ('model_id', 'has_estimate', 'channel_layout', 'hydrophone_channels')]
             diagnostic.values += [KeyValue(key, str(result['comparison'].get(key, 0))) for key in
                                   ('has_comparison', 'reliable', 'status')]
             array = DiagnosticArray()

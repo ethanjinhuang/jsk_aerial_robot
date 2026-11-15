@@ -7,8 +7,10 @@ from robotic_fish_sonic.acoustic_core import CLASSES, FEATURES, Model, Estimator
 
 
 def batch(t, values=(1., 2., 1.), old=False, calibrated=True):
+    """Directional head/left/right values encoded using current physical wiring."""
     samples = []
-    for channel, value in enumerate(values):
+    head, left, right = values
+    for channel, value in enumerate((left, right, head)):
         stamp = NS(sec=int(t), nanosec=int((t-int(t))*1e9))
         if old:
             samples.append(NS(channel=channel, header=NS(stamp=stamp), calibrated_voltage=value,

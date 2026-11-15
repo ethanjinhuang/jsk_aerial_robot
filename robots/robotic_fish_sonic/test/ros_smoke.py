@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Isolated ROS transport smoke test; synthetic input/model, no hardware nodes."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -30,7 +31,7 @@ def main():
             raise RuntimeError('roscore startup timeout')
         import rospy
         from robotic_fish_sonic.msg import AdcSample, AdcSampleArray
-        from robotic_fish_sonic.msg import QuadrantProbabilities, ChannelComparison
+        from robotic_fish_sonic.msg import QuadrantProbabilities, ChannelComparison, RuntimeConfig
         from robotic_fish_sonic.acoustic_core import Estimator, Status
         from diagnostic_msgs.msg import DiagnosticArray
         from quadrant_node import Node
@@ -42,6 +43,8 @@ def main():
         received = []
         diagnostics = []
         comparisons = []
+        configs = []
+        config_sub = rospy.Subscriber('/robotic_fish/gain_control/config', RuntimeConfig, configs.append)
         comparison_sub = rospy.Subscriber('~comparison', ChannelComparison, comparisons.append)
         diagnostic_sub = rospy.Subscriber('/diagnostics', DiagnosticArray, diagnostics.append)
         sub = rospy.Subscriber('~probabilities', QuadrantProbabilities, received.append)
@@ -52,7 +55,7 @@ def main():
             time.sleep(.02)
         for _ in range(12):
             message = AdcSampleArray()
-            for channel, voltage in enumerate([1., 2., 1.]):
+            for channel, voltage in enumerate([2., 1., 1.]):
                 sample = AdcSample()
                 sample.timestamp = rospy.Time.now()
                 sample.channel_id = channel
@@ -68,6 +71,10 @@ def main():
         updates = [r for r in received if r.updated]
         assert len(updates) == 12, len(updates)
         last = updates[-1]
+        acoustic_configs = [json.loads(m.config_json) for m in configs if m.device == 'acoustic_quadrants']
+        assert acoustic_configs, 'late subscriber missed latched acoustic configuration'
+        assert acoustic_configs[-1]['settings']['channel_layout'] == 'left_right_head'
+        assert acoustic_configs[-1]['settings']['hydrophone_channels'] == {'head': 2, 'left': 0, 'right': 1}
         assert last.header.frame_id == 'fish_base_link'
         assert last.status & last.CALIBRATION_FALLBACK
         assert abs(last.probability_left + last.probability_right - 1) < 1e-12
@@ -131,6 +138,7 @@ def main():
             time.sleep(.01)
         print('PASS: future input holds original stamp, stays unreliable on heartbeat, then rebuilds a reliable window')
         comparison_sub.unregister()
+        config_sub.unregister()
         diagnostic_sub.unregister()
         sub.unregister()
         pub.unregister()

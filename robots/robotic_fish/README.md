@@ -705,7 +705,8 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 `compensated_voltage_difference` 保存补偿后的电压差，
 `compensated_difference` 为最近决策使用的补偿后相对差值，两个差值均以两侧平均值为分母。
 消息和服务反馈通过 `difference_reference=channel_mean` 标明基准；数值仍为比例，`0.15` 表示 15%。
-锁存配置 `schema_version=4`，保存相同基准和 `threshold_inclusive=true`，
+锁存配置 `schema_version=5`，记录 `settings.channel_layout=left_right_head` 和
+`settings.hydrophone_channels={head: 2, left: 0, right: 1}`，并保存相同基准和 `threshold_inclusive=true`，
 并以 `voltage_offset_reference=left_minus_right` 标明补偿直接作用于电压差。
 旧版配置版本 3 的同名补偿字段表示每个通道的调整量，分析旧 bag 时应区分。
 `decision_updated` 仅在新决策时为真。停止后可保留上一决策的数值和窗口时间，
@@ -724,7 +725,7 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 
 - 当前运动模式、声学状态和判断方向；方向行同时显示 `bias=(当前输出偏置/修改上限)`。
 - `Sound mode` 显示当前生效的 FOLLOW／AVOID 和 `left_bias_sign`；待生效符号不同时额外显示 `Pending mode`，不会把请求值误当作已生效值。
-- ADC 数据质量，以及 ADC0／ADC1／ADC2（头／左／右）的最新原始电压。
+- ADC 数据质量，以及前／左／右（ADC2／ADC0／ADC1）的最新原始电压。
 - `Raw cycle mean` 为上一完整摆尾周期内三个通道的原始电压均值。
 - `Calibrated cycle mean` 为同一批采样经校准文件处理后的电压均值，先校准每次采样再平均。
 - `LR offset [V]` 为最近决策使用的电压补偿；有待生效补偿时才增加 `Pending LR [V]`。
@@ -751,7 +752,7 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 | Direction       : LEFT; bias=(-128.0/512.0)                                |
 | ADC quality     : valid                                                    |
 +----------------------------------------------------------------------------+
-| Voltage [V]            |     Head (ADC0) |     Left (ADC1) |  Right (ADC2) |
+| Voltage [V]            |     Head (ADC2) |     Left (ADC0) |  Right (ADC1) |
 | Raw instant            |         0.50000 |         0.70000 |       0.40000 |
 | Raw cycle mean         |         0.49000 |         0.68000 |       0.38000 |
 | Calibrated cycle mean  |         0.50000 |         0.70000 |       0.40000 |

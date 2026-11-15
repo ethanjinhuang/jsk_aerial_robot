@@ -42,7 +42,9 @@ def verify_recording(directory):
     assert recorded['/rosout'], 'record.launch did not record ROS logs'
     configs = [json.loads(m.config_json) for m in recorded['config']]
     assert all(c['settings']['joy_timeout_action'] == 'continue' for c in configs)
-    assert all(c['schema_version'] == 4 and
+    assert all(c['schema_version'] == 5 and
+               c['settings']['channel_layout'] == 'left_right_head' and
+               c['settings']['hydrophone_channels'] == {'head': 2, 'left': 0, 'right': 1} and
                c['settings']['acoustic_steering']['difference_reference'] == 'channel_mean' and
                c['settings']['acoustic_steering']['voltage_offset_reference'] == 'left_minus_right' and
                c['settings']['acoustic_steering']['threshold_inclusive'] for c in configs)
@@ -209,7 +211,7 @@ def main():
                                              status_dac_feedback=values['gain_known'],
                                              dac_volt=(values['gain'] + (.05 if values['mixed_gain'] and i == 0 else 0.)
                                                        if values['gain_known'] else float('nan')))
-                                   for i, v in enumerate((1., values['left'], values['right']))]
+                                   for i, v in enumerate((values['left'], values['right'], 1.))]
                         adc_pub.publish(AdcSampleArray(samples=samples))
                     finish.wait(.025)
 

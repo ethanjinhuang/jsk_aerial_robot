@@ -13,6 +13,7 @@ from std_msgs.msg import String
 
 from robotic_fish.sonic_motion import SonicController
 from robotic_fish_sonic.acoustic_core import adapt, Status
+from robotic_fish_sonic.channel_mapping import DEFAULT_CHANNEL_LAYOUT, channel_mapping, head_left_right
 from robotic_fish_sonic.cycle_steering import DIFFERENCE_REFERENCE, SteeringSettings, steering_direction
 from robotic_fish_sonic.msg import AdcSampleArray, SonicMotionState, RuntimeConfig, AcousticSteeringEvent
 from robotic_fish_sonic.status_display import format_status, write_snapshot
@@ -164,7 +165,8 @@ class Teleop:
     def _publishConfig(self):
         """Latched effective values, including pending settings for late recorders."""
         c = self.controller
-        settings = dict(servo_center=c.motion.center, servo_range=c.motion.servo_range,
+        settings = dict(channel_layout=DEFAULT_CHANNEL_LAYOUT, hydrophone_channels=channel_mapping(),
+                        servo_center=c.motion.center, servo_range=c.motion.servo_range,
                         servo_index=0, auto_frequency=c.frequency,
                         auto_default_amplitude=c.default_amplitude, auto_amplitude=self._initial_amplitude,
                         auto_amplitude_rate=c.amplitude_rate, joy_timeout_s=c.joy_timeout_s,
@@ -185,7 +187,7 @@ class Teleop:
             a = self.acoustic
             settings['acoustic_steering'].update(vars(a.settings), left_bias_sign=a.left_bias_sign,
                 gap_s=a.gap_s, low_signal_v=a.low_signal_v, max_bias=a.max_bias)
-        payload = json.dumps(dict(schema_version=4, host=socket.gethostname(),
+        payload = json.dumps(dict(schema_version=5, host=socket.gethostname(),
             started_ros_s=self._started_ros, started_monotonic_s=self._started_monotonic,
             settings=settings, applied_request_id=self._applied_request_id,
             pending_request=None if self._pending_request is None else dict(
@@ -384,7 +386,7 @@ class Teleop:
         data['quality'] = self._adcStatus(now, rospy.Time.now().to_sec())['quality']
         if self._latest_adc_group is not None:
             samples = sorted(self._latest_adc.samples, key=lambda s: s.channel_id)
-            data['raw'] = [getattr(sample, 'volt_raw', float('nan')) for sample in samples]
+            data['raw'] = head_left_right([getattr(sample, 'volt_raw', float('nan')) for sample in samples])
         decision = None if self.acoustic is None else self.acoustic.last_decision
         active, _, direction = self._directions(state)
         if self.acoustic is not None:
@@ -395,7 +397,7 @@ class Teleop:
                 data['pending_left_bias_sign'] = self.acoustic.pending.left_bias_sign
                 data['pending_lr_voltage_offset_v'] = self.acoustic.pending.lr_voltage_offset_v
         if decision is not None:
-            data.update(raw_means=decision.raw_means,
+            data.update(raw_means=head_left_right(decision.raw_means),
                         means=(decision.head_mean, decision.left_mean, decision.right_mean),
                         historical=not active,
                         lr_voltage_offset_v=decision.lr_voltage_offset_v,

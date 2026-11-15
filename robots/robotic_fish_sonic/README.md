@@ -145,7 +145,11 @@ roslaunch robotic_fish_sonic quadrant.launch window_s:=0.2
 rostopic echo /robotic_fish/acoustic/channel_comparison
 ```
 
-约定 ADC0=头部、ADC1=左侧、ADC2=右侧。输出左右差值
+当前接线为 ADC0=左侧、ADC1=右侧、ADC2=前向（代码字段 `head`）。
+方向映射集中在 `src/robotic_fish_sonic/channel_mapping.py`；采样消息、原始值和校准曲线
+始终按物理 ADC0/1/2 编号处理，`io.yaml` 的 `channels: [0, 1, 2]` 不重排。
+只交换水听器方向、不改变各 ADC 对应电子链路时保留通道校准表；若同时交换模拟前端，应重新验证或标定。
+输出左右差值
 `(L-R)/(L+R)` 和头部与两侧平均差值；电压先求历史窗口均值，再计算比值。
 正的左右差值仅表示左通道更强。下游须检查 `has_comparison`、`reliable`、
 `status` 和 `sample_stamp`；保留旧结果时采集时间不刷新。
@@ -215,7 +219,8 @@ VIM4 运动节点按 Share 发布纯文本快照，整机入口默认启动 `sta
 `enable_status_console:=false` 可关闭显示。独立显示可运行
 `roslaunch robotic_fish_sonic status_console.launch color:=auto`。
 具体见 [Share 查看系统状态](../robotic_fish/README.md#66-share-查看系统状态)。
-三通道映射仍要求 ADC0=头、ADC1=左、ADC2=右，并要求有效校准和已确认增益。
+三通道映射要求 ADC0=左、ADC1=右、ADC2=前，并要求有效校准和已确认增益。
+Share 三行电压统一按前／左／右显示，对应 ADC2／ADC0／ADC1。
 
 新增接口：
 
@@ -240,7 +245,9 @@ source 并重启节点。新版本仍接受省略符号的三字段 YAML 调用�
 调用后直接返回当前模式、数据质量、方向、控制偏置、正在使用及待生效参数；
 真正生效时 VIM4 运动终端打印请求编号、周期和参数。服务成功表示接受请求，仍等待有效周期。
 旧无量纲 `lr_offset` 及其启动参数已移除，新补偿名称同时用于配置、事件和服务响应。
-锁存运动配置的 `schema_version` 更新为 4，包含 `difference_reference=channel_mean`、
+锁存运动配置的 `schema_version` 为 5，新增 `settings.channel_layout=left_right_head`
+和 `settings.hydrophone_channels={head: 2, left: 0, right: 1}`，无跟踪时也记录映射。
+保留版本 4 引入的 `difference_reference=channel_mean`、
 `voltage_offset_reference=left_minus_right` 和包含等号的判定规则；旧版本 3 的同名补偿字段是单侧调整量。
 状态、参数事件和服务反馈也标记差值基准，避免与旧 bag 的总和归一化含义混淆。消息及服务定义已改变，
 两端需重新编译并 source 两包后重启相关节点，旧 bag 仍可用嵌入式定义离线读取。
@@ -250,11 +257,18 @@ source 并重启节点。新版本仍接受省略符号的三字段 YAML 调用�
 ## 离线工具
 
 ```bash
-rosrun robotic_fish_sonic replay_quadrants.py recording.bag --output /tmp/fish-replay
+rosrun robotic_fish_sonic replay_quadrants.py recording.bag --output /tmp/fish-replay --channel-layout left_right_head
+# 旧接线（ADC0=前、ADC1=左、ADC2=右）的历史 bag：
+rosrun robotic_fish_sonic replay_quadrants.py old.bag --output /tmp/fish-replay-old --channel-layout head_left_right
 rosrun robotic_fish_sonic calibrate_from_bag.py sweep.bag --output /tmp/fish-calibration
 ```
 
-输出目录必须不存在。回放支持 `--window-s`、`--model` 和
+输出目录必须不存在。回放必须显式指定 `--channel-layout`，名称依次表示 ADC0/1/2 的方向；
+不能根据 bag 日期、消息 schema 或模型版本猜测实际接线。每行结果及摘要均保存选用的映射。
+运动节点通过 `/robotic_fish/sonic/config` 记录映射；独立声学节点也通过既有
+`/robotic_fish/gain_control/config` 发布 `device=acoustic_quadrants` 的锁存配置，已纳入录包。
+模型特征顺序保持前向比例、左侧比例、左右差、前侧差，不随 ADC 重排；真实模型仍需实测验证。
+回放支持 `--window-s`、`--model` 和
 `--calibration`；更换校准只修改内存中的解码值。校准工具只有显式提供
 `--common-input` 才生成候选表，该选项要求实验确实采用共同电输入，
 不能用于将自由游动数据归一化。工具不改写 bag 或部署校准表。

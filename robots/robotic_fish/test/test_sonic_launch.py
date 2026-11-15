@@ -140,8 +140,9 @@ class SonicLaunchTests(unittest.TestCase):
 
     def test_default_motion_config_preserves_user_range_and_scene_defaults(self):
         config = self.load('sonic_vim4.launch')
+        settings = yaml.safe_load((ROOT/'config/motion.yaml').read_text())
         expected = dict(servo_center=2048., servo_range=512., auto_frequency=1.5,
-                        auto_default_amplitude=512., auto_amplitude_rate=64.,
+                        auto_default_amplitude=settings['auto_default_amplitude'], auto_amplitude_rate=64.,
                         joy_dead_zone=.1, joy_timeout_s=.5, joy_timeout_action='continue', update_rate=50.)
         for key, value in expected.items():
             self.assertEqual(config.params['/sonic_teleop_node/'+key].value, value)

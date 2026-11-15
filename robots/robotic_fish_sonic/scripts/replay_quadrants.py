@@ -9,6 +9,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from robotic_fish_sonic.acoustic_core import CLASSES, Estimator, Model, Status
+from robotic_fish_sonic.channel_mapping import CHANNEL_LAYOUTS, channel_mapping
 
 
 def recalibrate(message, calibration):
@@ -68,6 +69,9 @@ def main():
     parser.add_argument('--model')
     parser.add_argument('--calibration', type=Path, help='Recalibrate raw ADC values in memory before comparing')
     parser.add_argument('--window-s', type=float, default=.5)
+    parser.add_argument('--channel-layout', required=True, choices=CHANNEL_LAYOUTS,
+                        help='Physical ADC0/1/2 directions: left_right_head (current) or '
+                             'head_left_right (legacy). Never inferred from message schema or date.')
     args = parser.parse_args()
     paths = sorted(p for p in args.input.glob('*.bag') if not p.name.startswith('._')) if args.input.is_dir() else [args.input]
     if not paths:
@@ -80,7 +84,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     summaries = []
     for path in paths:
-        engine = Estimator(model, args.window_s)
+        engine = Estimator(model, args.window_s, channel_layout=args.channel_layout)
         counts, flags = Counter(), Counter()
         elapsed = 0.
         with (args.output / (path.stem + '.jsonl')).open('x') as output:
@@ -107,6 +111,8 @@ def main():
         summary = dict(bag=str(path), counts=dict(counts), flags=dict(flags),
                        mean_compute_ms=1000 * elapsed / max(counts['groups'], 1),
                        model_id=model.id if model else 'unavailable', classes=CLASSES,
+                       channel_layout=args.channel_layout,
+                       hydrophone_channels=channel_mapping(args.channel_layout),
                        calibration_id=calibration.calibration_id if calibration else 'as_recorded')
         summaries.append(summary)
         print(json.dumps(summary))

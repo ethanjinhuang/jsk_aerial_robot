@@ -1,5 +1,44 @@
 # robotic_fish_sonic 合并验证
 
+## 2026-11-15 ADC 与水听器方向重映射
+
+当前接线改为 ADC0=左、ADC1=右、ADC2=前（`head`）。共享模块
+`channel_mapping.py` 是方向映射来源。周期转向（含逐组低信号检查）、固定窗口
+比较和模型特征统一使用新关系；ADC 消息、校准输入、原始周期均值仍按物理
+ADC0/1/2 排列。Share 三行电压均按前／左／右展示，表头为 ADC2／ADC0／ADC1。
+
+运动配置 JSON 升为 schema 5，包含 `channel_layout` 和 `hydrophone_channels`；
+禁用跟踪时也记录。独立声学节点在既有 gain_control/config 话题发布自身锁存配置，
+晚订阅可获取实际方向布局。ROS 消息仅更新 ChannelComparison 注释，字段不变。
+
+离线回放必须显式指定 `--channel-layout left_right_head`（新接线）或
+`--channel-layout head_left_right`（旧接线）；不从消息 schema 或日期猜测。
+摘要和逐行结果记录所选布局，重新校准仍先按物理通道应用曲线。
+
+- 声学包 191 项、运动包 91 项单元测试全部通过，共 282 项。
+- 新增独立物理通道用例覆盖 `[3,1,2]` 左强、`[1,3,2]` 右强、
+  `[1,1,3]` 前强且左右相等、前向信号不能补足左右低信号、数组乱序及新旧消息格式。
+- 三个不同的原始值和三个不同的校准值验证 Share 列对齐，原始周期均值保持 ADC 顺序。
+- 5 项离线 bag 测试通过，含旧包名的 12/14 字段消息、当前包、两种方向布局、
+  缺失／无效布局参数拒绝、校准及源 bag SHA-256 保持不变。
+- 隔离 ROS 声学测试通过，含新映射、晚订阅配置、质量标志及窗口恢复。
+- 隔离周期 ROS 测试在 1.5／2 Hz 和两种符号下通过；实际 record.launch 录包回读
+  确认 schema 5 的映射及既有决策、相位、在线调参和 Option 切换行为。
+- 两包独立配置、构建、安装通过；安装模块及节点导入、安装入口解析通过。
+  安装后的默认校准文件与源码逐字节相同。`git diff --check` 通过。
+
+保留用户工作区现有 `motion.yaml` 摆幅 256，该个人配置改动不纳入通道映射提交；
+launch 测试改为验证继承所选 YAML 的摆幅，兼容仓库默认值与本地配置。
+ADC 驱动、物理采样顺序、校准 JSON、保护阈值和转向符号定义未调整。
+所有通信测试只使用本机隔离 master、合成 ADC/Joy 和重映射测试话题，未操作真实硬件。
+实物水听器逐方向刺激和模拟链路校准适用性仍需现场核对。
+
+日志：`/tmp/fish-channel-change-sonic-tests.log`、`/tmp/fish-channel-change-motion-tests.log`、
+`/tmp/fish-channel-change-bag-tests.log`、`/tmp/fish-channel-change-acoustic-ros.log`、
+`/tmp/fish-channel-change-cycle-ros.log`、`/tmp/fish-channel-change-build.log`。
+构建目录：`/tmp/fish-channel-change-build`；安装目录：`/tmp/fish-channel-change-install`。
+周期 ROS 日志及合成录包：`/tmp/fish-cycle-ros-1ielu9h4`。
+
 ## 2026-11-15 Option 与模式显示
 
 Option（默认 `buttons[9]`）通过既有在线调参路径切换方向符号。

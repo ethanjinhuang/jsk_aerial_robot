@@ -165,7 +165,7 @@ The diagnostic timer observes stale transitions but does not repeat identical
 state messages. Counters and measurement summaries remain in /diagnostics.
 
 RuntimeConfig contains `time timestamp`, `string device`, `string config_json`.
-ADC, DAC, and gain_control each publish their own latched snapshot on
+ADC, DAC, gain_control, and (when launched) acoustic_quadrants each publish their own latched snapshot on
 /robotic_fish/gain_control/config, so a late subscriber receives one latest
 snapshot from each live publisher. JSON holds effective typed settings (not the
 unresolved YAML), including device/channel configuration, the loaded ADC
@@ -174,6 +174,16 @@ window/recovery settings, and mode. ADC/DAC snapshots exist even when gain
 control is disabled. Mode service changes republish the gain snapshot; plain
 rosparam edits do not reconfigure running nodes and do not change the snapshot.
 There is no dynamic parameter-update API beyond the existing mode service.
+
+Current hydrophone wiring is ADC0=left, ADC1=right, ADC2=head/front. Direction
+consumers share `channel_mapping.py`; physical ADC IDs, acquisition order and
+per-channel calibration curves retain ADC0/1/2 order. The acoustic snapshot
+records `channel_layout=left_right_head` and `hydrophone_channels` with
+`head: 2, left: 0, right: 1`. Motion records the same mapping on
+`/robotic_fish/sonic/config` (JSON schema version 5), including when tracking is
+disabled. Share displays all three voltage rows in head/left/right order, with
+ADC2/ADC0/ADC1 labels. Offline replay requires an explicit `--channel-layout`;
+use `head_left_right` for the previous wiring, regardless of message schema.
 
 This changes the ROS definitions for AdcSampleArray, GainControlState and the DAC
 state topic. Rebuild and source all consumers; old bags need schema adapters.

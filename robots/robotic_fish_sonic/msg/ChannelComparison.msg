@@ -1,5 +1,5 @@
 # Model-free normalized voltage differences, not direction probabilities.
-# Assumed mapping: ADC0=head, ADC1=left, ADC2=right; verify physical wiring.
+# Current mapping: ADC0=left, ADC1=right, ADC2=head; verify physical wiring.
 std_msgs/Header header
 # Acquisition reference time; held results retain their original stamp.
 time sample_stamp

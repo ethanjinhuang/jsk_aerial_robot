@@ -21,9 +21,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class BagCompatibilityTests(unittest.TestCase):
     def run_tool(self, name, bag, output, *extra):
+        layout = (['--channel-layout', 'head_left_right']
+                  if name == 'replay_quadrants.py' and '--channel-layout' not in extra else [])
         result = subprocess.run(
             [sys.executable, str(ROOT / 'scripts' / name), str(bag),
-             '--output', str(output), *extra], capture_output=True, text=True)
+             '--output', str(output), *layout, *extra], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return json.loads((output / 'summary.json').read_text())
 
@@ -69,6 +71,17 @@ class BagCompatibilityTests(unittest.TestCase):
             self.assertEqual(replay['counts']['comparison_updates'], 320)
             self.assertGreater(replay['counts']['reliable_comparisons'], 0)
             self.assertEqual(replay['counts']['updated'], 0)
+            self.assertEqual(replay['channel_layout'], 'head_left_right')
+            self.assertEqual(replay['hydrophone_channels'], {'head': 0, 'left': 1, 'right': 2})
+            current = self.run_tool('replay_quadrants.py', path, directory / 'current',
+                                    '--channel-layout', 'left_right_head')[0]
+            self.assertEqual(current['hydrophone_channels'], {'head': 2, 'left': 0, 'right': 1})
+            for folder, expected in (('replay', -1/7), ('current', 1/19)):
+                rows = [json.loads(line) for line in
+                        (directory / folder / 'synthetic.jsonl').read_text().splitlines()]
+                for row in rows:
+                    self.assertAlmostEqual(row['comparison']['left_right_normalized_difference'], expected)
+                    self.assertEqual(row['channel_layout'], 'head_left_right' if folder == 'replay' else 'left_right_head')
             calibration_dir = directory / 'calibration'
             audit = self.run_tool('calibrate_from_bag.py', path, calibration_dir, '--common-input')
             self.assertEqual(audit['groups'], 320)
@@ -88,6 +101,17 @@ class BagCompatibilityTests(unittest.TestCase):
 
     def test_old_package_12_fields(self):
         self.check_schema('robotic_fish_io', 12)
+
+    def test_replay_requires_explicit_valid_wiring_before_creating_output(self):
+        with tempfile.TemporaryDirectory(prefix='fish-layout-cli-') as directory:
+            output = Path(directory) / 'output'
+            for extra in ([], ['--channel-layout', 'guess']):
+                result = subprocess.run(
+                    [sys.executable, str(ROOT / 'scripts/replay_quadrants.py'), 'unused.bag',
+                     '--output', str(output), *extra], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('--channel-layout', result.stderr)
+                self.assertFalse(output.exists())
 
     def test_old_package_14_fields(self):
         self.check_schema('robotic_fish_io', 14)

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import math
 
 from robotic_fish_sonic.acoustic_core import adapt, Status
+from robotic_fish_sonic.channel_mapping import head_left_right
 
 
 DIFFERENCE_REFERENCE = 'channel_mean'
@@ -62,7 +63,7 @@ class CycleDecision:
     compensated_left_mean: float
     compensated_right_mean: float
     compensated_difference: float
-    raw_means: tuple
+    raw_means: tuple  # Physical ADC0, ADC1, ADC2 order, not directional order.
 
 
 class CycleSteering:
@@ -173,7 +174,8 @@ class CycleSteering:
                 self.latest_time = None
                 return self._reject('receipt_time_reset')
             if not waiting_quality_flags:
-                side_voltage_sum_v = sample_group['volts'][1] + sample_group['volts'][2]
+                _, left_voltage_v, right_voltage_v = head_left_right(sample_group['volts'])
+                side_voltage_sum_v = left_voltage_v + right_voltage_v
                 if not math.isfinite(side_voltage_sum_v):
                     return self._reject('invalid_signal_sum')
                 if side_voltage_sum_v < self.low_signal_v:
@@ -297,8 +299,9 @@ class CycleSteering:
                 b - a for a, b in zip(sample_times_monotonic_s, sample_times_monotonic_s[1:])
         ) > self.gap_s + 1e-9:
             raise SteeringFault('incomplete_cycle')
-        head_voltage_mean_v, left_voltage_mean_v, right_voltage_mean_v = [
+        adc_voltage_means_v = [
             math.fsum(row[i] / len(rows) for row in rows) for i in (1, 2, 3)]
+        head_voltage_mean_v, left_voltage_mean_v, right_voltage_mean_v = head_left_right(adc_voltage_means_v)
         raw_voltage_means_v = tuple(math.fsum(row[i] / len(rows) for row in rows) for i in (4, 5, 6))
         if not math.isfinite(left_voltage_mean_v + right_voltage_mean_v):
             raise SteeringFault('invalid_signal_sum')

@@ -4,6 +4,8 @@ import math
 from collections import deque
 from enum import IntFlag
 
+from robotic_fish_sonic.channel_mapping import DEFAULT_CHANNEL_LAYOUT, channel_mapping, head_left_right
+
 
 class Status(IntFlag):
     WARMUP = 1
@@ -99,7 +101,9 @@ class Model:
 
 class Estimator:
     def __init__(self, model=None, window_s=.5, gap_s=.2, low_signal_v=.001,
-                 future_tolerance_s=.05):
+                 future_tolerance_s=.05, channel_layout=DEFAULT_CHANNEL_LAYOUT):
+        channel_mapping(channel_layout)
+        self.channel_layout = channel_layout
         if not all(math.isfinite(v) and v > 0 for v in (window_s, gap_s, low_signal_v)):
             raise ValueError('window, gap and threshold must be positive')
         if (isinstance(future_tolerance_s, bool) or not math.isfinite(future_tolerance_s)
@@ -136,7 +140,9 @@ class Estimator:
                                        window_end=None, valid_sample_count=0, estimate_status=0,
                                        timestamp_semantics='unknown'))
         result.update(status=int(status), updated=updated, has_estimate=self.last is not None,
-                      model_id=self.model.id if self.model else 'unavailable')
+                      model_id=self.model.id if self.model else 'unavailable',
+                      channel_layout=self.channel_layout,
+                      hydrophone_channels=channel_mapping(self.channel_layout))
         comparison = dict(self.last_comparison or {})
         comparison_status = int(status & ~Status.MODEL_UNAVAILABLE)
         comparison.update(has_comparison=self.last_comparison is not None,
@@ -176,16 +182,17 @@ class Estimator:
             flags |= Status.WARMUP
         for row in self.rows:
             flags |= row['status']
-        head_voltage_mean_v, left_voltage_mean_v, right_voltage_mean_v = [
+        adc_voltage_means_v = [
             sum(row['volts'][i] for row in self.rows) / len(self.rows)
             for i in range(3)]
+        head_voltage_mean_v, left_voltage_mean_v, right_voltage_mean_v = head_left_right(
+            adc_voltage_means_v, self.channel_layout)
         total_voltage_v = head_voltage_mean_v + left_voltage_mean_v + right_voltage_mean_v
         side_voltage_sum_v = left_voltage_mean_v + right_voltage_mean_v
         side_voltage_mean_v = side_voltage_sum_v / 2
         head_sides_voltage_sum_v = head_voltage_mean_v + side_voltage_mean_v
         if min(total_voltage_v, side_voltage_sum_v, head_sides_voltage_sum_v) < self.low_signal_v:
             flags |= Status.LOW_SIGNAL
-        # Assumed sensor mapping: ADC0=head, ADC1=left, ADC2=right.
         # Compare voltage window means, independently of any direction model.
         left_right_sum_difference_ratio = (
             (left_voltage_mean_v - right_voltage_mean_v) / side_voltage_sum_v

@@ -34,6 +34,7 @@ class DisplayTests(unittest.TestCase):
         plain = format_status(snapshot())
         self.assertEqual(set(map(len, plain.splitlines())), {78})
         self.assertEqual(len(plain.splitlines()), 17)
+        self.assertRegex(plain, r'Head \(ADC2\).*Left \(ADC0\).*Right \(ADC1\)')
         self.assertRegex(plain, r'Raw instant\s*\|\s*0.50000\s*\|\s*0.70000\s*\|\s*0.40000')
         self.assertRegex(plain, r'Raw cycle mean\s*\|\s*0.49000\s*\|\s*0.68000\s*\|\s*0.38000')
         self.assertRegex(plain, r'Calibrated cycle mean\s*\|\s*0.50000\s*\|\s*0.70000\s*\|\s*0.40000')

@@ -1,6 +1,7 @@
 adc:
   bus: 0
   address: 0x48
+  # Physical acquisition/calibration order. Hydrophones: ADC0=left, ADC1=right, ADC2=head.
   channels: [0, 1, 2]
   data_rate: 128
   channel_rate: 20.0
