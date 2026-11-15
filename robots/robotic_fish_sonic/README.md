@@ -149,6 +149,11 @@ rostopic echo /robotic_fish/acoustic/channel_comparison
 方向映射集中在 `src/robotic_fish_sonic/channel_mapping.py`；采样消息、原始值和校准曲线
 始终按物理 ADC0/1/2 编号处理，`io.yaml` 的 `channels: [0, 1, 2]` 不重排。
 只交换水听器方向、不改变各 ADC 对应电子链路时保留通道校准表；若同时交换模拟前端，应重新验证或标定。
+可选闭环 `window_control` 同样使用共享方向映射：窗口均值、峰值及超限组比例
+均取左／右原始电压（ADC0／ADC1）；前向 ADC2 不设定正常窗口目标，但仍参与
+三通道有效性检查与过压保护。增益配置记录 `window_channel_ids: [0, 1]` 及完整映射。
+窗口控制仍默认关闭；启用需选择 `closed_loop`、显式设置 `window_control: true`
+和经过确认的 `window_high_fraction`。本次只修正通道选择，不改阈值、步长或开启状态。
 输出左右差值
 `(L-R)/(L+R)` 和头部与两侧平均差值；电压先求历史窗口均值，再计算比值。
 正的左右差值仅表示左通道更强。下游须检查 `has_comparison`、`reliable`、

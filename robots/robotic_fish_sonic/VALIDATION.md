@@ -1,5 +1,32 @@
 # robotic_fish_sonic 合并验证
 
+## 2026-11-15 窗口增益使用新的左右通道
+
+修正 `GainController._window_decision` 旧的物理 ADC1／ADC2 选择，改用
+共享 `channel_mapping.py` 将物理输入转为左／右原始电压，当前对应 ADC0／ADC1。
+均值、峰值和超限组比例全部使用同一左右窗口。前向 ADC2 不设定正常窗口目标，
+但仍参与三通道有效性检查和原始电压保护。默认 `window_control: false`、阈值、
+步长、保护与恢复策略均保留，启用仍要求 closed_loop 和显式超限比例。
+增益锁存配置新增 `channel_layout`、`hydrophone_channels` 与 `window_channel_ids: [0, 1]`。
+
+- 修正前回归复现 4 处失败：左侧均值／峰值／超限比例被忽略，前向电压误设正常目标。
+- 修正后声学包 193 项、运动包 91 项单元测试通过，共 284 项。
+- 节点回调回归覆盖数组乱序、原始／校准电压不一致及左右调节；窗口保护覆盖
+  三个物理通道，即使其他通道无效仍优先降增益。
+- 声学包在 `/tmp/fish-window-check` 独立构建和安装通过。
+- 安装后的真实 ROS 增益节点使用独立 master、模拟 DAC 服务和合成 ADC：
+  ADC0 或 ADC1 为 3.2 V 时从 1.00 V 降至 0.99 V；
+  左右为 1.0／0.2 V、ADC2 为 3.8 V 时升至 1.01 V；
+  ADC2 达到 4.05 V 时立即降至 0.90 V。配置快照正确记录新窗口通道。
+  测试全部使用乱序消息和与原始值不同的校准值，没有连接真实硬件。
+
+单元日志：`/tmp/fish-window-sonic-unit.log`、`/tmp/fish-window-motion-unit.log`；
+修正前复现：`/tmp/fish-window-before.log`；构建：`/tmp/fish-window-build.log`；
+真实 ROS 验证：`/tmp/fish-window-ros.log`，临时脚本 `/tmp/fish-window-ros.py`。
+长期回归保留在 `test/test_safety_window.py`、`test/test_node_safety.py` 和
+`test/test_node_interfaces.py`。本次只完成通道选择与软件验证，窗口阈值／超限比例
+仍需现场声学实验确认，未自动启用可选闭环策略。
+
 ## 2026-11-15 ADC 与水听器方向重映射
 
 当前接线改为 ADC0=左、ADC1=右、ADC2=前（`head`）。共享模块

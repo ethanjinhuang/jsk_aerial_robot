@@ -7,7 +7,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
@@ -16,6 +16,7 @@ from robotic_fish_sonic.manual_gain import ManualGainInput
 from robotic_fish_sonic.agc_controller import GainController
 from robotic_fish_sonic import dac_driver
 from robotic_fish_sonic.adc_limits import MAX_RAW, MAX_VOLTAGE_V
+from robotic_fish_sonic.channel_mapping import DEFAULT_CHANNEL_LAYOUT, channel_mapping
 
 
 class Stamp(float):
@@ -31,6 +32,7 @@ def node_class(filename, name):
     tree = ast.parse((ROOT/'scripts'/filename).read_text())
     ns = dict(math=math, threading=threading, time=time, dac_driver=dac_driver,
               MAX_RAW=MAX_RAW, MAX_VOLTAGE_V=MAX_VOLTAGE_V,
+              DEFAULT_CHANNEL_LAYOUT=DEFAULT_CHANNEL_LAYOUT, channel_mapping=channel_mapping,
               rospy=SimpleNamespace(Time=Stamp, loginfo=lambda *a: None,
                                     logwarn=lambda *a: None,
                                     logerr_throttle=lambda *a: None,
@@ -90,6 +92,26 @@ class NodeSafetyTests(unittest.TestCase):
         n._manual_callback(None)
         self.assertEqual(n.calls, [1.05])
         self.assertTrue(n._adc_is_valid())
+
+    def test_window_callback_uses_physical_left_right_ids_and_raw_voltages(self):
+        for values, expected in [((3.2, .1, .1), .99), ((.1, 3.2, .1), .99),
+                                 ((1., .2, 3.8), 1.01)]:
+            with self.subTest(values=values):
+                n = self.make_node('closed_loop')
+                n.controller = GainController(mode='closed_loop', window_control=True,
+                    window_high_fraction=.05, window_cooldown_s=2.)
+                clock = [0.]
+                with patch.object(time, 'monotonic', side_effect=lambda: clock[0]), \
+                        patch.object(Stamp, 'now', side_effect=lambda: Stamp(100. + clock[0])):
+                    for i in range(41):
+                        clock[0] = i * .05
+                        msg = self.message(stamp=100. + clock[0], values=values)
+                        for sample in msg.samples:
+                            sample.volt_cali = .01  # Gain decisions must use raw values.
+                        msg.samples = [msg.samples[2], msg.samples[0], msg.samples[1]]
+                        n._on_adc_samples(msg)
+                self.assertEqual(n.calls, [expected])
+                self.assertEqual(n.confirmed_dac_voltage_v, expected)
 
     def test_old_nested_sample_rejected(self):
         n = self.make_node()
@@ -487,6 +509,9 @@ class CompactRecordingTests(unittest.TestCase):
         self.assertIn('manual_ramp_step_v', records[0])
         self.assertFalse(records[0]['manual_adc_required'])
         self.assertEqual(records[0]['manual_control_source'], 'timer')
+        self.assertEqual(records[0]['channel_layout'], 'left_right_head')
+        self.assertEqual(records[0]['hydrophone_channels'], {'head': 2, 'left': 0, 'right': 1})
+        self.assertEqual(records[0]['window_channel_ids'], [0, 1])
         self.assertFalse(any(key.startswith('fixed_') for key in records[0]))
         n.controller.set_mode('off')
         n._publish_config()

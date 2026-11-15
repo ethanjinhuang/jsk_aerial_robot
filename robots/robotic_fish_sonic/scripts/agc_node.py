@@ -17,6 +17,7 @@ from std_srvs.srv import SetBool, SetBoolResponse, Trigger, TriggerResponse
 from robotic_fish_sonic import dac_driver
 from robotic_fish_sonic.adc_limits import MAX_RAW, MAX_VOLTAGE_V
 from robotic_fish_sonic.agc_controller import GainController
+from robotic_fish_sonic.channel_mapping import DEFAULT_CHANNEL_LAYOUT, channel_mapping
 from robotic_fish_sonic.msg import AdcSampleArray, GainControlState
 from robotic_fish_sonic.srv import SetDacVoltage
 
@@ -482,6 +483,9 @@ class GainControlNode:
         settings.update(joy_topic=self.joy_topic, manual_step_v=self.manual_input.step_v)
         settings.update(manual_control_source='timer', manual_adc_required=False,
                         manual_control_period_s=self.manual_control_period_s)
+        channels = channel_mapping()
+        settings.update(channel_layout=DEFAULT_CHANNEL_LAYOUT, hydrophone_channels=channels,
+                        window_channel_ids=[channels['left'], channels['right']])
         self.config_recorder.publish(settings)
 
     def _state_message(self):

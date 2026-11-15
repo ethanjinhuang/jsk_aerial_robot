@@ -4,10 +4,11 @@ import math
 
 from robotic_fish_sonic import dac_driver
 from robotic_fish_sonic.adc_limits import MAX_VOLTAGE_V
+from robotic_fish_sonic.channel_mapping import head_left_right
 
 
 class GainController:
-    """Control a DAC from the maximum of three uncalibrated ADC voltages."""
+    """Use raw ADC values: all-channel safety, optional lateral-window control."""
 
     MODES = ("off", "manual", "closed_loop")
 
@@ -191,7 +192,8 @@ class GainController:
                  now - history[-1][0] > self.recovery_sample_timeout_s))):
             history.clear()
         self.window_dac = current
-        history.append((now, values[1], values[2]))
+        _, left_voltage_v, right_voltage_v = head_left_right(values)
+        history.append((now, left_voltage_v, right_voltage_v))
         while len(history) > 1 and history[1][0] <= now - self.window_s:
             history.pop(0)
         self.last_action = "window_waiting"

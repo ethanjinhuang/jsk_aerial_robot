@@ -54,6 +54,7 @@ gain_control:
   safety_interval_s: 0.10
   recovery_settle_s: 0.20
   # Explicit opt-in; high fraction must be chosen before enabling.
+  # Uses mapped left/right raw voltages (ADC0/ADC1); safety still checks all three.
   window_control: false
   window_s: 2.0
   window_mean_min_v: 2.0

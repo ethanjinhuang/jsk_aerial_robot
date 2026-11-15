@@ -127,6 +127,9 @@ class NodeInterfaceTests(unittest.TestCase):
         self.assertEqual(node.controller.manual_target_v, .2)
         self.assertEqual(node.adc_timeout_s, .7)
         self.assertEqual(self.config('gain_control')['settings']['safety_limit_v'], 4.)
+        self.assertEqual(self.config('gain_control')['settings']['window_channel_ids'], [0, 1])
+        self.assertEqual(self.config('gain_control')['settings']['hydrophone_channels'],
+                         {'head': 2, 'left': 0, 'right': 1})
         self.parameters['~gain_control/manual_target_voltage_v'] = 0.
         self.parameters['~gain_control/adc_timeout_s'] = .8
         node = self.gain()

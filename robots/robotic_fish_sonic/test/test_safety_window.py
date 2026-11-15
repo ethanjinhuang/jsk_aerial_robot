@@ -41,21 +41,33 @@ class SafetyWindowTests(unittest.TestCase):
 
     def test_head_does_not_set_normal_target(self):
         c = self.window()
-        self.assertEqual(self.fill(c, [3.8, 1., .2]), 1.01)
+        self.assertEqual(self.fill(c, [1., .2, 3.8]), 1.01)
 
     def test_stronger_lateral_mean_holds(self):
-        c = self.window()
-        self.assertIsNone(self.fill(c, [.1, 2.5, .1]))
+        for channel in (0, 1):
+            with self.subTest(channel=channel):
+                c = self.window()
+                values = [.1] * 3
+                values[channel] = 2.5
+                self.assertIsNone(self.fill(c, values))
 
     def test_frequent_high_lateral_decreases(self):
-        c = self.window()
-        self.assertEqual(self.fill(c, [.1, 3.2, .1]), .99)
+        for channel in (0, 1):
+            with self.subTest(channel=channel):
+                c = self.window()
+                values = [.1] * 3
+                values[channel] = 3.2
+                self.assertEqual(self.fill(c, values), .99)
 
     def test_isolated_peak_holds(self):
-        c = self.window()
-        self.fill(c, [.1]*3, count=40)
-        self.assertIsNone(c.observe([.1, 3.2, .1], 1., 2.))
-        self.assertEqual(c.last_action, 'window_peak_hold')
+        for channel in (0, 1):
+            with self.subTest(channel=channel):
+                c = self.window()
+                self.fill(c, [.1]*3, count=40)
+                values = [.1] * 3
+                values[channel] = 3.2
+                self.assertIsNone(c.observe(values, 1., 2.))
+                self.assertEqual(c.last_action, 'window_peak_hold')
 
     def test_new_dac_requires_new_window(self):
         c = self.window()
@@ -69,7 +81,16 @@ class SafetyWindowTests(unittest.TestCase):
 
     def test_head_safety_overrides_window(self):
         c = self.window()
-        self.assertEqual(c.observe([4., .1, .1], 1., 0.), .9)
+        self.assertEqual(c.observe([.1, .1, 4.], 1., 0.), .9)
+
+    def test_window_safety_uses_all_physical_channels_even_with_invalid_companions(self):
+        for channel in (0, 1, 2):
+            with self.subTest(channel=channel):
+                c = self.window()
+                values = [float('nan')] * 3
+                values[channel] = 4.
+                self.assertEqual(c.observe(values, 1., 0., data_valid=False), .9)
+                self.assertTrue(c.safety_active)
 
     def test_high_fraction_must_be_explicit(self):
         with self.assertRaises(ValueError):
