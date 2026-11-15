@@ -425,7 +425,26 @@ IMU 名称、平面和范围按本次提供的映射记录。
 ROS 仿真时钟暂停或回拨不会暂停运动或手柄超时检查。
 这也意味着不能依靠暂停 `/clock` 停止这个硬件控制节点，应使用停止键。
 
-停止、输入异常或手柄超时后进入 `stopped`：目标偏置和实际偏置清零，
+当前 `motion.yaml` 设置 `joy_timeout_action: continue`：手柄断联后，手动模式保持最后
+目标位置，普通自动模式保持摆频、摆幅及中心偏置并连续摆尾，声源跟踪模式继续根据
+VIM4 本地 ADC 数据进行判断和摆尾。`joy_timeout_s` 仍为 0.5 秒，用于识别消息间断；
+不会因为超过该时间而停止，也不会累计断联期间的调幅操作。
+重连后直接处理新的有效指令；保持按下的模式键不会仅因断联而重置摆尾相位。
+该策略只处理 Joy 消息中断，需要 VIM4 控制节点和舵机通信继续工作；断联期间手柄停止键
+无法送达，重连后收到 Cross 仍立即回中并锁存。声学 ADC 超时、饱和、无效 Joy、
+单调时钟异常以及程序正常退出时的停止处理仍然有效。
+
+可在启动时切回原先的超时停止策略：
+
+```bash
+roslaunch robotic_fish sonic_vim4.launch joy_timeout_action:=stop joy_timeout_s:=0.5
+```
+
+`joy_timeout_action` 只接受 `continue` 或 `stop`；`joy_timeout_s` 必须为有限正数，不能用 0 禁用。
+有效策略写入 `/robotic_fish/sonic/config`，距最后有效 Joy 的时间仍记录在
+`/robotic_fish/sonic/motion_state` 的 `valid_joy_age_s`，便于在 rosbag 中核对断联过程。
+
+停止、输入异常或 `stop` 策略下的手柄超时后进入 `stopped`：目标偏置和实际偏置清零，
 取消正弦摆动，从下一控制周期起发送中心位置。
 需要先松开停止／普通自动／手动／跟踪模式键和调幅键，将方向轴回到死区，
 收到一个完整有效的释放帧，再在回中状态重新按三角、方块或圆圈选择模式。
@@ -435,6 +454,7 @@ ROS 仿真时钟暂停或回拨不会暂停运动或手柄超时检查。
 | 参数／launch 参数 | 默认值 | 含义 |
 | --- | --- | --- |
 | `joy_timeout_s` | 0.5 | 最后一个有效 Joy 消息的接收超时，秒 |
+| `joy_timeout_action` | `continue` | 项目 YAML 默认断联继续；`stop` 则超时回中并锁存。直接 rosrun 未配置时兜底为 `stop` |
 | `update_rate` | 50 | 控制循环目标频率，Hz；应大于摆尾频率的两倍 |
 | `joy_autorepeat_rate` | 20 | launch 为 joy_node 设置的重复发布频率 |
 | `enable_joy` | true | `sonic_teleop.launch` 是否同时启动本机手柄；VIM4 分机控制时关闭 |

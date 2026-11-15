@@ -23,6 +23,8 @@ def main():
                         default=Path(__file__).resolve().parents[1] / 'scripts/sonic_teleop.py')
     parser.add_argument('--motion-config', type=Path,
                         help='Load real motion YAML into the isolated test node namespace')
+    parser.add_argument('--joy-timeout-action', choices=('stop', 'continue'),
+                        help='Override the selected motion configuration timeout action')
     args = parser.parse_args()
     port = 11428
     try:
@@ -62,6 +64,7 @@ def main():
         center = settings.get('servo_center', 2048.)
         servo_range = settings.get('servo_range', 1024.)
         amplitude = settings.get('auto_default_amplitude', 512.)
+        timeout_action = args.joy_timeout_action or settings.get('joy_timeout_action', 'stop')
         assert 0 < amplitude <= servo_range
         lock = threading.Lock()
         received = []
@@ -76,7 +79,8 @@ def main():
         node = subprocess.Popen(
             [sys.executable, str(args.node_script), '__name:=sonic_motion_under_test',
              '/joy:=/motion_test/joy', '/servo/target_states:=/motion_test/targets',
-             '_joy_timeout_s:=0.35', '_auto_frequency:=2.0'],
+             '_joy_timeout_s:=0.35', '_auto_frequency:=2.0',
+             '_joy_timeout_action:=' + timeout_action],
             stdout=node_log, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
@@ -139,13 +143,27 @@ def main():
         time.sleep(.55)
         with lock:
             tail = list(received[-5:])
-        centered(tail)
-        centered(send(.2, pressed=(3,)))
-        send(.1)
-        rows = send(.35, pressed=(3,))
-        assert any(abs(value - center) > .25*amplitude for _, value in rows)
+        if timeout_action == 'stop':
+            centered(tail)
+            centered(send(.2, pressed=(3,)))
+            send(.1)
+            rows = send(.35, pressed=(3,))
+            assert any(abs(value - center) > .25*amplitude for _, value in rows)
+            print('PASS: Joy loss stops motion and fresh messages cannot silently restart it', flush=True)
+        else:
+            assert all(value == int(center+servo_range) for _, value in tail), tail
+            rows = send(.15, steering=.25)
+            assert all(value == int(center-.25*servo_range) for _, value in rows), rows
+            send(.1, pressed=(3,))
+            begin = time.monotonic()
+            time.sleep(1.)
+            with lock:
+                rows = [(t, value) for t, value in received if t > begin + .45]
+            assert len(rows) >= 15 and max(v for _, v in rows) > center+.75*amplitude and min(v for _, v in rows) < center-.75*amplitude, rows
+            centered(send(.15, pressed=(0,)))
+            print('PASS: Joy loss holds manual position and keeps auto waveform running; reconnect commands apply', flush=True)
         centered(send(.2, pressed=(1,)))
-        print('PASS: malformed input and Joy loss stop motion; fresh messages cannot silently restart it', flush=True)
+        print('PASS: malformed input and explicit stop still center and latch stopped', flush=True)
         node.send_signal(signal.SIGINT)
         assert node.wait(timeout=5) == 0
         pub.unregister()

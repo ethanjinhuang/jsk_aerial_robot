@@ -106,7 +106,8 @@ class SonicLaunchTests(unittest.TestCase):
         values = {'auto_frequency': 2., 'acoustic_threshold': .15, 'acoustic_bias': 128.,
                   'acoustic_lr_voltage_offset_v': -.01, 'acoustic_max_age_s': .7,
                   'acoustic_future_tolerance_s': .025, 'left_bias_sign': 1,
-                  'joy_timeout_s': .6, 'update_rate': 60., 'manual_gain_voltage': 1.7}
+                  'joy_timeout_s': .6, 'joy_timeout_action': 'stop',
+                  'update_rate': 60., 'manual_gain_voltage': 1.7}
         config = self.load('sonic_vim4.launch', 'status_color:=never',
                            *[key+':='+str(value) for key,value in values.items()])
         for argument, parameter in [('auto_frequency','auto_frequency'),
@@ -116,7 +117,8 @@ class SonicLaunchTests(unittest.TestCase):
                 ('acoustic_max_age_s','acoustic_steering/max_age_s'),
                 ('acoustic_future_tolerance_s','acoustic_steering/future_tolerance_s'),
                 ('left_bias_sign','acoustic_steering/left_bias_sign'),
-                ('joy_timeout_s','joy_timeout_s'), ('update_rate','update_rate')]:
+                ('joy_timeout_s','joy_timeout_s'), ('joy_timeout_action','joy_timeout_action'),
+                ('update_rate','update_rate')]:
             self.assertEqual(config.params['/sonic_teleop_node/'+parameter].value, values[argument])
         self.assertEqual(self.gain_values(config)['manual_voltage'], 1.7)
         self.assertEqual(config.params['/sonic_status_console/color'].value, 'never')
@@ -134,7 +136,7 @@ class SonicLaunchTests(unittest.TestCase):
         config = self.load('sonic_vim4.launch')
         expected = dict(servo_center=2048., servo_range=512., auto_frequency=1.5,
                         auto_default_amplitude=512., auto_amplitude_rate=64.,
-                        joy_dead_zone=.1, joy_timeout_s=.5, update_rate=50.)
+                        joy_dead_zone=.1, joy_timeout_s=.5, joy_timeout_action='continue', update_rate=50.)
         for key, value in expected.items():
             self.assertEqual(config.params['/sonic_teleop_node/'+key].value, value)
         self.assertEqual(self.gain_values(config)['mode'], 'manual')
@@ -144,7 +146,7 @@ class SonicLaunchTests(unittest.TestCase):
     def test_motion_yaml_is_loaded_in_node_private_namespace(self):
         settings = yaml.safe_load((ROOT/'config/motion.yaml').read_text())
         settings.update(servo_center=2000., servo_range=300., auto_default_amplitude=100.,
-                        auto_frequency=2.4, auto_amplitude_rate=10., joy_timeout_s=.7,
+                        auto_frequency=2.4, auto_amplitude_rate=10., joy_timeout_s=.7, joy_timeout_action='stop',
                         steering_axis=1, status_local_echo=True)
         settings['acoustic_steering'].update(enabled=True, threshold=.25, bias=120.)
         with tempfile.TemporaryDirectory() as directory:
@@ -152,7 +154,7 @@ class SonicLaunchTests(unittest.TestCase):
             path.write_text(yaml.safe_dump(settings))
             config = self.load('sonic_teleop.launch', 'motion_config:='+str(path))
             for name in ('servo_center','servo_range','auto_default_amplitude','auto_frequency',
-                         'auto_amplitude_rate','joy_timeout_s','steering_axis','status_local_echo'):
+                         'auto_amplitude_rate','joy_timeout_s','joy_timeout_action','steering_axis','status_local_echo'):
                 self.assertEqual(config.params['/sonic_teleop_node/'+name].value, settings[name])
                 self.assertNotIn('/'+name, config.params)
             self.assertTrue(config.params['/sonic_teleop_node/acoustic_steering/enabled'].value)

@@ -28,6 +28,7 @@ class Teleop:
             'amplitude': rospy.get_param('~auto_amplitude', None),
             'amplitude_rate': rospy.get_param('~auto_amplitude_rate', 64.),
             'joy_timeout_s': rospy.get_param('~joy_timeout_s', .5),
+            'joy_timeout_action': rospy.get_param('~joy_timeout_action', 'stop'),
             'joy_dead_zone': rospy.get_param('~joy_dead_zone', .1),
             'tracking_enabled': rospy.get_param('~acoustic_steering/enabled', False),
         }
@@ -128,8 +129,8 @@ class Teleop:
         self.joy_sub = rospy.Subscriber('/joy', Joy, self._joyCallback, queue_size=1)
         self._thread = threading.Thread(target=self._run, name='sonic-motion', daemon=True)
         rospy.on_shutdown(self._shutdown)
-        rospy.loginfo('Sonic motion: %.1f Hz wall clock, direct joystick mapping, Joy timeout %.3f s',
-                      self.update_rate, self.controller.joy_timeout_s)
+        rospy.loginfo('Sonic motion: %.1f Hz wall clock, direct joystick mapping, Joy timeout %.3f s, action=%s',
+                      self.update_rate, self.controller.joy_timeout_s, self.controller.joy_timeout_action)
         rospy.loginfo('Sonic host=%s; ADC max age=%.3f s, future tolerance=%.3f s; Joy uses local receipt time',
                       socket.gethostname(), self._status_max_age, self._status_future_tolerance)
         self._thread.start()
@@ -158,6 +159,7 @@ class Teleop:
                         servo_index=0, auto_frequency=c.frequency,
                         auto_default_amplitude=c.default_amplitude, auto_amplitude=self._initial_amplitude,
                         auto_amplitude_rate=c.amplitude_rate, joy_timeout_s=c.joy_timeout_s,
+                        joy_timeout_action=c.joy_timeout_action,
                         joy_dead_zone=c.dead_zone, update_rate=self.update_rate,
                         steering_axis=c.steering_axis, amplitude_decrease_axis=c.decrease_axis,
                         amplitude_increase_axis=c.increase_axis, amplitude_buttons=c.amplitude_buttons,

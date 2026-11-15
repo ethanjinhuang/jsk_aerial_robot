@@ -29,6 +29,7 @@
   <arg name="acoustic_future_tolerance_s" default=""/>
   <arg name="left_bias_sign" default=""/>
   <arg name="joy_timeout_s" default=""/>
+  <arg name="joy_timeout_action" default=""/>
   <arg name="update_rate" default=""/>
 
   <include if="$(arg enable_bridge)" file="$(find spinal)/launch/bridge.launch">
@@ -58,6 +59,7 @@
     <arg name="acoustic_future_tolerance_s" value="$(arg acoustic_future_tolerance_s)"/>
     <arg name="left_bias_sign" value="$(arg left_bias_sign)"/>
     <arg name="joy_timeout_s" value="$(arg joy_timeout_s)"/>
+    <arg name="joy_timeout_action" value="$(arg joy_timeout_action)"/>
     <arg name="update_rate" value="$(arg update_rate)"/>
   </include>
 

@@ -13,6 +13,7 @@
   <arg name="acoustic_future_tolerance_s" default=""/>
   <arg name="left_bias_sign" default=""/>
   <arg name="joy_timeout_s" default=""/>
+  <arg name="joy_timeout_action" default=""/>
   <arg name="update_rate" default=""/>
   <arg name="joy_autorepeat_rate" default="20.0"/>
   <arg name="steering_axis" default=""/>
@@ -38,6 +39,7 @@
     <param if="$(eval arg('acoustic_future_tolerance_s') != '')" name="acoustic_steering/future_tolerance_s" type="double" value="$(arg acoustic_future_tolerance_s)"/>
     <param if="$(eval arg('left_bias_sign') != '')" name="acoustic_steering/left_bias_sign" type="int" value="$(arg left_bias_sign)"/>
     <param if="$(eval arg('joy_timeout_s') != '')" name="joy_timeout_s" type="double" value="$(arg joy_timeout_s)"/>
+    <param if="$(eval arg('joy_timeout_action') != '')" name="joy_timeout_action" type="str" value="$(arg joy_timeout_action)"/>
     <param if="$(eval arg('update_rate') != '')" name="update_rate" type="double" value="$(arg update_rate)"/>
     <param if="$(eval arg('steering_axis') != '')" name="steering_axis" type="int" value="$(arg steering_axis)"/>
     <param if="$(eval arg('amplitude_decrease_axis') != '')" name="amplitude_decrease_axis" type="int" value="$(arg amplitude_decrease_axis)"/>

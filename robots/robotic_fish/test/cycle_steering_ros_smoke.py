@@ -41,6 +41,7 @@ def verify_recording(directory):
         assert recorded[topic], 'missing recording: ' + topic
     assert recorded['/rosout'], 'record.launch did not record ROS logs'
     configs = [json.loads(m.config_json) for m in recorded['config']]
+    assert all(c['settings']['joy_timeout_action'] == 'continue' for c in configs)
     assert all(c['schema_version'] == 4 and
                c['settings']['acoustic_steering']['difference_reference'] == 'channel_mean' and
                c['settings']['acoustic_steering']['voltage_offset_reference'] == 'left_minus_right' and
@@ -51,6 +52,7 @@ def verify_recording(directory):
     assert any(c['pending_request'] for c in configs), 'pending configuration lost'
     assert configs[-1]['pending_request'] is None and configs[-1]['applied_request_id'] > 0
     motions = recorded['motion']
+    assert any(m.motion_mode == 'tracking' and m.valid_joy_age_s > .5 for m in motions), 'Joy outage missing from recording'
     assert {'manual', 'auto', 'tracking', 'stopped'} <= {m.motion_mode for m in motions}
     assert any(not m.command_published and math.isnan(m.target_position) for m in motions)
     assert {'valid', 'calibration_fallback', 'gain_unknown', 'stale_sample'} <= {m.adc_quality for m in motions}
@@ -167,7 +169,7 @@ def main():
                  '/robotic_fish/sonic/config:=' + prefix + '/config',
                  '/robotic_fish/acoustic/steering_events:=' + prefix + '/events',
                  '_acoustic_steering/enabled:=true', '_acoustic_steering/bias:=128.0',
-                 '_auto_frequency:=' + str(frequency)] +
+                 '_auto_frequency:=' + str(frequency), '_joy_timeout_action:=continue'] +
                 ([] if case == 0 else ['_acoustic_steering/left_bias_sign:=' + str(polarity)]),
                 stdout=log, stderr=subprocess.STDOUT)
             processes.append(node)
@@ -179,7 +181,7 @@ def main():
                 stdout=console_log, stderr=subprocess.STDOUT)
             processes.append(console)
             driving = {'button': None, 'axis': 0., 'left': 2., 'right': 1., 'valid': True,
-                       'adc': True, 'gain': .9, 'mixed_gain': False,
+                       'adc': True, 'joy': True, 'gain': .9, 'mixed_gain': False,
                        'gain_known': True, 'saturated': False}
             remote_joy_skew = .067 if case == 0 else 60.
             finish = threading.Event()
@@ -192,7 +194,8 @@ def main():
                               buttons=[int(i == values['button']) for i in range(14)])
                     # PC time may differ; VIM4 must use its local Joy receipt time.
                     joy.header.stamp = rospy.Time.now() - rospy.Duration.from_sec(remote_joy_skew)
-                    joy_pub.publish(joy)
+                    if values['joy']:
+                        joy_pub.publish(joy)
                     if values['adc']:
                         stamp = rospy.Time.now()
                         samples = [AdcSample(channel_id=i, timestamp=stamp,
@@ -492,9 +495,16 @@ def main():
                 wait_state(lambda s: s.motion_mode == 'tracking' and s.status == 'warmup')
                 set_input(button=None)
                 wait_state(lambda s: s.cycle_index == 1 and s.status == 'active')
+                # Keep local ADC alive while the PC Joy stream disappears.
+                set_input(joy=False)
+                time.sleep(.8)
+                with lock:
+                    assert states[-1][1].motion_mode == 'tracking', states[-1]
+                    assert states[-1][1].cycle_index >= 2
+                    assert len(set(targets[-20:])) > 2, 'Joy loss stopped the gait'
                 set_input(adc=False)
                 wait_state(lambda s: s.motion_mode == 'stopped' and 'adc_timeout' in s.status)
-                set_input(adc=True)
+                set_input(adc=True, joy=True)
                 time.sleep(.15)
                 with lock:
                     assert states[-1][1].motion_mode == 'stopped'
@@ -507,6 +517,7 @@ def main():
                       'Circle tracking, Triangle ordinary auto, Cross stop, '
                       'gain adjustment and unusable quality hold without stopping, '
                       'remote aligned/color Share snapshots, '
+                      'Joy loss continues tracking, ADC loss stops, '
                       'live voltage compensation, settings and fault recovery, '
                       'remote Joy stamp %.3f s behind local clock' % (frequency, polarity, remote_joy_skew), flush=True)
             finally:

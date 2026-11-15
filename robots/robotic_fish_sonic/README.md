@@ -193,7 +193,11 @@ Share 的三通道表只显示原始瞬时电压、原始周期均值、校准�
 等待期间状态为 `gain_warmup`，Share 显示 `HOLDING` 和历史周期结果。
 校准越界回退／未知增益同样保持摆尾与上一偏置并暂停决策，Share 显示具体原因及
 `HOLDING`；数据有效后以 `data_warmup` 重建完整周期并自动恢复判断。
-首次进入跟踪而数据尚不可用时，以零偏置等待。时间检查、饱和、Cross 和 Joy 超时等停止规则仍生效。
+首次进入跟踪而数据尚不可用时，以零偏置等待。时间检查、饱和和 Cross 停止规则仍生效。
+Joy 断联行为由运动配置 `joy_timeout_action` 决定：项目默认 `continue`，手动保持最后位置，
+普通自动和趋声继续运行；趋声仍依赖有效的本地 ADC 数据。设为 `stop` 则在超过
+`joy_timeout_s` 后回中并锁存。可通过 `sonic_vim4.launch joy_timeout_action:=stop` 覆盖，
+详见 [运动控制说明](../robotic_fish/README.md)。
 VIM4 运动节点按 Share 发布纯文本快照，整机入口默认启动 `status_console.py`，
 在 VIM4 终端用对齐表格显示三通道瞬时电压、上一完整周期均值、差值及方向。
 `status_color:=auto` 自动检测终端颜色，`always` 强制彩色，`never` 关闭；

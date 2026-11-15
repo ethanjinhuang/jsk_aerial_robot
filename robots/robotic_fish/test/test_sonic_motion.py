@@ -225,6 +225,60 @@ class ControllerTests(unittest.TestCase):
         state = c.tick(.6)
         self.assertEqual((state.mode, state.reason, state.target), ('stopped', 'joy_timeout', 2048.))
 
+    def test_continue_keeps_manual_target_and_accepts_first_reconnected_command(self):
+        c = SonicController(joy_timeout_action='continue')
+        self.assertIsNone(c.tick(1.))
+        self.feed(c, 2., steering=-.5)
+        state = c.tick(3602.)
+        self.assertEqual((state.mode, state.target, c.last_joy_time), ('manual', 2560., 2.))
+        state = self.feed(c, 3603., steering=.25)
+        self.assertEqual((state.mode, state.target), ('manual', 1792.))
+
+    def test_continue_keeps_auto_and_tracking_phase_bias_and_amplitude(self):
+        for mode, button in (('auto', 3), ('tracking', 2)):
+            with self.subTest(mode=mode):
+                c = SonicController(joy_timeout_action='continue', tracking_enabled=True)
+                self.feed(c, 0., pressed=(button,))
+                if mode == 'tracking':
+                    c.set_tracking_bias(-128.)
+                state = c.tick(3600.125)
+                self.assertEqual(state.mode, mode)
+                self.assertAlmostEqual(state.target, 2560. + c.applied_bias)
+                self.assertEqual(c.auto_epoch, 0.)
+                self.assertEqual(c.amplitude, 512.)
+                self.feed(c, 3600.2, pressed=(button,))
+                self.assertEqual(c.auto_epoch, 0., 'held mode key must not restart phase')
+                self.assertEqual(c.tick(3600.375).mode, mode)
+
+    def test_continue_does_not_integrate_amplitude_during_disconnection(self):
+        c = SonicController(joy_timeout_action='continue')
+        self.feed(c, 0., pressed=(3, 6), increase=-1.)
+        self.assertEqual(c.tick(100.).requested_amplitude, 512.)
+        self.assertEqual(self.feed(c, 101., pressed=(6,), increase=-1.).requested_amplitude, 512.)
+        self.assertAlmostEqual(self.feed(c, 101.1, pressed=(6,), increase=-1.).requested_amplitude, 518.4)
+
+    def test_continue_preserves_stop_latch_invalid_input_and_clock_faults(self):
+        for fault in ('stop_button', 'invalid_joy', 'clock_rewind'):
+            with self.subTest(fault=fault):
+                c = SonicController(joy_timeout_action='continue')
+                self.feed(c, 1., pressed=(3,))
+                c.tick(10.)
+                if fault == 'stop_button':
+                    self.feed(c, 11., pressed=(1,))
+                elif fault == 'invalid_joy':
+                    c.handle_joy([], [], 11.)
+                else:
+                    c.tick(9.)
+                self.assertEqual((c.mode, c.reason), ('stopped', fault))
+                self.assertEqual(self.feed(c, 12., pressed=(3,)).mode, 'stopped')
+                self.feed(c, 13.)
+                self.assertEqual(self.feed(c, 14., pressed=(0,)).mode, 'manual')
+
+    def test_timeout_action_rejects_invalid_values(self):
+        for value in ('hold', '', None, True, 0, [], {}):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                SonicController(joy_timeout_action=value)
+
     def test_phase_overflow_returns_a_stopped_command(self):
         c = SonicController(frequency=1e307, joy_timeout_s=100.)
         self.feed(c, 0., pressed=(3,))
@@ -334,6 +388,40 @@ class RosAdapterTests(unittest.TestCase):
         self.assertEqual(node.controller.reason, 'shutdown')
         self.assertEqual(ros.Publisher.call_count, 5)
 
+    def test_continue_adapter_keeps_publishing_then_centers_on_shutdown(self):
+        module, _, clock, published = self.make_node({'~joy_timeout_action': 'continue'})
+        node = module.Teleop()
+        node._joyCallback(NS(axes=joy(pressed=(3,))[0], buttons=joy(pressed=(3,))[1]))
+        clock[0] = 10.125
+        node._controlLoop()
+        self.assertEqual([m for m in published if hasattr(m, 'cmd')][-1].cmd, [2560])
+        state = [m for m in published if hasattr(m, 'valid_joy_age_s')][-1]
+        self.assertEqual((state.motion_mode, state.valid_joy_age_s), ('auto', 10.125))
+        config = json.loads([m for m in published if hasattr(m, 'config_json')][-1].config_json)
+        self.assertEqual(config['settings']['joy_timeout_action'], 'continue')
+        node._shutdown()
+        self.assertEqual(node.controller.reason, 'shutdown')
+        self.assertEqual([m for m in published if hasattr(m, 'cmd')][-1].cmd, [2048])
+
+    def test_continue_tracking_uses_fresh_adc_and_stops_on_adc_loss(self):
+        module, _, clock, _ = self.make_node({'~joy_timeout_action': 'continue',
+                                             '~acoustic_steering/enabled': True})
+        with patch.dict(sys.modules, module._mock_modules):
+            node = module.Teleop()
+        node._adcCallback(self.adc(0.))
+        node._joyCallback(NS(axes=joy(pressed=(2,))[0], buttons=joy(pressed=(2,))[1]))
+        node._controlLoop()
+        for i in range(1, 31):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            node._controlLoop()
+        self.assertEqual((node.controller.mode, node.controller.applied_bias), ('tracking', -256.))
+        self.assertEqual(node.controller.last_joy_time, 0.)
+        self.assertGreaterEqual(node.acoustic.last_decision.cycle, 2)
+        clock[0] = 1.71
+        node._controlLoop()
+        self.assertEqual((node.controller.mode, node.controller.reason), ('stopped', 'acoustic_adc_timeout'))
+
     def test_invalid_config_fails_before_publisher(self):
         for params in [{'~update_rate': 0}, {'~update_rate': 4}, {'~update_rate': True},
                        {'~servo_cmd': []}, {'~servo_cmd': [float('nan')]}, {'~servo_cmd': [5000]},
@@ -341,7 +429,7 @@ class RosAdapterTests(unittest.TestCase):
                        {'~acoustic_steering/max_age_s': 0},
                        {'~acoustic_steering/max_age_s': True},
                        {'~acoustic_steering/future_tolerance_s': False},
-                       {'~status_local_echo': 'true'},
+                       {'~status_local_echo': 'true'}, {'~joy_timeout_action': 'hold'},
                        {'~acoustic_steering/future_tolerance_s': -1}]:
             with self.subTest(params=params):
                 module, ros, _, _ = self.make_node(params)

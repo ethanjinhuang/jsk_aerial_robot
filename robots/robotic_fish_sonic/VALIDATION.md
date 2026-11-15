@@ -1,5 +1,24 @@
 # robotic_fish_sonic 合并验证
 
+## 2026-11-15 手柄断联继续运动
+
+新增 `joy_timeout_action`，项目 `motion.yaml` 默认为 `continue`；Python 未配置时仍为
+`stop`。两个运动 launch 均支持显式覆盖，运行配置快照记录有效策略。
+断联时手动保持目标，普通自动保持相位、摆幅及偏置，趋声继续使用本地 ADC；
+新 Joy 不累计断联期间调幅。明确停止、无效输入、时钟异常、声学故障和退出回中仍生效。
+
+- 运动包 82 项单元测试通过，含长时间断联、重连指令、停止锁存、配置校验、
+  launch 参数优先级、趋声断联继续及 ADC 超时停止。
+- 隔离 ROS 测试通过：实际 motion.yaml 的 `continue` 行为，以及安装版本显式
+  `stop` 的超时停止／重新使能行为；ROS 时钟暂停时仍按墙上时间输出。
+- 1.5／2 Hz、两种转向符号的趋声测试通过：停止 Joy 消息而保持 ADC 时继续判断和摆尾，
+  随后停止 ADC 则回中并锁存；实际 `record.launch` 录包及回读通过。
+- 运动包独立构建、安装通过，未连接或驱动真实舵机。
+
+日志：`/tmp/fish-joy-timeout-unit.log`、`/tmp/fish-joy-timeout-continue-ros.log`、
+`/tmp/fish-joy-timeout-stop-ros.log`、`/tmp/fish-joy-timeout-cycle-ros.log`、
+`/tmp/fish-joy-timeout-install.log`。本次修改覆盖下方历史记录中的默认 Joy 超时停止行为。
+
 ## 2026-11-15 启动入口与参数集中
 
 日常 VIM4 入口为 `robotic_fish/sonic_vim4.launch`，PC 继续单独运行 `joy.launch`。

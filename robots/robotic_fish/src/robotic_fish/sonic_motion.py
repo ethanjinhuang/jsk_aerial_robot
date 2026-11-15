@@ -69,6 +69,8 @@ class SonicController:
     """Manual, ordinary auto, acoustic tracking and a latched stopped state.
 
     Startup is manual, but produces no command before the first Joy input.
+    The continue timeout action retains manual position or runs the active gait;
+    it never bypasses explicit stops, invalid input or acoustic fault handling.
     Stop/fault recovery requires a neutral, released frame followed by a new
     mode button press while neutral. Repeated messages cannot clear a stop.
     """
@@ -77,13 +79,16 @@ class SonicController:
                  joy_timeout_s=.5, joy_dead_zone=.1,
                  steering_axis=2, amplitude_decrease_axis=3, amplitude_increase_axis=4,
                  stop_button=1, auto_button=3, manual_button=0, amplitude_buttons=(6, 7),
-                 tracking_button=2, tracking_enabled=False):
+                 tracking_button=2, tracking_enabled=False, joy_timeout_action='stop'):
         self.motion = SonicMotion(center, servo_range)
         self.frequency = _number(frequency, 'auto_frequency')
         self.default_amplitude = _number(default_amplitude, 'auto_default_amplitude')
         self.amplitude = _number(self.default_amplitude if amplitude is None else amplitude, 'auto_amplitude')
         self.amplitude_rate = _number(amplitude_rate, 'auto_amplitude_rate')
         self.joy_timeout_s = _number(joy_timeout_s, 'joy_timeout_s')
+        if joy_timeout_action not in ('stop', 'continue'):
+            raise ValueError('joy_timeout_action must be stop or continue')
+        self.joy_timeout_action = joy_timeout_action
         self.dead_zone = _number(joy_dead_zone, 'joy_dead_zone')
         if not isinstance(tracking_enabled, bool):
             raise ValueError('tracking_enabled must be boolean')
@@ -165,7 +170,8 @@ class SonicController:
         return now
 
     def _expire(self, now):
-        if self.mode != 'stopped' and self._last_joy is not None and now - self._last_joy > self.joy_timeout_s:
+        if (self.joy_timeout_action == 'stop' and self.mode != 'stopped'
+                and self._last_joy is not None and now - self._last_joy > self.joy_timeout_s):
             self.stop('joy_timeout')
 
     def _snapshot(self, now=None):
@@ -215,6 +221,9 @@ class SonicController:
             return self.stop('invalid_joy')
         self.input_error = ''
         dt = 0. if self._last_joy is None else max(0., min(self.joy_timeout_s, now - self._last_joy))
+        # A newly received command must not integrate amplitude over a lost link.
+        if self._last_joy is not None and now - self._last_joy > self.joy_timeout_s:
+            dt = 0.
         self._last_joy = now
         auto, manual = bool(buttons[self.auto_button]), bool(buttons[self.manual_button])
         tracking = bool(buttons[self.tracking_button])

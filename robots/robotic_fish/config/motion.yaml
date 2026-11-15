@@ -6,6 +6,9 @@ auto_default_amplitude: 512.0
 auto_amplitude_rate: 64.0
 joy_dead_zone: 0.1
 joy_timeout_s: 0.5
+# continue: retain manual position / keep auto and tracking running on Joy loss.
+# stop: center and latch stopped after joy_timeout_s. Other faults still stop.
+joy_timeout_action: continue
 update_rate: 50.0
 
 steering_axis: 2
