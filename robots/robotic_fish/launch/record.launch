@@ -3,7 +3,7 @@
   <arg name="enabled" default="true"/>
   <arg name="record_diagnostics" default="true"/>
   <arg name="diagnostics_topic" value="$(eval '/diagnostics' if arg('record_diagnostics') else '')"/>
-  <arg name="bag_prefix" default="$(env HOME)/sonic"/>
+  <arg name="bag_prefix" default="/home/khadas/ros/rosbag/sonic"/>
 
   <node if="$(arg enabled)"
         pkg="rosbag"

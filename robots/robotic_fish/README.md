@@ -245,6 +245,7 @@ roslaunch robotic_fish record.launch
 本次新增消息并扩展了 `AcousticSteeringState`，两端需重新编译
 `robotic_fish_sonic robotic_fish`、source 并重启相关节点。旧 bag 仍保留原有嵌入式消息定义。
 
+默认保存到 `/home/khadas/ros/rosbag/sonic_日期-时间.bag`，整机和独立录包入口一致。
 改变保存目录或文件名前缀时，目标目录需要预先创建：
 
 ```bash
@@ -256,7 +257,7 @@ roslaunch robotic_fish record.launch bag_prefix:=$HOME/bags/sonic
 停止录包终端的 launch 后检查：
 
 ```bash
-rosbag info ~/sonic_*.bag
+rosbag info /home/khadas/ros/rosbag/sonic_*.bag
 ```
 
 ### 5.4 日常入口与参数配置
@@ -285,7 +286,7 @@ IO 覆盖写入节点优先读取的规范名称，因此规范/旧名称的自�
 | `enable_motion` / `enable_bridge` | true / true | 分别启动运动或 spinal 桥 |
 | `enable_status_console` / `status_color` | true / auto | Share 显示及颜色 |
 | `record` / `record_diagnostics` | false / true | 是否录包、是否包含诊断 |
-| `bag_prefix` | `$HOME/sonic` | bag 文件前缀，目标目录须已存在 |
+| `bag_prefix` | `/home/khadas/ros/rosbag/sonic` | bag 文件前缀，目标目录须已存在 |
 
 ```bash
 roslaunch robotic_fish sonic_vim4.launch record:=true bag_prefix:=$HOME/bags/fish

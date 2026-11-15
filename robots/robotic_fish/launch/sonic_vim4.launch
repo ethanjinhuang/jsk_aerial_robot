@@ -8,7 +8,7 @@
   <arg name="enable_motion" default="true"/>
   <arg name="enable_bridge" default="true"/>
   <arg name="record" default="false"/>
-  <arg name="bag_prefix" default="$(env HOME)/sonic"/>
+  <arg name="bag_prefix" default="/home/khadas/ros/rosbag/sonic"/>
   <arg name="record_diagnostics" default="true"/>
   <arg name="spinal_mode" default="serial"/>
   <!-- Intentional experiment-scene defaults; numeric defaults live in YAML. -->

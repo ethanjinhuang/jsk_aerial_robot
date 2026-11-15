@@ -625,7 +625,7 @@ roslaunch robotic_fish record.launch
 The default output filename is similar to:
 
 ```text
-/home/khadas/sonic_2026-09-02-19-30-15.bag
+/home/khadas/ros/rosbag/sonic_2026-09-02-19-30-15.bag
 ```
 
 While recording, the file has a `.bag.active` suffix. Press Ctrl+C to close it normally and produce the final `.bag` file. Do not power off the computer while the bag is active.
@@ -633,14 +633,14 @@ While recording, the file has a `.bag.active` suffix. Press Ctrl+C to close it n
 Inspect a recording:
 
 ```bash
-rosbag info /home/khadas/sonic_TIMESTAMP.bag
-rosbag check /home/khadas/sonic_TIMESTAMP.bag
+rosbag info /home/khadas/ros/rosbag/sonic_TIMESTAMP.bag
+rosbag check /home/khadas/ros/rosbag/sonic_TIMESTAMP.bag
 ```
 
 Replay it with:
 
 ```bash
-rosbag play /home/khadas/sonic_TIMESTAMP.bag
+rosbag play /home/khadas/ros/rosbag/sonic_TIMESTAMP.bag
 ```
 
 Gain control uses a service to command the DAC, and ROS service requests are not stored as rosbag topics. Reconstruct gain-control behavior primarily from:
