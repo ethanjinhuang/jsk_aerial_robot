@@ -18,6 +18,73 @@ def batch(t, left=2., right=1., head=1., **changes):
 
 
 class CycleTests(unittest.TestCase):
+    def test_bar_width_and_signed_ratio_offset_match_five_percent_frame_shifts(self):
+        for offset in (-.05, 0., .05):
+            for residual, direction in [(-.07501, -1), (-.075, -1), (-.07499, 0),
+                                        (0., 0), (.07499, 0), (.075, 1), (.07501, 1)]:
+                for scale in (.05, 1., 3.):
+                    with self.subTest(offset=offset, residual=residual, scale=scale):
+                        left_share = .5 - offset + residual
+                        left, right = scale * left_share, scale * (1 - left_share)
+                        e = CycleSteering(2., threshold=.15, bias=128., lr_ratio_offset=offset)
+                        self.push(e, 0., left=left, right=right)
+                        e.begin(100., 2., 100.)
+                        self.fill(e, left=left, right=right)
+                        result = e.evaluate(100.5)
+                        self.assertAlmostEqual(result.difference, 4 * (left_share - .5))
+                        self.assertAlmostEqual(result.compensated_difference, 4 * residual)
+                        self.assertEqual(result.bias, -direction * 128.)
+                        self.assertEqual(result.lr_ratio_offset, offset)
+
+    def test_ratio_and_voltage_offset_combine_without_changing_measured_voltages(self):
+        e = CycleSteering(2., threshold=.15, bias=128., lr_ratio_offset=-.05, lr_voltage_offset_v=.10)
+        self.push(e, 0., left=1.2, right=.8)
+        e.begin(100., 2., 100.)
+        self.fill(e, left=1.2, right=.8)
+        result = e.evaluate(100.5)
+        self.assertAlmostEqual(result.left_mean, 1.2)
+        self.assertAlmostEqual(result.right_mean, .8)
+        self.assertAlmostEqual(result.compensated_left_mean, 1.25)
+        self.assertAlmostEqual(result.compensated_right_mean, .75)
+        self.assertAlmostEqual(result.compensated_difference, .30)
+        self.assertEqual(result.bias, -128.)
+        self.assertEqual(result.raw_means[:2], (.6, .4))
+
+    def test_ratio_offset_is_atomic_rejects_invalid_values_and_supports_reset(self):
+        e = CycleSteering(2., lr_ratio_offset=.05)
+        self.start(e)
+        self.fill(e)
+        previous = e.evaluate(100.5)
+        e.configure(.15, 128., 0., lr_ratio_offset=-1 / 6)
+        pending = e.pending
+        for value in (True, float('nan'), float('inf'), -.5001, .5001):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    CycleSteering(2., lr_ratio_offset=value)
+                with self.assertRaises(ValueError):
+                    e.configure(.15, 128., 0., lr_ratio_offset=value)
+                self.assertIs(e.pending, pending)
+        self.assertEqual(e.settings.lr_ratio_offset, .05)
+        self.assertIs(e.last_decision, previous)
+        self.fill(e, .5, 1.)
+        self.assertAlmostEqual(e.evaluate(101.).compensated_difference, 0.)
+        self.assertEqual(e.last_decision.bias, 0.)
+        e.configure(.15, 128., 0.)
+        self.assertEqual(e.pending.lr_ratio_offset, -1 / 6)
+        e.configure(.15, 128., 0., lr_ratio_offset=0.)
+        self.fill(e, 1., 1.5)
+        self.assertEqual(e.evaluate(101.5).bias, -128.)
+
+    def test_trailing_voltage_window_uses_the_same_ratio_offset(self):
+        from robotic_fish_sonic.cycle_steering import CycleVoltageWindow
+        from robotic_fish_sonic.acoustic_core import adapt
+        w = CycleVoltageWindow(2., .2, .2, .05, .001)
+        for i in range(11):
+            w.push(adapt(batch(i * .05)), i * .05)
+        result = w.snapshot(.15, .05)
+        self.assertAlmostEqual(result['difference'], 2 / 3)
+        self.assertAlmostEqual(result['compensated_difference'], 1.15 / 1.5 + .20)
+
     def push(self, engine, t, **kwargs):
         return engine.push(batch(t, **kwargs), 100. + t, t)
 
@@ -119,7 +186,7 @@ class CycleTests(unittest.TestCase):
                 self.assertEqual(e.evaluate(100.5).bias, expected)
 
     def test_polarity_and_threshold_equality(self):
-        e = CycleSteering(2., threshold=1., left_bias_sign=-1)
+        e = CycleSteering(2., threshold=.5, left_bias_sign=-1)
         self.push(e, 0., left=3.)
         e.begin(100., 2., 100.)
         self.fill(e, left=3.)
@@ -128,19 +195,19 @@ class CycleTests(unittest.TestCase):
         self.fill(e, .5, 1., left=3.)
         self.assertEqual(e.evaluate(101.).bias, -128.)
 
-    def test_fifteen_percent_of_mean_boundary_is_inclusive_and_symmetric(self):
+    def test_fifteen_percent_full_bar_boundary_is_inclusive_and_symmetric(self):
         for scale in (.01, 1., 10.):
             for difference, expected in ((.15 - 1e-8, 0.), (.15, 128.), (.15 + 1e-8, 128.)):
                 for sign in (-1, 1):
                     with self.subTest(scale=scale, difference=difference, sign=sign):
-                        left = scale * (1. + sign * difference / 2.)
-                        right = scale * (1. - sign * difference / 2.)
+                        left = scale * (1. + sign * difference)
+                        right = scale * (1. - sign * difference)
                         e = CycleSteering(2., threshold=.15, bias=128.)
                         self.push(e, 0., left=left, right=right)
                         e.begin(100., 2., 100.)
                         self.fill(e, left=left, right=right)
                         result = e.evaluate(100.5)
-                        self.assertAlmostEqual(result.compensated_difference, sign * difference)
+                        self.assertAlmostEqual(result.compensated_difference, 2 * sign * difference)
                         self.assertEqual(result.bias, -sign * expected)
 
     def test_zero_threshold_equal_channels_stay_straight(self):
@@ -151,9 +218,9 @@ class CycleTests(unittest.TestCase):
             self.fill(e, left=left, right=right)
             self.assertEqual(e.evaluate(100.5).bias, expected)
 
-    def test_two_hundred_percent_threshold_requires_zero_weaker_channel(self):
+    def test_full_bar_threshold_requires_zero_weaker_channel(self):
         for left, right, expected in ((2., 0., -256.), (0., 2., 256.), (2., .001, 0.)):
-            e = CycleSteering(2., threshold=2.)
+            e = CycleSteering(2., threshold=1.)
             self.push(e, 0., left=left, right=right)
             e.begin(100., 2., 100.)
             self.fill(e, left=left, right=right)
@@ -162,11 +229,11 @@ class CycleTests(unittest.TestCase):
     def test_atomic_parameters_apply_at_boundary(self):
         e = CycleSteering(2.)
         self.start(e)
-        e.configure(1.2, 100., 0.)
+        e.configure(.6, 100., 0.)
         self.assertEqual(e.settings.bias, 256.)
         with self.assertRaises(ValueError):
             e.configure(.1, 2048., 0.)
-        self.assertEqual((e.pending.threshold,e.pending.bias), (1.2,100.))
+        self.assertEqual((e.pending.threshold,e.pending.bias), (.6,100.))
         self.fill(e)
         result=e.evaluate(100.5)
         self.assertEqual((result.bias,e.settings.bias), (0.,100.))
@@ -178,7 +245,7 @@ class CycleTests(unittest.TestCase):
         self.fill(e)
         previous = e.evaluate(100.5)
         e.configure(.2, 128., .1, left_bias_sign=1)
-        self.assertEqual((e.left_bias_sign, e.settings.threshold, e.settings.bias), (-1, .1, 256.))
+        self.assertEqual((e.left_bias_sign, e.settings.threshold, e.settings.bias), (-1, .15, 256.))
         self.assertIs(e.last_decision, previous)
         self.assertIsNone(e.evaluate(100.51))
         self.fill(e, .5, 1.)
@@ -222,7 +289,7 @@ class CycleTests(unittest.TestCase):
         cases = [(3., 1., -2., .1, 0.), (3., 1., -1., .1, 128.),
                  (3., 1., -3., .1, -128.), (1., 3., 2., .1, 0.),
                  (1., 3., 3., .1, 128.), (1., 3., 1., .1, -128.),
-                 (3., 1., -1., .5, 128.), (3., 1., -3., .5, -128.)]
+                 (3., 1., -1., .25, 128.), (3., 1., -3., .25, -128.)]
         for left, right, offset, threshold, bias in cases:
             for polarity in (-1, 1):
                 with self.subTest(left=left, offset=offset, polarity=polarity):
@@ -275,7 +342,7 @@ class CycleTests(unittest.TestCase):
         e = CycleSteering(2., lr_voltage_offset_v=.1)
         self.start(e)
         e.configure(.1, 128., -2.)
-        self.assertEqual((e.settings.threshold, e.settings.bias, e.settings.lr_voltage_offset_v), (.1, 256., .1))
+        self.assertEqual((e.settings.threshold, e.settings.bias, e.settings.lr_voltage_offset_v), (.15, 256., .1))
         self.assertEqual((e.pending.threshold, e.pending.bias, e.pending.lr_voltage_offset_v), (.1, 128., -2.))
         pending = e.pending
         for value in (float('nan'), float('inf'), -float('inf'), True):
@@ -330,7 +397,7 @@ class CycleTests(unittest.TestCase):
             self.assertIsNone(e.evaluate(100. + start + .5))
             self.assertIs(e.last_decision, previous)
             self.assertIs(e.pending, pending)
-            self.assertEqual((e.settings.threshold, e.settings.bias, e.settings.lr_voltage_offset_v), (.1, 256., 0.))
+            self.assertEqual((e.settings.threshold, e.settings.bias, e.settings.lr_voltage_offset_v), (.15, 256., 0.))
             self.assertEqual(e.waiting_status, 'voltage_compensation_out_of_range')
         e.configure(.1, 64., -1.5)
         self.fill(e, 1.5, 2.)
@@ -664,7 +731,7 @@ class CycleTests(unittest.TestCase):
 
     def test_bad_configuration(self):
         for kwargs in ({'frequency':0},{'frequency':float('nan')},{'threshold':-1},
-                       {'threshold':2.01},{'threshold':float('nan')},{'bias':-1},{'bias':1025},{'left_bias_sign':0},
+                       {'threshold':1.01},{'threshold':float('nan')},{'bias':-1},{'bias':1025},{'left_bias_sign':0},
                        {'left_bias_sign':True},{'gap_s':0},{'max_age_s':0},
                        {'future_tolerance_s':-1},{'low_signal_v':0}):
             with self.subTest(kwargs=kwargs),self.assertRaises(ValueError):

@@ -2,7 +2,7 @@
 servo_center: 2048.0
 servo_range: 512.0
 auto_frequency: 1.5
-auto_default_amplitude: 512.0
+auto_default_amplitude: 256.0
 auto_amplitude_rate: 64.0
 joy_dead_zone: 0.1
 joy_timeout_s: 0.5
@@ -26,9 +26,11 @@ amplitude_buttons: [6, 7]
 acoustic_steering:
   # sonic_vim4.launch explicitly enables tracking for the experiment scene.
   enabled: false
-  threshold: 0.1
+  threshold: 0.15  # Full bar width: 15%, +/-7.5% around the midpoint.
   bias: 256.0
   lr_voltage_offset_v: 0.0
+  # Left share += offset, right share -= offset; +0.05 shifts the frame left 5%.
+  lr_ratio_offset: 0.0
   max_age_s: 0.5
   future_tolerance_s: 0.05
   left_bias_sign: -1

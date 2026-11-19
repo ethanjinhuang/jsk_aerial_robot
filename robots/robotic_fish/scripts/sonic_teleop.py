@@ -75,10 +75,13 @@ class Teleop:
         self._status_window = CycleVoltageWindow(
             self.controller.frequency, gap_s, self._status_max_age, self._status_future_tolerance,
             low_signal_v, self.channel_layout)
-        self._status_threshold = number(rospy.get_param('~acoustic_steering/threshold', .1), 'threshold')
+        self._status_threshold = number(rospy.get_param('~acoustic_steering/threshold', .15), 'threshold')
         self._status_offset = number(rospy.get_param('~acoustic_steering/lr_voltage_offset_v', 0.), 'lr_voltage_offset_v')
-        if not 0 <= self._status_threshold <= 2:
-            raise ValueError('threshold must be in [0,2]')
+        self._status_ratio_offset = number(rospy.get_param('~acoustic_steering/lr_ratio_offset', 0.), 'lr_ratio_offset')
+        if not 0 <= self._status_threshold <= 1:
+            raise ValueError('threshold must be in [0,1]')
+        if not -.5 <= self._status_ratio_offset <= .5:
+            raise ValueError('lr_ratio_offset must be in [-0.5,0.5]')
         self.update_rate = rospy.get_param('~update_rate', 50.)
         if isinstance(self.update_rate, bool):
             raise ValueError('update_rate must be a positive finite number')
@@ -127,6 +130,7 @@ class Teleop:
                 threshold=self._status_threshold,
                 bias=rospy.get_param('~acoustic_steering/bias', 256.),
                 lr_voltage_offset_v=self._status_offset,
+                lr_ratio_offset=self._status_ratio_offset,
                 left_bias_sign=rospy.get_param('~acoustic_steering/left_bias_sign', -1),
                 gap_s=gap_s,
                 max_age_s=self._status_max_age,
@@ -197,12 +201,14 @@ class Teleop:
                         acoustic_steering=dict(enabled=self.acoustic is not None,
                             difference_reference=DIFFERENCE_REFERENCE, threshold_inclusive=True,
                             voltage_offset_reference='left_minus_right',
+                            threshold_reference='full_bar_width',
+                            ratio_offset_reference='left_plus_right_minus',
                             max_age_s=self._status_max_age, future_tolerance_s=self._status_future_tolerance))
         if self.acoustic is not None:
             a = self.acoustic
             settings['acoustic_steering'].update(vars(a.settings), left_bias_sign=a.left_bias_sign,
                 gap_s=a.gap_s, low_signal_v=a.low_signal_v, max_bias=a.max_bias)
-        payload = json.dumps(dict(schema_version=5, host=socket.gethostname(),
+        payload = json.dumps(dict(schema_version=7, host=socket.gethostname(),
             started_ros_s=self._started_ros, started_monotonic_s=self._started_monotonic,
             settings=settings, applied_request_id=self._applied_request_id,
             pending_request=None if self._pending_request is None else dict(
@@ -222,6 +228,7 @@ class Teleop:
         msg.difference_reference = DIFFERENCE_REFERENCE
         msg.threshold, msg.turn_bias, msg.lr_voltage_offset_v = values.threshold, values.bias, values.lr_voltage_offset_v
         msg.left_bias_sign = values.left_bias_sign
+        msg.lr_ratio_offset = values.lr_ratio_offset
         msg.cycle_index = cycle
         self.event_pub.publish(msg)
 
@@ -232,12 +239,13 @@ class Teleop:
             # Retain rejected values, including NaN/Inf in the float fields.
             requested_sign = request.left_bias_sign
             resolved_sign = self.acoustic.left_bias_sign if requested_sign == 0 else requested_sign
-            values = SteeringSettings(request.threshold, request.bias, request.lr_voltage_offset_v, resolved_sign)
+            ratio_offset = getattr(request, 'lr_ratio_offset', self.acoustic.settings.lr_ratio_offset)
+            values = SteeringSettings(request.threshold, request.bias, request.lr_voltage_offset_v, resolved_sign, ratio_offset)
             if self._stopping.is_set():
                 self._publishEvent(request_id, 'rejected', values, 'motion node is shutting down')
                 return self._steeringResponse(False, 'motion node is shutting down', request_id)
             try:
-                self.acoustic.configure(request.threshold, request.bias, request.lr_voltage_offset_v, resolved_sign)
+                self.acoustic.configure(request.threshold, request.bias, request.lr_voltage_offset_v, resolved_sign, ratio_offset)
             except ValueError as exc:
                 self._publishEvent(request_id, 'rejected', values, str(exc))
                 return self._steeringResponse(False, str(exc), request_id)
@@ -266,12 +274,14 @@ class Teleop:
         response.active_threshold, response.active_bias, response.active_lr_voltage_offset_v = (
             active.threshold, active.bias, active.lr_voltage_offset_v)
         response.active_left_bias_sign = active.left_bias_sign
+        response.active_lr_ratio_offset = active.lr_ratio_offset
         response.parameters_pending = pending is not None
         response.pending_request_id = 0 if self._pending_request is None else self._pending_request[0]
         response.pending_threshold = float('nan') if pending is None else pending.threshold
         response.pending_bias = float('nan') if pending is None else pending.bias
         response.pending_lr_voltage_offset_v = float('nan') if pending is None else pending.lr_voltage_offset_v
         response.pending_left_bias_sign = 0 if pending is None else pending.left_bias_sign
+        response.pending_lr_ratio_offset = float('nan') if pending is None else pending.lr_ratio_offset
         return response
 
     def _joyCallback(self, msg):
@@ -309,7 +319,8 @@ class Teleop:
                 or sum(msg.buttons[i] for i in (c.auto_button, c.manual_button, c.tracking_button)) > 1):
             return
         base = self.acoustic.pending or self.acoustic.settings
-        request = SteeringSettings(base.threshold, base.bias, base.lr_voltage_offset_v, -base.left_bias_sign)
+        request = SteeringSettings(base.threshold, base.bias, base.lr_voltage_offset_v, -base.left_bias_sign,
+                                   base.lr_ratio_offset)
         response = self._setAcousticSteering(request, source='joystick_option')
         if response.success:
             rospy.loginfo('Option requested sound mode %s (left_bias_sign=%+d), request=%d; '
@@ -355,10 +366,11 @@ class Teleop:
         settings = None if self.acoustic is None else self.acoustic.settings
         threshold = self._status_threshold if settings is None else settings.threshold
         offset = self._status_offset if settings is None else settings.lr_voltage_offset_v
+        ratio_offset = self._status_ratio_offset if settings is None else settings.lr_ratio_offset
         stats = None
         if adc['quality'] not in ('stale_sample', 'future_sample'):
-            stats = self._status_window.snapshot(offset)
-        return stats, threshold, offset
+            stats = self._status_window.snapshot(offset, ratio_offset)
+        return stats, threshold, offset, ratio_offset
 
     def _publishMotionState(self, state, now, stamp):
         msg = SonicMotionState()
@@ -396,7 +408,8 @@ class Teleop:
         msg.adc_receipt_age_s, msg.adc_receipt_interval_s = adc['receipt_age'], self._adc_receipt_interval
         msg.adc_quality_flags, msg.adc_quality = adc['flags'], adc['quality']
         msg.acoustic_input_error = '' if self.acoustic is None else self.acoustic.fault or self.acoustic.latest_error
-        cycle, msg.adc_cycle_threshold, msg.adc_cycle_lr_voltage_offset_v = self._cycleStatus(adc)
+        (cycle, msg.adc_cycle_threshold, msg.adc_cycle_lr_voltage_offset_v,
+         msg.adc_cycle_lr_ratio_offset) = self._cycleStatus(adc)
         msg.adc_cycle_window_s = self._status_window.period
         msg.adc_cycle_ready = cycle is not None
         msg.adc_cycle_sample_count = 0
@@ -420,11 +433,12 @@ class Teleop:
     def _formatStatus(self, state, now):
         """Report the latest voltage window alongside the current motion state."""
         adc = self._adcStatus(now, rospy.Time.now().to_sec())
-        cycle, threshold, offset = self._cycleStatus(adc)
+        cycle, threshold, offset, ratio_offset = self._cycleStatus(adc)
         data = dict(mode=state.mode, status=self._acoustic_status, reason=state.reason,
                     raw=None, raw_means=None, means=None, mean_1s=None, mean_1s_status=None,
                     difference=None, compensated_difference=None, cycle_quality=None,
                     lr_voltage_offset_v=offset, pending_lr_voltage_offset_v=None,
+                    lr_ratio_offset=ratio_offset, pending_lr_ratio_offset=None,
                     left_bias_sign=None, pending_left_bias_sign=None,
                     threshold=threshold, quality=adc['quality'],
                     bias=state.applied_bias, bias_limit=self.controller.motion.servo_range)
@@ -446,6 +460,7 @@ class Teleop:
             if self.acoustic.pending is not None:
                 data['pending_left_bias_sign'] = self.acoustic.pending.left_bias_sign
                 data['pending_lr_voltage_offset_v'] = self.acoustic.pending.lr_voltage_offset_v
+                data['pending_lr_ratio_offset'] = self.acoustic.pending.lr_ratio_offset
         if cycle is not None:
             data.update(cycle)
             data['cycle_quality'] = '|'.join(flag.name.lower() for flag in Status if flag & cycle['flags'])
@@ -485,9 +500,10 @@ class Teleop:
                                            'effective at full-cycle decision', decision.cycle)
                         self._publishConfig()
                         rospy.loginfo('Acoustic steering applied: request=%d cycle=%d '
-                                      'threshold=%.4f bias=%.1f lr_voltage_offset_v=%+.6f V left_bias_sign=%+d',
+                                      'threshold=%.4f bias=%.1f lr_voltage_offset_v=%+.6f V '
+                                      'left_bias_sign=%+d lr_ratio_offset=%+.4f',
                                       request_id, decision.cycle, values.threshold, values.bias,
-                                      values.lr_voltage_offset_v, values.left_bias_sign)
+                                      values.lr_voltage_offset_v, values.left_bias_sign, values.lr_ratio_offset)
                     rospy.logdebug('Acoustic cycle=%d, L/R=%.5f/%.5f, difference=%.3f, bias=%.1f',
                                   decision.cycle, decision.left_mean, decision.right_mean,
                                   decision.difference, decision.bias)
@@ -514,6 +530,7 @@ class Teleop:
         msg.threshold, msg.turn_bias = self.acoustic.settings.threshold, self.acoustic.settings.bias
         msg.difference_reference = DIFFERENCE_REFERENCE
         msg.lr_voltage_offset_v = self.acoustic.settings.lr_voltage_offset_v
+        msg.lr_ratio_offset = self.acoustic.settings.lr_ratio_offset
         msg.left_bias_sign = self.acoustic.left_bias_sign
         msg.command_bias = 0. if state is None else state.applied_bias
         msg.left_mean = msg.right_mean = msg.normalized_difference = float('nan')

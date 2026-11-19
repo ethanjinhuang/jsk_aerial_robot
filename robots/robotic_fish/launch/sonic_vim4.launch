@@ -26,6 +26,7 @@
   <arg name="acoustic_threshold" default=""/>
   <arg name="acoustic_bias" default=""/>
   <arg name="acoustic_lr_voltage_offset_v" default=""/>
+  <arg name="acoustic_lr_ratio_offset" default=""/>
   <arg name="acoustic_max_age_s" default=""/>
   <arg name="acoustic_future_tolerance_s" default=""/>
   <arg name="left_bias_sign" default=""/>
@@ -58,6 +59,7 @@
     <arg name="acoustic_threshold" value="$(arg acoustic_threshold)"/>
     <arg name="acoustic_bias" value="$(arg acoustic_bias)"/>
     <arg name="acoustic_lr_voltage_offset_v" value="$(arg acoustic_lr_voltage_offset_v)"/>
+    <arg name="acoustic_lr_ratio_offset" value="$(arg acoustic_lr_ratio_offset)"/>
     <arg name="acoustic_max_age_s" value="$(arg acoustic_max_age_s)"/>
     <arg name="acoustic_future_tolerance_s" value="$(arg acoustic_future_tolerance_s)"/>
     <arg name="left_bias_sign" value="$(arg left_bias_sign)"/>

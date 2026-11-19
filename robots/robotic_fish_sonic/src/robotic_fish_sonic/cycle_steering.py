@@ -11,13 +11,14 @@ DIFFERENCE_REFERENCE = 'channel_mean'
 
 
 def steering_direction(difference, threshold):
-    """Inclusive symmetric threshold; equality of channels always means straight.
+    """Compare mean-normalized diagnostics with a full-bar-width threshold.
 
     Decimal voltage inputs may round just below an exact threshold (e.g. 15%).
     The relative tolerance only absorbs floating-point arithmetic at that edge.
     """
-    reached = abs(difference) >= threshold or math.isclose(
-        abs(difference), threshold, rel_tol=1e-12, abs_tol=0.)
+    boundary = 2. * threshold
+    reached = abs(difference) >= boundary or math.isclose(
+        abs(difference), boundary, rel_tol=1e-12, abs_tol=0.)
     return (1 if difference > 0 else -1) if difference != 0 and reached else 0
 
 
@@ -45,6 +46,7 @@ class SteeringSettings:
     bias: float
     lr_voltage_offset_v: float
     left_bias_sign: int = -1
+    lr_ratio_offset: float = 0.
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ class CycleDecision:
     compensated_right_mean: float
     compensated_difference: float
     raw_means: tuple  # Physical ADC0, ADC1, ADC2 order, not directional order.
+    lr_ratio_offset: float = 0.
 
 
 class CycleVoltageWindow:
@@ -122,7 +125,7 @@ class CycleVoltageWindow:
         self.latest = dict(raw_means=raw_means, means=voltage_means, sample_count=count,
                            flags=flags, side_mean=left / 2. + right / 2.)
 
-    def snapshot(self, offset_v):
+    def snapshot(self, offset_v, lr_ratio_offset=0.):
         if self.latest is None:
             return None
         stats = self.latest
@@ -131,7 +134,7 @@ class CycleVoltageWindow:
         difference = compensated = float('nan')
         if not stats['flags'] & Status.LOW_SIGNAL:
             difference = (left - right) / side_mean
-            compensated = (left - right + offset_v) / side_mean
+            compensated = (left - right + offset_v) / side_mean + 4. * lr_ratio_offset
         return dict(stats, difference=difference, compensated_difference=compensated)
 
 
@@ -145,10 +148,10 @@ class CycleSteering:
     Gain changes, calibration fallback and unknown gain hold the last decision
     until a complete aligned cycle is usable, without changing the gait epoch.
     """
-    def __init__(self, frequency, max_bias=1024., threshold=.1, bias=256.,
+    def __init__(self, frequency, max_bias=1024., threshold=.15, bias=256.,
                  left_bias_sign=-1, gap_s=.2, max_age_s=.2,
                  future_tolerance_s=.05, low_signal_v=.001, lr_voltage_offset_v=0.,
-                 channel_layout=DEFAULT_CHANNEL_LAYOUT):
+                 channel_layout=DEFAULT_CHANNEL_LAYOUT, lr_ratio_offset=0.):
         channel_mapping(channel_layout)
         self.channel_layout = channel_layout
         self.max_bias = number(max_bias, 'max_bias')
@@ -158,7 +161,7 @@ class CycleSteering:
         self.low_signal_v = number(low_signal_v, 'low_signal_v')
         if min(self.max_bias, self.gap_s, self.max_age_s, self.low_signal_v) <= 0 or self.future_tolerance_s < 0:
             raise ValueError('limits must be positive; future tolerance nonnegative')
-        self.settings = self._settings(threshold, bias, lr_voltage_offset_v, left_bias_sign)
+        self.settings = self._settings(threshold, bias, lr_voltage_offset_v, left_bias_sign, lr_ratio_offset)
         self.pending = None
         self._set_frequency(frequency)
         self.rows = deque()
@@ -183,17 +186,20 @@ class CycleSteering:
         return self.settings.left_bias_sign
 
     def _settings(self, turn_threshold_ratio, turn_offset_magnitude_ticks,
-                  left_right_voltage_offset_v, left_bias_sign):
+                  left_right_voltage_offset_v, left_bias_sign, lr_ratio_offset):
         turn_threshold_ratio, turn_offset_magnitude_ticks = number(turn_threshold_ratio, 'threshold'), number(turn_offset_magnitude_ticks, 'bias')
         left_right_voltage_offset_v = number(left_right_voltage_offset_v, 'lr_voltage_offset_v')
-        if not 0 <= turn_threshold_ratio <= 2 or not 0 <= turn_offset_magnitude_ticks <= self.max_bias:
-            raise ValueError('threshold must be in [0,2] and bias in [0,max_bias]')
+        lr_ratio_offset = number(lr_ratio_offset, 'lr_ratio_offset')
+        if not 0 <= turn_threshold_ratio <= 1 or not 0 <= turn_offset_magnitude_ticks <= self.max_bias:
+            raise ValueError('threshold must be in [0,1] and bias in [0,max_bias]')
         if isinstance(left_bias_sign, bool) or left_bias_sign not in (-1, 1):
             raise ValueError('left_bias_sign must be -1 or 1')
+        if not -.5 <= lr_ratio_offset <= .5:
+            raise ValueError('lr_ratio_offset must be in [-0.5,0.5]')
         return SteeringSettings(turn_threshold_ratio, turn_offset_magnitude_ticks,
-                                left_right_voltage_offset_v, int(left_bias_sign))
+                                left_right_voltage_offset_v, int(left_bias_sign), lr_ratio_offset)
 
-    def configure(self, threshold, bias, lr_voltage_offset_v, left_bias_sign=None):
+    def configure(self, threshold, bias, lr_voltage_offset_v, left_bias_sign=None, lr_ratio_offset=None):
         """Validate all settings now; apply together at the next valid decision.
 
         Omitting polarity retains its currently effective value, including for
@@ -201,7 +207,9 @@ class CycleSteering:
         """
         if left_bias_sign is None:
             left_bias_sign = self.left_bias_sign
-        self.pending = self._settings(threshold, bias, lr_voltage_offset_v, left_bias_sign)
+        if lr_ratio_offset is None:
+            lr_ratio_offset = self.settings.lr_ratio_offset
+        self.pending = self._settings(threshold, bias, lr_voltage_offset_v, left_bias_sign, lr_ratio_offset)
 
     def _set_frequency(self, tailbeat_frequency_hz):
         tailbeat_frequency_hz = number(tailbeat_frequency_hz, 'frequency')
@@ -390,7 +398,7 @@ class CycleSteering:
             return None
         turn_decision_ratio = (
             left_voltage_mean_v - right_voltage_mean_v + candidate.lr_voltage_offset_v
-        ) / side_voltage_mean_v
+        ) / side_voltage_mean_v + 4. * candidate.lr_ratio_offset
         self.settings, self.pending = candidate, None
         direction = steering_direction(turn_decision_ratio, self.settings.threshold)
         self.cycle = cycle_index
@@ -401,6 +409,6 @@ class CycleSteering:
             direction * self.left_bias_sign * self.settings.bias, len(rows),
             self.settings.lr_voltage_offset_v,
             compensated_left_voltage_v, compensated_right_voltage_v,
-            turn_decision_ratio, raw_voltage_means_v)
+            turn_decision_ratio, raw_voltage_means_v, self.settings.lr_ratio_offset)
         self.waiting_status, self._stable_since = '', None
         return self.last_decision

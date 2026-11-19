@@ -53,9 +53,22 @@ class DisplayTests(unittest.TestCase):
         self.assertRegex(plain, r'Pending LR \[V\]\s*:\s*-0.10000')
         self.assertNotIn('Compensated mean', plain)
         self.assertRegex(plain, r'AVG \[V\]\s*:\s*\(0.70000\+0.40000\)/2 = 0.55000')
-        self.assertRegex(plain, r'Diff before \[%\]\s*:\s*\(0.70000-0.40000\)/AVG = \+54.55%')
-        self.assertRegex(plain, r'Diff after/T \[%\]\s*:\s*\(0.70000-0.40000\+\(-0.33000\)\)/AVG = -5.45% / 10.00%')
+        self.assertRegex(plain, r'Diff before \[%\]\s*:\s*\(0.70000-0.40000\)/SUM = \+27.27%')
+        self.assertRegex(plain, r'Diff after/T \[%\]\s*:\s*-2.73% / 10.00%')
         self.assertNotIn('+(-0.10000)', plain)  # Pending offset is not in the held equation.
+
+    def test_ratio_offset_and_frame_details_are_not_added_to_share(self):
+        for offset in (.05, -.05):
+            plain = format_status(snapshot(lr_ratio_offset=offset, threshold=.15,
+                compensated_difference=6 / 11 + 4 * offset, pending_lr_ratio_offset=-.10))
+            self.assertEqual(set(map(len, plain.splitlines())), {78})
+            self.assertEqual(len(plain.splitlines()), 17)
+            for label in ('L/R measured', 'L/R adjusted', 'Band width', 'Ratio offset',
+                          'Frame center', 'Frame bounds', 'Pending ratio'):
+                self.assertNotIn(label, plain)
+            self.assertIn('Diff after/T [%]', plain)
+            self.assertIn('/ 15.00%', plain)
+            self.assertRegex(plain, r'Calibrated cycle mean\s*\|\s*0.50000\s*\|\s*0.70000\s*\|\s*0.40000')
 
     def test_long_quality_and_reason_wrap_inside_table(self):
         plain = format_status(snapshot(mode='stopped', direction='stopped', reason='fault_' * 40,

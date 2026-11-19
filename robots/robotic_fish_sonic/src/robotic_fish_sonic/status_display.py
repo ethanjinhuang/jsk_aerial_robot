@@ -70,16 +70,19 @@ def format_status(data, channel_layout=DEFAULT_CHANNEL_LAYOUT):
         row('Cycle quality', data['cycle_quality'])
     if data.get('mean_1s_status'):
         row('1 s mean quality', data['mean_1s_status'])
-    before = percent(data['difference'], True)
-    after = '%s / %s' % (percent(data['compensated_difference'], True), percent(data['threshold']))
+    # Display sum-normalized differences so the existing threshold row uses
+    # the public full-bar-width units, without adding ratio/frame controls.
+    difference = data['difference']
+    corrected = data['compensated_difference']
+    before = percent(None if difference is None else difference / 2., True)
+    after = '%s / %s' % (percent(None if corrected is None else corrected / 2., True),
+                         percent(data['threshold']))
     average = '--'
     if data['means'] is not None:
         left, right = data['means'][1:]
         l_text, r_text = numeric(left), numeric(right)
         average = '(%s+%s)/2 = %s' % (l_text, r_text, numeric((left + right) / 2.))
-        before = '(%s-%s)/AVG = %s' % (l_text, r_text, before)
-        after = '(%s-%s+(%s))/AVG = %s' % (
-            l_text, r_text, numeric(data['lr_voltage_offset_v'], 5, True), after)
+        before = '(%s-%s)/SUM = %s' % (l_text, r_text, before)
     row('AVG [V]', average)
     row('Diff before [%]', before)
     row('Diff after/T [%]', after)

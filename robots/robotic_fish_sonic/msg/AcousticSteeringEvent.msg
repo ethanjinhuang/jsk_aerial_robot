@@ -5,7 +5,7 @@ uint64 request_id
 string event
 string detail
 # Requested values; rejected non-finite values are retained as NaN/Inf.
-# Inclusive fraction of the channel arithmetic mean: 0.15 = 15%.
+# Full threshold-frame width: 0.15 = 15%, or +/-7.5% of the bar.
 float64 threshold
 string difference_reference
 float64 turn_bias
@@ -16,3 +16,5 @@ float64 lr_voltage_offset_v
 int8 left_bias_sign
 # Nonzero only for an applied request: the cycle where it took effect.
 uint64 cycle_index
+# Requested bar-share offset; +0.05 shifts the frame left 5%.
+float64 lr_ratio_offset

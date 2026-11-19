@@ -341,6 +341,71 @@ class ControllerTests(unittest.TestCase):
 
 
 class RosAdapterTests(unittest.TestCase):
+    def test_ratio_offset_service_is_atomic_recorded_and_preserved_by_option(self):
+        module, ros, clock, published = self.make_node({'~acoustic_steering/enabled': True})
+        with patch.dict(sys.modules, module._mock_modules):
+            node = module.Teleop()
+        response = node._setAcousticSteering(NS(threshold=.15, bias=128., lr_voltage_offset_v=0.,
+                                               left_bias_sign=0, lr_ratio_offset=-1 / 6))
+        self.assertTrue(response.success)
+        self.assertEqual(response.active_lr_ratio_offset, 0.)
+        self.assertAlmostEqual(response.pending_lr_ratio_offset, -1 / 6)
+        self.assertFalse(any(hasattr(m, 'cmd') for m in published))
+        node._adcCallback(self.adc(0.))
+        self.send_status_joy(node, (2,))
+        for i in range(1, 11):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            self.send_status_joy(node)
+        self.assertEqual(node.controller.applied_bias, 0.)
+        acoustic = [m for m in published if hasattr(m, 'decision_updated')][-1]
+        motion = [m for m in published if hasattr(m, 'command_published')][-1]
+        self.assertAlmostEqual(acoustic.lr_ratio_offset, -1 / 6)
+        self.assertAlmostEqual(acoustic.compensated_difference, 0.)
+        self.assertEqual(acoustic.direction, 'straight')
+        self.assertAlmostEqual(motion.adc_cycle_lr_ratio_offset, -1 / 6)
+        self.assertAlmostEqual(motion.adc_cycle_compensated_difference, 0.)
+        applied = [m for m in published if getattr(m, 'event', '') == 'applied'][-1]
+        self.assertAlmostEqual(applied.lr_ratio_offset, -1 / 6)
+        config = json.loads([m for m in published if hasattr(m, 'config_json')][-1].config_json)
+        self.assertAlmostEqual(config['settings']['acoustic_steering']['lr_ratio_offset'], -1 / 6)
+        self.send_status_joy(node, (8,))
+        self.assertNotIn('Ratio offset', self.status_reports(ros)[-1])
+        previous = node.acoustic.last_decision
+        rejected = node._setAcousticSteering(NS(threshold=.15, bias=128., lr_voltage_offset_v=0.,
+                                               left_bias_sign=0, lr_ratio_offset=float('nan')))
+        self.assertFalse(rejected.success)
+        self.assertAlmostEqual(rejected.active_lr_ratio_offset, -1 / 6)
+        self.assertTrue(math.isnan(rejected.pending_lr_ratio_offset))
+        self.assertIs(node.acoustic.last_decision, previous)
+        node._setAcousticSteering(NS(threshold=.15, bias=128., lr_voltage_offset_v=0.,
+                                    left_bias_sign=0, lr_ratio_offset=-.05))
+        self.send_status_joy(node, (9,))
+        self.assertEqual(node.acoustic.pending.lr_ratio_offset, -.05)
+        self.assertEqual(node.acoustic.pending.left_bias_sign, 1)
+        for i in range(11, 21):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            self.send_status_joy(node)
+        self.assertEqual(node.controller.applied_bias, 128.)
+        self.assertEqual(node.acoustic.settings.lr_ratio_offset, -.05)
+
+    def test_ratio_offset_display_works_without_tracking_and_invalid_startup_fails(self):
+        module, ros, clock, published = self.make_node({'~acoustic_steering/lr_ratio_offset': .05})
+        node = module.Teleop()
+        for i in range(11):
+            clock[0] = i * .05
+            node._adcCallback(self.adc(clock[0]))
+            node._controlLoop()
+        state = [m for m in published if hasattr(m, 'command_published')][-1]
+        self.assertEqual(state.adc_cycle_lr_ratio_offset, .05)
+        self.assertAlmostEqual(state.adc_cycle_compensated_difference, 2 / 3 + .20)
+        for value in (True, float('inf'), -.51, .51):
+            module, ros, _, _ = self.make_node({'~acoustic_steering/lr_ratio_offset': value})
+            with self.assertRaises(ValueError):
+                module.Teleop()
+            ros.Publisher.assert_not_called()
+
     def make_node(self, params=None):
         published = []
         fake_ros = NS(get_param=lambda k, default=None: (params or {}).get(k, default),
@@ -495,11 +560,11 @@ class RosAdapterTests(unittest.TestCase):
         node._shutdown()
         node.settings_service.shutdown.assert_called_once()
 
-    def test_mean_percentage_boundary_matches_motion_share_service_and_recording(self):
+    def test_full_bar_percentage_boundary_matches_motion_share_service_and_recording(self):
         for left, right, threshold, direction, bias in (
-                (1.075, .925, .15, 'left', -256.),
-                (.925, 1.075, .15, 'right', 256.),
-                (1.074, .926, .15, 'straight', 0.),
+                (1.15, .85, .15, 'left', -256.),
+                (.85, 1.15, .15, 'right', 256.),
+                (1.149, .851, .15, 'straight', 0.),
                 (1., 1., 0., 'straight', 0.)):
             with self.subTest(left=left, right=right, threshold=threshold):
                 module, ros, clock, published = self.make_node({
@@ -556,9 +621,9 @@ class RosAdapterTests(unittest.TestCase):
         self.assertRegex(report, r'LR offset \[V\]\s*:\s*-1.50000')
         self.assertRegex(report, r'Raw cycle mean\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000')
         self.assertRegex(report, r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000')
-        self.assertRegex(report, r'Diff before \[%\]\s*:\s*\(2.00000-1.00000\)/AVG = \+66.67%')
+        self.assertRegex(report, r'Diff before \[%\]\s*:\s*\(2.00000-1.00000\)/SUM = \+33.33%')
         self.assertNotIn('Compensated mean', report)
-        self.assertRegex(report, r'Diff after/T \[%\]\s*:\s*\(2.00000-1.00000\+\(-1.50000\)\)/AVG = -33.33% / 10.00%')
+        self.assertRegex(report, r'Diff after/T \[%\]\s*:\s*-16.67% / 10.00%')
         self.assertRegex(report, r'Direction\s*:\s*RIGHT')
         self.assertEqual(node.controller.applied_bias, 128.)
         state = [m for m in published if hasattr(m, 'normalized_difference')][-1]
@@ -737,7 +802,7 @@ class RosAdapterTests(unittest.TestCase):
         self.send_status_joy(node, (8,))
         report = self.status_reports(ros)[-1]
         self.assertRegex(report, r'Calibrated cycle mean\s*\|\s*1.27273\s*\|\s*2.00000\s*\|\s*1.00000')
-        self.assertRegex(report, r'Diff after/T \[%\]\s*:\s*\(2.00000-1.00000\+\(\+0.00000\)\)/AVG = \+66.67% / 10.00%')
+        self.assertRegex(report, r'Diff after/T \[%\]\s*:\s*\+33.33% / 15.00%')
         self.assertRegex(report, r'Direction\s*:\s*LEFT')
         self.assertIn('(-256.0/1024.0)', report)
         self.assertNotIn('\033[', report)
@@ -922,7 +987,7 @@ class RosAdapterTests(unittest.TestCase):
         configs = [m for m in published if hasattr(m, 'config_json')]
         self.assertEqual(len(configs), 1)
         values = json.loads(configs[0].config_json)
-        self.assertEqual(values['schema_version'], 5)
+        self.assertEqual(values['schema_version'], 7)
         self.assertEqual(values['settings']['channel_layout'], 'left_right_head')
         self.assertEqual(values['settings']['hydrophone_channels'], {'head': 2, 'left': 0, 'right': 1})
         self.assertEqual(values['settings']['acoustic_steering']['difference_reference'], 'channel_mean')
@@ -1042,7 +1107,7 @@ class RosAdapterTests(unittest.TestCase):
         self.send_status_joy(node, (2,))
         self.assertTrue(node._setAcousticSteering(NS(left_bias_sign=0, threshold=.2, bias=128., lr_voltage_offset_v=.08)).success)
         self.assertFalse(node._setAcousticSteering(NS(left_bias_sign=0, threshold=float('nan'), bias=64., lr_voltage_offset_v=0.)).success)
-        self.assertTrue(node._setAcousticSteering(NS(left_bias_sign=0, threshold=1.4, bias=64., lr_voltage_offset_v=.1)).success)
+        self.assertTrue(node._setAcousticSteering(NS(left_bias_sign=0, threshold=0.7, bias=64., lr_voltage_offset_v=.1)).success)
         events = [m for m in published if hasattr(m, 'event')]
         self.assertEqual([(m.request_id, m.event) for m in events],
                          [(1, 'accepted'), (2, 'rejected'), (1, 'superseded'), (3, 'accepted')])
@@ -1050,7 +1115,7 @@ class RosAdapterTests(unittest.TestCase):
         self.assertTrue(all(m.difference_reference == 'channel_mean' for m in events))
         pending = json.loads([m for m in published if hasattr(m, 'config_json')][-1].config_json)
         self.assertEqual(pending['pending_request']['request_id'], 3)
-        self.assertEqual(pending['settings']['acoustic_steering']['threshold'], .1)
+        self.assertEqual(pending['settings']['acoustic_steering']['threshold'], .15)
         for i in range(1, 11):
             clock[0] = i * .05
             node._adcCallback(self.adc(clock[0]))
@@ -1060,11 +1125,11 @@ class RosAdapterTests(unittest.TestCase):
         config = json.loads([m for m in published if hasattr(m, 'config_json')][-1].config_json)
         self.assertIsNone(config['pending_request'])
         self.assertEqual(config['applied_request_id'], 3)
-        self.assertEqual(config['settings']['acoustic_steering']['threshold'], 1.4)
+        self.assertEqual(config['settings']['acoustic_steering']['threshold'], 0.7)
         self.assertEqual(config['settings']['initial_servo_cmd'], 2048.)
         self.assertEqual(node.controller.applied_bias, 0.)
         # Repeating the active values is still a distinct request and application.
-        self.assertTrue(node._setAcousticSteering(NS(left_bias_sign=0, threshold=1.4, bias=64., lr_voltage_offset_v=.1)).success)
+        self.assertTrue(node._setAcousticSteering(NS(left_bias_sign=0, threshold=0.7, bias=64., lr_voltage_offset_v=.1)).success)
         for i in range(11, 21):
             clock[0] = i * .05
             node._adcCallback(self.adc(clock[0]))
@@ -1088,7 +1153,7 @@ class RosAdapterTests(unittest.TestCase):
         self.assertEqual((accepted.adc_quality, accepted.direction, accepted.command_bias),
                          ('no_data', 'not_tracking', 0.))
         self.assertEqual((accepted.active_threshold, accepted.active_bias, accepted.active_lr_voltage_offset_v),
-                         (.1, 256., 0.))
+                         (.15, 256., 0.))
         self.assertTrue(accepted.parameters_pending)
         self.assertEqual((accepted.pending_request_id, accepted.pending_threshold,
                           accepted.pending_bias, accepted.pending_lr_voltage_offset_v), (1, .15, 128., .08))

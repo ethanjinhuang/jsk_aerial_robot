@@ -133,7 +133,7 @@ class SonicLaunchTests(unittest.TestCase):
 
     def test_vim4_entry_forwards_control_gain_and_display_options(self):
         values = {'auto_frequency': 2., 'acoustic_threshold': .15, 'acoustic_bias': 128.,
-                  'acoustic_lr_voltage_offset_v': -.01, 'acoustic_max_age_s': .7,
+                  'acoustic_lr_voltage_offset_v': -.01, 'acoustic_lr_ratio_offset': .30, 'acoustic_max_age_s': .7,
                   'acoustic_future_tolerance_s': .025, 'left_bias_sign': 1,
                   'joy_timeout_s': .6, 'joy_timeout_action': 'stop',
                   'update_rate': 60., 'manual_gain_voltage': 1.7}
@@ -143,6 +143,7 @@ class SonicLaunchTests(unittest.TestCase):
                 ('acoustic_threshold','acoustic_steering/threshold'),
                 ('acoustic_bias','acoustic_steering/bias'),
                 ('acoustic_lr_voltage_offset_v','acoustic_steering/lr_voltage_offset_v'),
+                ('acoustic_lr_ratio_offset','acoustic_steering/lr_ratio_offset'),
                 ('acoustic_max_age_s','acoustic_steering/max_age_s'),
                 ('acoustic_future_tolerance_s','acoustic_steering/future_tolerance_s'),
                 ('left_bias_sign','acoustic_steering/left_bias_sign'),
@@ -178,7 +179,7 @@ class SonicLaunchTests(unittest.TestCase):
         settings.update(servo_center=2000., servo_range=300., auto_default_amplitude=100.,
                         auto_frequency=2.4, auto_amplitude_rate=10., joy_timeout_s=.7, joy_timeout_action='stop',
                         steering_axis=1, status_local_echo=True)
-        settings['acoustic_steering'].update(enabled=True, threshold=.25, bias=120.)
+        settings['acoustic_steering'].update(enabled=True, threshold=.25, bias=120., lr_ratio_offset=.30)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/'motion.yaml'
             path.write_text(yaml.safe_dump(settings))
@@ -188,13 +189,15 @@ class SonicLaunchTests(unittest.TestCase):
                 self.assertEqual(config.params['/sonic_teleop_node/'+name].value, settings[name])
                 self.assertNotIn('/'+name, config.params)
             self.assertTrue(config.params['/sonic_teleop_node/acoustic_steering/enabled'].value)
+            self.assertEqual(config.params['/sonic_teleop_node/acoustic_steering/lr_ratio_offset'].value, .30)
             overridden = self.load('sonic_vim4.launch', 'motion_config:='+str(path),
                 'auto_frequency:=1.8', 'acoustic_steering:=false', 'acoustic_bias:=0',
-                'acoustic_lr_voltage_offset_v:=0', 'left_bias_sign:=1')
+                'acoustic_lr_voltage_offset_v:=0', 'acoustic_lr_ratio_offset:=0', 'left_bias_sign:=1')
             self.assertEqual(overridden.params['/sonic_teleop_node/auto_frequency'].value, 1.8)
             self.assertFalse(overridden.params['/sonic_teleop_node/acoustic_steering/enabled'].value)
             self.assertEqual(overridden.params['/sonic_teleop_node/acoustic_steering/bias'].value, 0.)
             self.assertEqual(overridden.params['/sonic_teleop_node/acoustic_steering/lr_voltage_offset_v'].value, 0.)
+            self.assertEqual(overridden.params['/sonic_teleop_node/acoustic_steering/lr_ratio_offset'].value, 0.)
             self.assertEqual(overridden.params['/sonic_teleop_node/acoustic_steering/left_bias_sign'].value, 1)
 
     def test_custom_legacy_io_yaml_is_not_overridden_by_launch_defaults(self):

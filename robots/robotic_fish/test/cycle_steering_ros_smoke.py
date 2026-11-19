@@ -44,7 +44,7 @@ def verify_recording(directory):
     assert recorded['/rosout'], 'record.launch did not record ROS logs'
     configs = [json.loads(m.config_json) for m in recorded['config']]
     assert all(c['settings']['joy_timeout_action'] == 'continue' for c in configs)
-    assert all(c['schema_version'] == 5 and
+    assert all(c['schema_version'] == 7 and
                c['settings']['channel_layout'] == 'left_right_head' and
                c['settings']['hydrophone_channels'] == {'head': 2, 'left': 0, 'right': 1} and
                c['settings']['acoustic_steering']['difference_reference'] == 'channel_mean' and
@@ -84,7 +84,10 @@ def verify_recording(directory):
         assert abs(m.compensated_right_mean - (m.right_mean - m.lr_voltage_offset_v / 2.)) < 1e-9
         assert abs(m.compensated_voltage_difference -
                    (m.compensated_left_mean - m.compensated_right_mean)) < 1e-9
-        assert abs(m.compensated_difference - m.compensated_voltage_difference / ((m.left_mean + m.right_mean) / 2)) < 1e-9
+        assert abs(m.compensated_difference - (m.compensated_voltage_difference /
+                   ((m.left_mean + m.right_mean) / 2) + 4 * m.lr_ratio_offset)) < 1e-9
+    assert any(abs(m.lr_ratio_offset + 1 / 6) < 1e-9 and m.command_bias == 0. for m in decisions)
+    assert {.05, -.05} <= {m.lr_ratio_offset for m in decisions}
     assert any(m.direction == 'holding' and m.has_decision and not m.decision_current for m in states)
     events = recorded['events']
     assert all(m.difference_reference == 'channel_mean' for m in events)
@@ -344,7 +347,7 @@ def main():
                 assert re.search(r'Raw cycle mean\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000', report)
                 assert re.search(r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
                 assert re.search(r'Calibrated 1 s mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
-                assert re.search(r'Diff after/T \[%\]\s*:\s*\(2.00000-1.00000\+\(\+0.00000\)\)/AVG = \+66.67% / 10.00%', report)
+                assert re.search(r'Diff after/T \[%\]\s*:\s*\+33.33% / 15.00%', report)
                 assert re.search(r'Direction\s*:\s*LEFT', report)
                 assert set(map(len, report.splitlines())) == {78}
                 assert re.search(r'Sound mode\s*:\s*' + ('FOLLOW' if polarity == -1 else 'AVOID'), report)
@@ -358,17 +361,17 @@ def main():
                 rospy.wait_for_service('/' + name + '/set_acoustic_steering', timeout=3)
                 configure_service = rospy.ServiceProxy('/' + name + '/set_acoustic_steering', SetAcousticSteering)
 
-                def configure(threshold, bias, offset, left_bias_sign=0):
-                    return configure_service(threshold, bias, offset, left_bias_sign)
+                def configure(threshold, bias, offset, left_bias_sign=0, lr_ratio_offset=0.):
+                    return configure_service(threshold, bias, offset, left_bias_sign, lr_ratio_offset)
 
                 assert not configure(-1., 64., 0.).success
-                response = configure(1.2, 64., 0.)
+                response = configure(.6, 64., 0.)
                 assert response.difference_reference == 'channel_mean'
                 assert response.success and response.parameters_pending
                 assert response.motion_mode == 'tracking' and response.direction == 'left'
                 assert response.adc_quality == 'valid'
-                assert (response.active_threshold, response.active_bias, response.active_lr_voltage_offset_v) == (.1, 128., 0.)
-                assert (response.pending_threshold, response.pending_bias, response.pending_lr_voltage_offset_v) == (1.2, 64., 0.)
+                assert (response.active_threshold, response.active_bias, response.active_lr_voltage_offset_v) == (.15, 128., 0.)
+                assert (response.pending_threshold, response.pending_bias, response.pending_lr_voltage_offset_v) == (.6, 64., 0.)
                 assert (response.active_left_bias_sign, response.pending_left_bias_sign) == (polarity, polarity)
                 assert response.request_id == response.pending_request_id
                 wait_state(lambda s: s.parameters_pending)
@@ -406,8 +409,8 @@ def main():
                 assert re.search(r'LR offset \[V\]\s*:\s*-1.50000', report)
                 assert re.search(r'Raw cycle mean\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000', report)
                 assert re.search(r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
-                assert re.search(r'Diff before \[%\]\s*:\s*\(2.00000-1.00000\)/AVG = \+66.67%', report)
-                assert re.search(r'Diff after/T \[%\]\s*:\s*\(2.00000-1.00000\+\(-1.50000\)\)/AVG = -33.33% / 15.00%', report)
+                assert re.search(r'Diff before \[%\]\s*:\s*\(2.00000-1.00000\)/SUM = \+33.33%', report)
+                assert re.search(r'Diff after/T \[%\]\s*:\s*-16.67% / 15.00%', report)
                 assert re.search(r'Direction\s*:\s*RIGHT', report)
                 previous_cycle = state.cycle_index
                 assert configure(.1, 64., -1.5).success
@@ -416,6 +419,32 @@ def main():
                 assert state.lr_voltage_offset_v == -1.5 and state.command_bias == -polarity * 64.
                 assert configure(.1, 64., 0.).success
                 wait_state(lambda s: s.lr_voltage_offset_v == 0. and s.command_bias == polarity * 64.)
+                response = configure(.15, 64., 0., lr_ratio_offset=-1 / 6)
+                assert response.success and abs(response.pending_lr_ratio_offset + 1 / 6) < 1e-9
+                state = wait_state(lambda s: abs(s.lr_ratio_offset + 1 / 6) < 1e-9
+                                   and not s.parameters_pending and s.command_bias == 0.)
+                assert state.direction == 'straight' and abs(state.normalized_difference - 2 / 3) < 1e-9
+                assert abs(state.compensated_difference) < 1e-9
+                assert (state.left_mean, state.right_mean) == (2., 1.)
+                assert 'Ratio offset' not in share_report()
+                assert not configure(.15, 64., 0., lr_ratio_offset=float('nan')).success
+                assert configure(.1, 64., 0.).success
+                wait_state(lambda s: s.lr_ratio_offset == 0. and not s.parameters_pending
+                           and s.command_bias == polarity * 64.)
+                # The public values are direct bar percentages: +/-0.05 means +/-5 points.
+                set_input(left=1.1, right=.9)
+                assert configure(.15, 64., 0., lr_ratio_offset=.05).success
+                wait_state(lambda s: s.lr_ratio_offset == .05 and not s.parameters_pending
+                           and abs(s.normalized_difference - .2) < 1e-8
+                           and s.command_bias == polarity * 64.)
+                assert 'Frame bounds' not in share_report()
+                assert configure(.15, 64., 0., lr_ratio_offset=-.05).success
+                wait_state(lambda s: s.lr_ratio_offset == -.05 and not s.parameters_pending
+                           and abs(s.normalized_difference - .2) < 1e-8 and s.command_bias == 0.)
+                set_input(left=.9, right=1.1)
+                wait_state(lambda s: abs(s.normalized_difference + .2) < 1e-8
+                           and s.lr_ratio_offset == -.05 and s.command_bias == -polarity * 64.)
+                assert configure(.1, 64., 0.).success
                 set_input(left=1., right=3.)
                 state = wait_state(lambda s: s.command_bias == -polarity * 64. and s.status == 'active')
                 with lock:

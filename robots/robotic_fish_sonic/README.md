@@ -188,12 +188,16 @@ hydrophone_channels:
 每次同方向过零时读取上一完整 `1/f` 周期的校准 ADC 数据，比较左右
 电压均值，选取 `-C/0/+C`，保持一周期。该路径直接使用 ADC 数据，
 不经过 `quadrant_node` 的固定窗口，不需要方向训练模型。
-电压补偿 `delta=lr_voltage_offset_v` 单位为 V、默认零，直接加到左右电压差一次，
-以 `d=(L-R+delta)/((L+R)/2)` 与阈值比较，即差值相对两侧平均值的比例。
-`threshold=0.15` 表示差异达到平均值的 15%：正向达到阈值左转，负向达到阈值右转，其余直行。
-补偿后差值为零时始终直行，包括阈值为零。阈值允许 `[0,2]`（0%～200%）；
-旧的除以 `L+R` 的阈值乘 2 可保留相同转向边界，例如旧 `0.15` 对应新 `0.30`。
-正的电压补偿偏向左、负值偏向右；原始电压和周期均值保持原值。
+左右校准周期均值组成条带，左占比 `L/(L+R)`、右占比 `R/(L+R)`。
+`threshold` 直接表示虚线框总宽，默认 0.15（15%，中心两侧各 7.5 个百分点），范围 `[0,1]`。
+`lr_ratio_offset` 默认 0，范围 `[-0.5,0.5]`：左占比加该值、右占比减该值；
+`+0.05` 等效框左移 5 个百分点，`-0.05` 等效框右移 5 个百分点。
+补偿后左占比达到 `0.5+threshold/2` 判 LEFT，低至 `0.5-threshold/2` 判 RIGHT，中间直行；
+零阈值时，恰好相等保持直行。仅用占比补偿时保持 `lr_voltage_offset_v: 0.0`。
+电压补偿仍可用：先形成 `(L+delta/2)/(L+R)`，再加占比偏移。
+原始和校准电压均不变，派生占比不截断。诊断归一化保留 `channel_mean`，
+`compensated_difference=(L-R+delta)/AVG+4*lr_ratio_offset`，内部与 `±2*threshold` 比较。
+
 舵机映射默认 `left_bias_sign=-1`：判断左侧强时输出负中心偏置，右侧强时输出正中心偏置，
 适配当前尾舵需要反向偏转的安装。Share／状态中的 `LEFT`、`RIGHT` 仍表示声学判断方向；
 符号参数与电压补偿相互独立。两个运动 launch 和直接运行脚本均采用该默认值，
@@ -207,14 +211,9 @@ hydrophone_channels:
 Share 的三通道表只显示原始瞬时电压、原始周期均值、校准文件处理后的周期均值。
 `lr_voltage_offset_v` 只在判据计算中使用，不改变上述三行电压；
 `AVG [V]` 显示 `(L+R)/2` 的数值代入式；L、R 为文件校准后的上一周期均值。
-`Diff before [%]` 展开 `(L-R)/AVG`，
-`Diff after/T [%]` 展开 `(L-R+offset)/AVG` 并显示结果／阈值百分比。
-分子只增加一次 offset；结果使用控制器已记录的未舍入判据。
-另保留电压补偿值、方向与输出偏置及 ADC 质量；Sound mode 显示当前
-FOLLOW（−1，跟随）／AVOID（+1，远离），正常跟踪共 18 行。
-待生效符号与当前不同时额外显示 Pending mode。
-停止原因、历史／无周期标记和待生效补偿仅按需出现。状态话题仍完整保存电压差、
-补偿前后相对差及时间信息；消息和服务仍使用比例数值。
+Share 保留原有电压表、平均值、差值／阈值和运动模式，不增加左右占比、框宽、占比偏移或框边界的单独显示。
+`Diff before [%]` 使用 `(L-R)/(L+R)`，`Diff after/T [%]` 使用同一尺度下补偿后的差值／条带总宽阈值。
+新参数仍完整记录在服务反馈、状态话题、事件与配置中。Sound mode 保留 FOLLOW／AVOID 和待生效模式。
 诊断中间量 `Lc=L+delta/2`、`Rc=R-delta/2` 的差为 `L-R+delta`，平均值不变。
 这些量不写回测得电压；任一中间量为负数或非有限值时，显示 `voltage_compensation_out_of_range`／`HOLDING`，
 继续摆尾并保持上一偏置，暂存整组待生效设置，在后续有效完整周期恢复；不截断负值。
@@ -241,8 +240,8 @@ Share 三行电压统一按前／左／右显示，表头标出实际 ADC 通道
 
 新增接口：
 
-- `srv/SetAcousticSteering`：接收 `threshold`、`bias`、`lr_voltage_offset_v` 和 `left_bias_sign`，
-  四项整组验证、暂存，在下一有效周期一起生效。符号为 `-1`／`+1`，省略或 `0`
+- `srv/SetAcousticSteering`：接收 `threshold`、`bias`、`lr_voltage_offset_v`、`left_bias_sign` 和 `lr_ratio_offset`，
+  五项整组验证、暂存，在下一有效周期一起生效。符号为 `-1`／`+1`，省略或 `0`
   使用当前生效符号；响应给出 `active_left_bias_sign` 和 `pending_left_bias_sign`，
   后者无待生效请求时为 0。补偿为有限有符号伏特值，周期内须满足 `-2L<=delta<=2R`。
 - `msg/AcousticSteeringState`：记录周期窗口、方向差值、偏置、参数及模式状态。
@@ -257,12 +256,15 @@ ADC 年龄、未来时间戳检查均在 VIM4 本机进行，未来容差继续�
 `acoustic_future_tolerance_s` 在启动时显式设置，启动日志显示主机名和实际时间限值。
 补偿可通过运动 launch 的 `acoustic_lr_voltage_offset_v` 设置初值，运行时调用
 `/sonic_teleop_node/set_acoustic_steering` 填写前三项，并按需指定方向符号；具体命令见运动包说明。
-新增符号字段改变服务与事件的 ROS MD5；两端须重新编译 `robotic_fish_sonic robotic_fish`、
-source 并重启节点。新版本仍接受省略符号的三字段 YAML 调用，旧二进制客户端需重新生成。
+占比偏移通过 `acoustic_lr_ratio_offset` 或 `motion.yaml` 的 `acoustic_steering/lr_ratio_offset` 设置。
+服务命名字段调用省略偏移等价于 0；Option 翻转保留当前或待生效偏移。
+新增字段改变服务及三个状态／事件消息的 ROS MD5，两端须重新编译、source 并重启节点。
+配置版本升为 7，记录 `threshold_reference=full_bar_width` 和 `ratio_offset_reference=left_plus_right_minus`。
+旧版本 5 的阈值除以 2 可保留相同边界；版本 6 的中点 `c` 另迁移为偏移 `-c/4`。
 调用后直接返回当前模式、数据质量、方向、控制偏置、正在使用及待生效参数；
 真正生效时 VIM4 运动终端打印请求编号、周期和参数。服务成功表示接受请求，仍等待有效周期。
 旧无量纲 `lr_offset` 及其启动参数已移除，新补偿名称同时用于配置、事件和服务响应。
-锁存运动配置的 `schema_version` 为 5，`settings.channel_layout` 按 ADC0/1/2 顺序记录方向，
+锁存运动配置的 `schema_version` 为 7，`settings.channel_layout` 按 ADC0/1/2 顺序记录方向，
 `settings.hydrophone_channels` 记录每个方向对应的通道号，无跟踪时也记录映射。
 保留版本 4 引入的 `difference_reference=channel_mean`、
 `voltage_offset_reference=left_minus_right` 和包含等号的判定规则；旧版本 3 的同名补偿字段是单侧调整量。

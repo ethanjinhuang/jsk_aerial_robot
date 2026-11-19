@@ -549,32 +549,37 @@ roslaunch robotic_fish sonic_teleop.launch enable_joy:=false \
 本次硬件前端已确认输出整流／检波后的包络或幅值电压，周期均值用于比较
 平均声学响应幅值，不是物理声强。更换为原始交流波形输入时需重新设计特征提取。
 
-令 `delta=acoustic_lr_voltage_offset_v`（单位 V，默认 0），对上一完整周期均值计算：
+以左右校准周期均值 `L`、`R` 拼成整条带，`S=L+R`。条带的左占比为 `L/S`、
+右占比为 `R/S`。`threshold` **直接表示判定框总宽**，默认 `0.15`（15%），
+即中心两侧各 7.5 个百分点。边界包含在转向条件内；零宽框中，正好相等仍直行。
+
+`lr_ratio_offset` 是整条带上的有符号占比补偿，默认 0，允许有限值 `[-0.5,0.5]`：
 
 ```text
-mean = (L + R) / 2
-d_corrected = (L - R + delta) / mean
+left_share  = (L + lr_voltage_offset_v/2) / S + lr_ratio_offset
+right_share = (R - lr_voltage_offset_v/2) / S - lr_ratio_offset
+left_share >= 0.5 + threshold/2  -> LEFT
+left_share <= 0.5 - threshold/2  -> RIGHT
+otherwise                       -> straight
 ```
 
-`threshold=0.15` 表示左右补偿电压差达到两侧平均值的 **15%** 时转向，
-按 `d_corrected>=threshold` 左转、`d_corrected<=-threshold` 右转，其余直行。
-例如无补偿时 `L=1.075 V`、`R=0.925 V`，平均值为 `1 V`，差值为 `0.15 V`，
-恰好达到 15% 时也左转。这里的百分比以两侧平均值为基准；此时强侧约为弱侧的 1.162 倍。
-补偿后的差值为零时始终直行，包括 `threshold=0`。
-相同阈值下，新公式比原来的除以 `L+R` 更灵敏；若要保持原来 `0.15` 的转向边界，改用 `0.30`。
+`+0.05` 表示左占比加 5 个百分点、右占比减 5 个百分点，等效为虚线框向左移 5 个百分点。
+`-0.05` 表示框向右移 5 个百分点。因此要补偿左侧持续偏高，通常使用负值。
+按未加占比补偿的条带观察，框中心为 `0.5-lr_ratio_offset`，左右边界为中心加减 `threshold/2`。
+总宽 15% 时：偏移 0 的范围为 42.5%～57.5%，偏移 +0.05 为 37.5%～52.5%，
+偏移 -0.05 为 47.5%～62.5%。`0.05` 表示 5%，不是 `5`。
 
-正值使判断偏向左侧，负值使判断偏向右侧；`delta` 直接加到 `L-R` 上一次。
-仅在声源居中、左右应相等的条件下，用多个稳定周期估计 `delta=R-L`。
-例如居中时 `L=0.07145 V`、`R=0.04772 V`，对应 `delta=-0.02373 V`。
-旧版本采用左加、右减同一个值；现在相同数值的补偿作用减半。
-若需保留旧补偿效果，新值取旧值的两倍，例如旧 `-0.01 V` 对应新 `-0.02 V`；不自动转换配置。
-这是固定电压差补偿；更换 DAC 增益或工作条件后应重新检查基线。
-原始／校准 ADC 电压与测得周期均值保持原值；左右电压补偿只用于判据计算，
-派生结果单独记录，Share 在判据区显示补偿前后的差异。
-补偿后的相对差值达到正／负阈值时取左／右转偏置，其余取零。
-每次取固定 `-C/0/+C`，不累加；整个周期保持该偏置，不重置摆尾相位。
-目标按原控制循环约 50 Hz 发布，决策频率为摆频 `f`，实际过零处理发生在
-边界后的首个控制周期。接受中心偏置跳变。
+仅使用占比补偿时保持 `lr_voltage_offset_v: 0.0`。保留的电压补偿（单位 V）仍只加到
+`L-R` 一次，等价为 `L+delta/2`、`R-delta/2`；两种补偿可以叠加。
+原始／校准电压和测得均值保持原值，只有派生判定占比改变；占比补偿不会改写 ADC 数据。
+极端偏移时派生占比可以超出 0～100%，不会截断成虚假的物理电压。
+应在相同工况、左右应平衡时用多个周期估计 `lr_ratio_offset=0.5-left_share`。
+占比补偿对左右等比例放大保持一致，但不能保证消除随负载、摆幅或频率变化的自身干扰。
+
+原始 `normalized_difference` 诊断量仍为 `(L-R)/AVG`，`AVG=S/2`；
+`compensated_difference=(L-R+delta)/AVG+4*lr_ratio_offset`，与 `±2*threshold` 比较，
+与上述占比判断完全等价。用户无需为 `threshold` 或 `lr_ratio_offset` 做额外换算。
+每次只取固定 `-C/0/+C`，保持一个完整摆尾周期，不累加偏置、不重置摆尾相位。
 
 `left_bias_sign` 将声学判断映射到舵机偏置，默认 **`-1`**：
 左侧强时舵机中心向右偏，输出 `-bias`；右侧强时输出 `+bias`。
@@ -599,7 +604,7 @@ Share／状态话题的 `LEFT`、`RIGHT` 表示声学判断方向，舵机偏转
 
 ```bash
 rosservice call /sonic_teleop_node/set_acoustic_steering \
-  "{threshold: 0.15, bias: 128.0, lr_voltage_offset_v: -0.01, left_bias_sign: 1}"
+  "{threshold: 0.15, bias: 128.0, lr_voltage_offset_v: 0.0, left_bias_sign: 0, lr_ratio_offset: 0.05}"
 ```
 
 命令终端直接返回请求处理时的状态快照。例如当前正使用阈值 0.1、偏置 256、无补偿，
@@ -620,32 +625,40 @@ active_threshold: 0.1
 active_bias: 256.0
 active_lr_voltage_offset_v: 0.0
 active_left_bias_sign: -1
+active_lr_ratio_offset: 0.0
 parameters_pending: True
 pending_request_id: 1
 pending_threshold: 0.15
 pending_bias: 128.0
-pending_lr_voltage_offset_v: -0.01
-pending_left_bias_sign: 1
+pending_lr_voltage_offset_v: 0.0
+pending_left_bias_sign: -1
+pending_lr_ratio_offset: 0.05
 ```
 
 `success` 表示请求被接受；`active_*` 是正在使用的参数，`pending_*` 是等待生效的参数，
 `command_bias` 是控制器当前偏置。服务查询不推进摆尾周期、不发送舵机命令，也不自动进入跟踪。
 手动／停止或数据预热期间可以接受参数，继续等待下一次有效完整周期。
 参数实际生效后，VIM4 运动终端打印一次 `Acoustic steering applied: request=... cycle=...`
-以及本次生效的四项参数，可用请求编号与调用返回、录包事件对应。
+以及本次生效的五项参数，可用请求编号与调用返回、录包事件对应。
 拒绝请求时也返回当前状态和此前保留的待生效参数；没有待生效请求时，
-`parameters_pending=false`、`pending_request_id=0`，三个浮点 `pending_*` 数值为 NaN，`pending_left_bias_sign=0`。
-本次扩展了 `SetAcousticSteering` 服务和 `AcousticSteeringEvent` 消息，ROS MD5 已改变；
-PC／VIM4 必须更新到同一版本，重新编译两包、source 并重启相关节点后使用。
-升级后的三字段 YAML 调用可继续使用（新增整数默认 0）；旧二进制服务客户端不能直接混用。
-Python `ServiceProxy` 的位置参数调用需补第四项，例如 `configure(.15, 128., -.01, 1)`。
+`parameters_pending=false`、`pending_request_id=0`，四个浮点 `pending_*` 数值为 NaN，`pending_left_bias_sign=0`。
+调整为条带占比接口后，不含旧 `lr_center_ratio` 字段的命名字段 YAML 调用仍可使用，省略 `lr_ratio_offset` 等价于 0（重置偏移）。
+服务、`AcousticSteeringState`、`AcousticSteeringEvent`、`SonicMotionState` 的 ROS MD5 已变化；
+两端必须重新编译 `robotic_fish_sonic robotic_fish`、source 并重启节点，不能混用旧二进制客户端。
+配置版本升为 7。旧版本 6 的 `lr_center_ratio` 字段已替换；若需保留旧行为，
+将旧 `threshold` 除以 2，并使用 `lr_ratio_offset=-旧lr_center_ratio/4`。
+这只是旧参数迁移；新参数直接按条带百分比填写。
+Python `ServiceProxy` 的位置参数调用需填第五项，例如 `configure(.15, 128., 0., 0, .05)`。
 旧的无量纲 `lr_offset` 和启动参数 `acoustic_lr_offset` 已移除，旧数值不能直接沿用为伏特。
 
-每次调用请同时填写前三项：阈值范围 `[0,2]`（0%～200%），偏置范围 `[0,servo_range]`，
+每次调用请同时填写前三项：框总宽范围 `[0,1]`（0%～100%），偏置范围 `[0,servo_range]`，
 电压补偿须为有限有符号数，`lr_voltage_offset_v: 0.0` 表示取消补偿。
+`lr_ratio_offset: 0.0` 表示取消占比偏移；修改其他参数时也应填写希望保留的偏移。
+响应的 `active_lr_ratio_offset`／`pending_lr_ratio_offset` 分别表示已生效／待生效占比偏移，
+无待生效请求时后者为 NaN。占比偏移和框参数通过服务反馈、状态话题及录包查询，不在 Share 中增加单独显示。
 `left_bias_sign` 填 `-1`／`+1` 切换映射；省略或填 `0` 保持当前生效符号，
 不读取原启动参数，也不沿用上一请求中尚未生效的符号。最新有效请求仍覆盖整组待生效配置。
-只有符号要改变时，其余三项仍填写希望保留的当前值；查看响应的
+只有符号要改变时，其余字段仍填写希望保留的当前值；Option 按键会保留当前或待生效占比偏移。查看响应的
 `active_left_bias_sign`／`pending_left_bias_sign`，以及状态话题、配置快照和事件确认生效。
 整组校验通过后，在下一有效周期决策一起应用；任何一项无效都不覆盖此前已接受的配置。
 多次有效请求以最新一组为准；`parameters_pending` 表示等待生效，预热或质量等待期间继续暂存。
@@ -653,11 +666,13 @@ Python `ServiceProxy` 的位置参数调用需补第四项，例如 `configure(.
 其差值等于 `L-R+delta`，平均值仍为 `(L+R)/2`。每个周期要求这两个量非负，
 即 `delta` 位于该周期的 `[-2L,2R]` 内。
 补偿越界时显示 `voltage_compensation_out_of_range`／`HOLDING`，保持摆尾和上一偏置，
-整组四项待生效参数继续暂存；后续完整周期恢复有效或替换参数后自动继续判断。
+整组待生效参数继续暂存；后续完整周期恢复有效或替换参数后自动继续判断。
 不会把负电压截成零。尚无有效判断时保持零偏置；Cross、Joy／ADC 超时及饱和等检查继续生效。
 补偿保持摆尾相位和转向偏置上限，头部电压保持原值。
 重启后使用启动参数；例如在 VIM4 的启动命令中增加 `acoustic_lr_voltage_offset_v:=-0.01`。
-这四项支持运行时服务；`rosparam set` 不会更新控制器。
+占比偏移的启动覆盖参数为 `acoustic_lr_ratio_offset:=0.05`，持久配置为
+`motion.yaml` 的 `acoustic_steering/lr_ratio_offset`。默认偏移为 0，不自动启用现场补偿。
+这些参数支持运行时服务；`rosparam set` 不会更新控制器。
 摆频仍通过 launch 设置，修改后重启并重新积累周期数据。
 
 进入声源跟踪模式前需要已有新鲜、结构有效且未饱和的三通道数据。
@@ -704,13 +719,17 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 `normalized_difference` 保留补偿前的归一化差值，`lr_voltage_offset_v` 为已生效电压补偿，
 `compensated_left_mean`／`compensated_right_mean` 保存诊断中间量 `L+delta/2`／`R-delta/2`，
 `compensated_voltage_difference` 保存补偿后的电压差，
-`compensated_difference` 为最近决策使用的补偿后相对差值，两个差值均以两侧平均值为分母。
+`lr_ratio_offset` 记录占比偏移，`compensated_difference` 为最近决策使用的
+`compensated_voltage_difference/AVG+4*lr_ratio_offset`；电压诊断中间量只包含电压补偿。
+全模式滚动周期统计的 `adc_cycle_compensated_difference` 使用相同公式，
+并通过 `adc_cycle_lr_ratio_offset` 记录占比偏移。
 消息和服务反馈通过 `difference_reference=channel_mean` 标明基准；数值仍为比例，`0.15` 表示 15%。
 前、左、右水听器对应的 ADC 通道在 `hydrophone_channels` 中配置，修改后重启 launch 生效。
 见 [acoustic.yaml](../robotic_fish_sonic/config/acoustic.yaml)。
-锁存配置 `schema_version=5` 通过 `settings.channel_layout` 和
+锁存配置 `schema_version=7` 通过 `settings.channel_layout` 和
 `settings.hydrophone_channels` 记录实际映射，并保存相同基准和 `threshold_inclusive=true`。
 `voltage_offset_reference=left_minus_right` 标明补偿直接作用于电压差。
+`threshold_reference=full_bar_width` 和 `ratio_offset_reference=left_plus_right_minus` 标明新接口的单位与符号。
 旧版配置版本 3 的同名补偿字段表示每个通道的调整量，分析旧 bag 时应区分。
 `decision_updated` 仅在新决策时为真。停止后可保留上一决策的数值和窗口时间，
 必须结合 `motion_mode`、`status` 和 `sample_stamp` 解读。
@@ -734,9 +753,9 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 - `Calibrated 1 s mean` 使用 ADC 节点发布的 `volt_cali_mean_1s`，窗口预热或含原始回退时由 `1 s mean quality` 标出。
 - `LR offset [V]` 为当前生效的补偿；有待生效补偿时增加 `Pending LR [V]`。
 - `AVG [V]` 展开显示 `(L+R)/2` 及计算出的平均电压，L、R 来自 `Calibrated cycle mean`。
-- `Diff before [%]` 展开显示 `(L-R)/AVG = 补偿前百分比`。
-- `Diff after/T [%]` 展开显示 `(L-R+offset)/AVG = 补偿后百分比 / 阈值百分比`。
-  补偿只加一次，表达式代入 L、R 和当前生效的补偿值。
+- `Diff before [%]` 显示 `(L-R)/(L+R)`，与条带总宽阈值使用一致的尺度。
+- `Diff after/T [%]` 显示补偿后的差值／阈值，补偿包含电压与占比偏移。
+  Share 保留原有紧凑布局，不增加左右占比、框宽、占比偏移或框边界的单独显示。
 
 原始和校准周期均值使用同一批采样。缺少原始电压时，对应原始均值显示 `--`。
 停止时显示 `Reason`，无完整电压窗口时显示 `Cycle` 提示。
@@ -759,11 +778,10 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 | Raw instant            |         0.50000 |         0.70000 |       0.40000 |
 | Raw cycle mean         |         0.49000 |         0.68000 |       0.38000 |
 | Calibrated cycle mean  |         0.50000 |         0.70000 |       0.40000 |
-| Calibrated 1 s mean    |         0.50000 |         0.70000 |       0.40000 |
 +----------------------------------------------------------------------------+
 | AVG [V]         : (0.70000+0.40000)/2 = 0.55000                            |
-| Diff before [%] : (0.70000-0.40000)/AVG = +54.55%                          |
-| Diff after/T [%]: (0.70000-0.40000+(+0.00000))/AVG = +54.55% / 10.00%      |
+| Diff before [%] : (0.70000-0.40000)/SUM = +27.27%                          |
+| Diff after/T [%]: +27.27% / 15.00%                                         |
 | LR offset [V]   : +0.00000                                                 |
 +----------------------------------------------------------------------------+
 ```

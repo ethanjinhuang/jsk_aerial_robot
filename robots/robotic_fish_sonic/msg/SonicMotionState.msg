@@ -46,8 +46,11 @@ uint32 adc_cycle_quality_flags
 float64[3] adc_cycle_raw_means
 float64[3] adc_cycle_means
 float64 adc_cycle_side_mean
-# (left-right)/side_mean, with voltage offset added to the numerator for compensation.
+# Difference: (left-right)/side_mean.
+# Compensated: (left-right+voltage_offset)/side_mean + 4*lr_ratio_offset.
+# Diagnostics retain channel_mean normalization; the threshold below is full bar width.
 float64 adc_cycle_difference
 float64 adc_cycle_compensated_difference
 float64 adc_cycle_threshold
 float64 adc_cycle_lr_voltage_offset_v
+float64 adc_cycle_lr_ratio_offset

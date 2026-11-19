@@ -7,8 +7,7 @@ bool parameters_pending
 uint64 cycle_index
 float64 frequency
 float64 window_s
-# Difference divided by channel arithmetic mean; 0.15 means 15%, inclusive.
-# Range [0,2]; equal channels always select straight, including threshold=0.
+# Full threshold-frame width on L/(L+R), [0,1]: 0.15 means +/-7.5%, inclusive.
 float64 threshold
 string difference_reference
 float64 turn_bias
@@ -25,7 +24,8 @@ float64 left_mean
 float64 right_mean
 # (left_mean-right_mean)/((left_mean+right_mean)/2), a fraction, not percent.
 float64 normalized_difference
-# Normalized difference after voltage compensation, from the retained decision.
+# (L-R+lr_voltage_offset_v)/AVG + 4*lr_ratio_offset, from the retained decision.
+# Diagnostic normalization stays channel_mean; compare this to +/-2*threshold.
 float64 compensated_difference
 float64 command_bias
 # Retained previous-cycle values, not instantaneous voltages.
@@ -42,3 +42,5 @@ bool decision_current
 string decision_direction
 # Current action: left/right/straight, holding, warmup, stopped, not_tracking, idle.
 string direction
+# Left share += offset, right share -= offset; +0.05 shifts the frame left 5%.
+float64 lr_ratio_offset
