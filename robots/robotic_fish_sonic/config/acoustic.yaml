@@ -1,4 +1,10 @@
-# Private parameters of acoustic_quadrants. Model selection remains a launch argument.
+# Shared mapping to distinct physical ADC channels (0, 1 or 2).
+hydrophone_channels:
+  FrontPZT: 2
+  LeftPZT: 0
+  RightPZT: 1
+
+# Fixed-window settings for acoustic_quadrants. Model selection is a launch argument.
 window_s: 0.5
 gap_s: 0.2
 low_signal_v: 0.001

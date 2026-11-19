@@ -5,6 +5,7 @@
   <arg name="config" default=""/>
   <arg name="io_config" default="$(eval arg('config') or find('robotic_fish_sonic') + '/config/io.yaml')"/>
   <arg name="motion_config" default="$(find robotic_fish)/config/motion.yaml"/>
+  <arg name="acoustic_config" default="$(find robotic_fish_sonic)/config/acoustic.yaml"/>
   <arg name="enable_motion" default="true"/>
   <arg name="enable_bridge" default="true"/>
   <arg name="record" default="false"/>
@@ -39,6 +40,7 @@
 
   <include file="$(find robotic_fish_sonic)/launch/sensor_io.launch">
     <arg name="config" value="$(arg io_config)"/>
+    <arg name="acoustic_config" value="$(arg acoustic_config)"/>
     <arg name="gain_mode" value="$(arg gain_mode)"/>
     <arg name="manual_gain_voltage" value="$(arg manual_gain_voltage)"/>
     <arg name="agc_target_min_v" value="$(arg agc_target_min_v)"/>
@@ -50,6 +52,7 @@
   <include if="$(arg enable_motion)" file="$(find robotic_fish)/launch/sonic_teleop.launch">
     <arg name="enable_joy" value="false"/>
     <arg name="motion_config" value="$(arg motion_config)"/>
+    <arg name="acoustic_config" value="$(arg acoustic_config)"/>
     <arg name="auto_frequency" value="$(arg auto_frequency)"/>
     <arg name="acoustic_steering" value="$(arg acoustic_steering)"/>
     <arg name="acoustic_threshold" value="$(arg acoustic_threshold)"/>

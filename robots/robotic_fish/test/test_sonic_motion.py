@@ -776,6 +776,31 @@ class RosAdapterTests(unittest.TestCase):
         self.assertEqual(node.acoustic.last_decision.bias, -256.)
         self.assertEqual(node.acoustic.last_decision.raw_means, (.25, .5, .75))
 
+    def test_custom_hydrophone_layout_controls_steering_share_and_recorded_config(self):
+        module, ros, clock, published = self.make_node({
+            '~acoustic_steering/enabled': True,
+            '~hydrophone_channels': {'FrontPZT': 0, 'LeftPZT': 1, 'RightPZT': 2}})
+        with patch.dict(sys.modules, module._mock_modules):
+            node = module.Teleop()
+        for i in range(11):
+            clock[0] = i * .05
+            frame = self.adc(clock[0])
+            for sample in frame.samples:
+                sample.volt_raw = (.25, .5, .75)[sample.channel_id]
+                sample.volt_cali = (3., 1., 2.)[sample.channel_id]
+            node._adcCallback(frame)
+            self.send_status_joy(node, (2,) if i == 0 else ())
+        self.send_status_joy(node, (8,))
+        report = self.status_reports(ros)[-1]
+        self.assertRegex(report, r'Head \(ADC0\).*Left \(ADC1\).*Right \(ADC2\)')
+        for row in ('Raw instant', 'Raw cycle mean'):
+            self.assertRegex(report, row + r'\s*\|\s*0.25000\s*\|\s*0.50000\s*\|\s*0.75000')
+        self.assertRegex(report, r'Calibrated cycle mean\s*\|\s*3.00000\s*\|\s*1.00000\s*\|\s*2.00000')
+        self.assertEqual(node.acoustic.last_decision.bias, 256.)
+        settings = json.loads(next(msg.config_json for msg in published if hasattr(msg, 'config_json')))['settings']
+        self.assertEqual(settings['channel_layout'], 'head_left_right')
+        self.assertEqual(settings['hydrophone_channels'], {'head': 0, 'left': 1, 'right': 2})
+
     def test_share_works_with_tracking_disabled_and_marks_missing_or_stale_data(self):
         module, ros, clock, _ = self.make_node()
         node = module.Teleop()

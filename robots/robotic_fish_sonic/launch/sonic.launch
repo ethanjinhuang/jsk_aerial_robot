@@ -21,6 +21,7 @@
 
   <include file="$(find robotic_fish_sonic)/launch/sensor_io.launch">
     <arg name="config" value="$(arg config)"/>
+    <arg name="acoustic_config" value="$(arg acoustic_config)"/>
     <arg name="enable_adc" value="$(arg enable_adc)"/>
     <arg name="enable_dac" value="$(arg enable_dac)"/>
     <arg name="enable_gain_control" value="$(arg enable_gain_control)"/>

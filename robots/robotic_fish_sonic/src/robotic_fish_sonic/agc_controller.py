@@ -4,7 +4,7 @@ import math
 
 from robotic_fish_sonic import dac_driver
 from robotic_fish_sonic.adc_limits import MAX_VOLTAGE_V
-from robotic_fish_sonic.channel_mapping import head_left_right
+from robotic_fish_sonic.channel_mapping import DEFAULT_CHANNEL_LAYOUT, channel_mapping, head_left_right
 
 
 class GainController:
@@ -38,7 +38,10 @@ class GainController:
         window_peak_upper_v=3.0,
         window_high_fraction=None,
         window_cooldown_s=5.0,
+        channel_layout=DEFAULT_CHANNEL_LAYOUT,
     ):
+        channel_mapping(channel_layout)
+        self.channel_layout = channel_layout
         self.mode = str(mode).strip().lower()
         if self.mode not in self.MODES:
             raise ValueError("gain mode must be one of {}".format(", ".join(self.MODES)))
@@ -192,7 +195,7 @@ class GainController:
                  now - history[-1][0] > self.recovery_sample_timeout_s))):
             history.clear()
         self.window_dac = current
-        _, left_voltage_v, right_voltage_v = head_left_right(values)
+        _, left_voltage_v, right_voltage_v = head_left_right(values, self.channel_layout)
         history.append((now, left_voltage_v, right_voltage_v))
         while len(history) > 1 and history[1][0] <= now - self.window_s:
             history.pop(0)

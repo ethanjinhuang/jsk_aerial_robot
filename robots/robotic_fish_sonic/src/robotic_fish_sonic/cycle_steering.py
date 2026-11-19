@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import math
 
 from robotic_fish_sonic.acoustic_core import adapt, Status
-from robotic_fish_sonic.channel_mapping import head_left_right
+from robotic_fish_sonic.channel_mapping import DEFAULT_CHANNEL_LAYOUT, channel_mapping, head_left_right
 
 
 DIFFERENCE_REFERENCE = 'channel_mean'
@@ -78,7 +78,10 @@ class CycleSteering:
     """
     def __init__(self, frequency, max_bias=1024., threshold=.1, bias=256.,
                  left_bias_sign=-1, gap_s=.2, max_age_s=.2,
-                 future_tolerance_s=.05, low_signal_v=.001, lr_voltage_offset_v=0.):
+                 future_tolerance_s=.05, low_signal_v=.001, lr_voltage_offset_v=0.,
+                 channel_layout=DEFAULT_CHANNEL_LAYOUT):
+        channel_mapping(channel_layout)
+        self.channel_layout = channel_layout
         self.max_bias = number(max_bias, 'max_bias')
         self.gap_s = number(gap_s, 'gap_s')
         self.max_age_s = number(max_age_s, 'max_age_s')
@@ -174,7 +177,8 @@ class CycleSteering:
                 self.latest_time = None
                 return self._reject('receipt_time_reset')
             if not waiting_quality_flags:
-                _, left_voltage_v, right_voltage_v = head_left_right(sample_group['volts'])
+                _, left_voltage_v, right_voltage_v = head_left_right(
+                    sample_group['volts'], self.channel_layout)
                 side_voltage_sum_v = left_voltage_v + right_voltage_v
                 if not math.isfinite(side_voltage_sum_v):
                     return self._reject('invalid_signal_sum')
@@ -301,7 +305,8 @@ class CycleSteering:
             raise SteeringFault('incomplete_cycle')
         adc_voltage_means_v = [
             math.fsum(row[i] / len(rows) for row in rows) for i in (1, 2, 3)]
-        head_voltage_mean_v, left_voltage_mean_v, right_voltage_mean_v = head_left_right(adc_voltage_means_v)
+        head_voltage_mean_v, left_voltage_mean_v, right_voltage_mean_v = head_left_right(
+            adc_voltage_means_v, self.channel_layout)
         raw_voltage_means_v = tuple(math.fsum(row[i] / len(rows) for row in rows) for i in (4, 5, 6))
         if not math.isfinite(left_voltage_mean_v + right_voltage_mean_v):
             raise SteeringFault('invalid_signal_sum')

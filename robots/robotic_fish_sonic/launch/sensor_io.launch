@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <launch>
   <arg name="config" default="$(find robotic_fish_sonic)/config/io.yaml"/>
+  <arg name="acoustic_config" default="$(find robotic_fish_sonic)/config/acoustic.yaml"/>
   <arg name="enable_adc" default="true"/>
   <arg name="enable_dac" default="true"/>
   <arg name="enable_gain_control" default="true"/>
@@ -30,12 +31,15 @@
     <rosparam command="load" file="$(arg config)"/>
   </node>
 
+  <group ns="gain_control/hydrophone_channels" clear_params="true"
+         if="$(eval arg('enable_adc') and arg('enable_dac') and arg('enable_gain_control'))"/>
   <node if="$(eval arg('enable_adc') and arg('enable_dac') and arg('enable_gain_control'))"
         pkg="robotic_fish_sonic"
         type="agc_node.py"
         name="gain_control"
         output="screen">
     <rosparam command="load" file="$(arg config)"/>
+    <rosparam command="load" file="$(arg acoustic_config)"/>
     <param if="$(eval arg('enable_agc') != '')" name="agc/enabled" type="bool" value="$(arg enable_agc)"/>
     <param if="$(eval arg('gain_mode') != '')" name="gain_control/mode" type="str" value="$(arg gain_mode)"/>
     <param if="$(eval arg('manual_gain_voltage') != '')" name="gain_control/manual_target_voltage_v" type="double" value="$(arg manual_gain_voltage)"/>

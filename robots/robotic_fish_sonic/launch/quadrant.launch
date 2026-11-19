@@ -5,6 +5,7 @@
   <arg name="window_s" default=""/>
   <arg name="gap_s" default=""/>
   <arg name="low_signal_v" default=""/>
+  <group ns="acoustic_quadrants/hydrophone_channels" clear_params="true"/>
   <node pkg="robotic_fish_sonic" type="quadrant_node.py" name="acoustic_quadrants" output="screen">
     <rosparam command="load" file="$(arg config)"/>
     <param name="model" value="$(arg model)"/>

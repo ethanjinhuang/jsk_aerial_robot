@@ -1,0 +1,1925 @@
+{
+  "schema_version": 1,
+  "calibration_id": "adc_independent_transfer_20261119_lna_40khz_5mvpp_extended",
+  "calibration_type": "per_channel_piecewise_linear",
+  "channel_order": [
+    "ADC0",
+    "ADC1",
+    "ADC2"
+  ],
+  "conditions": {
+    "common_input_required": true,
+    "absolute_voltage_reference": false,
+    "reference_type": "three_channel_adc_consensus",
+    "input_frequency_hz": 40000,
+    "input_amplitude_vpp": 0.005,
+    "sensor_in_signal_path": false,
+    "adc_supply_wiring_unchanged_confirmed_by_operator": true,
+    "adc_vdd_v": null,
+    "operating_range_limit_v": 3.9,
+    "experimental_dac_max_v": 1.23,
+    "adc_sample_group_rate_hz": 20.0,
+    "adc_data_rate_sps": 128
+  },
+  "processing": {
+    "interpolation": "piecewise_linear_per_channel",
+    "runtime_dac_dependency": false,
+    "generation_dac_dependency": true,
+    "offset_correction": false,
+    "reference": "median_of_three_channel_medians",
+    "segmentation": "confirmed_DAC_contiguous_plateaus",
+    "validation_split": "first_half_fit_second_half_holdout",
+    "boundary_policy": "linear_nodes_within_measured_training_support",
+    "settling_time_ms": 1000,
+    "end_guard_time_ms": 250,
+    "training_plateau_count": 63
+  },
+  "validity": {
+    "endpoint_tolerance_v": 0.0025,
+    "out_of_range": "reject_group_and_fallback_raw"
+  },
+  "curves": [
+    {
+      "channel": "ADC0",
+      "nodes": [
+        {
+          "raw_voltage_v": 0.016875,
+          "reference_voltage_v": 0.016875,
+          "steady_sample_count": 274,
+          "node_kind": "measured_support_boundary",
+          "reference_estimated": true
+        },
+        {
+          "raw_voltage_v": 0.017,
+          "reference_voltage_v": 0.017,
+          "steady_sample_count": 274
+        },
+        {
+          "raw_voltage_v": 0.019125,
+          "reference_voltage_v": 0.019125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.021500000000000002,
+          "reference_voltage_v": 0.021500000000000002,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.024125,
+          "reference_voltage_v": 0.024125,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.026875,
+          "reference_voltage_v": 0.026875,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.03025,
+          "reference_voltage_v": 0.03025,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.0345,
+          "reference_voltage_v": 0.0345,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.03875,
+          "reference_voltage_v": 0.03875,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.043250000000000004,
+          "reference_voltage_v": 0.043250000000000004,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.0475,
+          "reference_voltage_v": 0.0475,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.051625000000000004,
+          "reference_voltage_v": 0.051625000000000004,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.05825,
+          "reference_voltage_v": 0.05825,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.06425,
+          "reference_voltage_v": 0.06425,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.07100000000000001,
+          "reference_voltage_v": 0.07100000000000001,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.078125,
+          "reference_voltage_v": 0.078125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.085875,
+          "reference_voltage_v": 0.085875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.094375,
+          "reference_voltage_v": 0.094375,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.10375000000000001,
+          "reference_voltage_v": 0.10375000000000001,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.113875,
+          "reference_voltage_v": 0.113875,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.124875,
+          "reference_voltage_v": 0.124875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.136875,
+          "reference_voltage_v": 0.136875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.15325,
+          "reference_voltage_v": 0.15325,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.167625,
+          "reference_voltage_v": 0.1675,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.183375,
+          "reference_voltage_v": 0.183375,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.20075,
+          "reference_voltage_v": 0.200625,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.2195,
+          "reference_voltage_v": 0.2195,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.24,
+          "reference_voltage_v": 0.239875,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.261875,
+          "reference_voltage_v": 0.261875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.28600000000000003,
+          "reference_voltage_v": 0.28575,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.31275000000000003,
+          "reference_voltage_v": 0.3125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.3415,
+          "reference_voltage_v": 0.341125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.372375,
+          "reference_voltage_v": 0.372125,
+          "steady_sample_count": 173
+        },
+        {
+          "raw_voltage_v": 0.414375,
+          "reference_voltage_v": 0.41400000000000003,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.450875,
+          "reference_voltage_v": 0.4505,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.491375,
+          "reference_voltage_v": 0.490875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.53525,
+          "reference_voltage_v": 0.5347500000000001,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.58275,
+          "reference_voltage_v": 0.58175,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.63425,
+          "reference_voltage_v": 0.63325,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.69025,
+          "reference_voltage_v": 0.6890000000000001,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.7508750000000001,
+          "reference_voltage_v": 0.7495,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.816875,
+          "reference_voltage_v": 0.81525,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.8885000000000001,
+          "reference_voltage_v": 0.886625,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.986125,
+          "reference_voltage_v": 0.98375,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.0715000000000001,
+          "reference_voltage_v": 1.068875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.163875,
+          "reference_voltage_v": 1.160875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.264625,
+          "reference_voltage_v": 1.26125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.37375,
+          "reference_voltage_v": 1.36975,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.4934375000000002,
+          "reference_voltage_v": 1.488375,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 1.622125,
+          "reference_voltage_v": 1.6165,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.761125,
+          "reference_voltage_v": 1.754875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.912375,
+          "reference_voltage_v": 1.9055,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.078625,
+          "reference_voltage_v": 2.071,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.163125,
+          "reference_voltage_v": 2.154875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.394125,
+          "reference_voltage_v": 2.383875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.59925,
+          "reference_voltage_v": 2.588,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.82125,
+          "reference_voltage_v": 2.808625,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.04425,
+          "reference_voltage_v": 3.03675,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.229625,
+          "reference_voltage_v": 3.223375,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 3.3805,
+          "reference_voltage_v": 3.3733750000000002,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.506875,
+          "reference_voltage_v": 3.497375,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.618625,
+          "reference_voltage_v": 3.6048750000000003,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.717,
+          "reference_voltage_v": 3.6986250000000003,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.80625,
+          "reference_voltage_v": 3.7845,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.821375,
+          "reference_voltage_v": 3.7990530462184875,
+          "steady_sample_count": 175,
+          "node_kind": "measured_support_boundary",
+          "reference_estimated": true
+        }
+      ],
+      "input_min_v": 0.016875,
+      "input_max_v": 3.821375,
+      "measured_support": {
+        "input_min_v": 0.016875,
+        "input_max_v": 3.821375,
+        "median_input_min_v": 0.017,
+        "median_input_max_v": 3.80625,
+        "source": "first_and_last_settled_training_plateaus",
+        "boundary_reference": "nearest_two_median_nodes_linear_estimate"
+      }
+    },
+    {
+      "channel": "ADC1",
+      "nodes": [
+        {
+          "raw_voltage_v": 0.017125,
+          "reference_voltage_v": 0.016875,
+          "steady_sample_count": 274,
+          "node_kind": "measured_support_boundary",
+          "reference_estimated": true
+        },
+        {
+          "raw_voltage_v": 0.01725,
+          "reference_voltage_v": 0.017,
+          "steady_sample_count": 274
+        },
+        {
+          "raw_voltage_v": 0.019375,
+          "reference_voltage_v": 0.019125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.021750000000000002,
+          "reference_voltage_v": 0.021500000000000002,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.024375,
+          "reference_voltage_v": 0.024125,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.027125,
+          "reference_voltage_v": 0.026875,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.0305,
+          "reference_voltage_v": 0.03025,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.034625,
+          "reference_voltage_v": 0.0345,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.039,
+          "reference_voltage_v": 0.03875,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.043375000000000004,
+          "reference_voltage_v": 0.043250000000000004,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.04775,
+          "reference_voltage_v": 0.0475,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.051750000000000004,
+          "reference_voltage_v": 0.051625000000000004,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.058375,
+          "reference_voltage_v": 0.05825,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.064375,
+          "reference_voltage_v": 0.06425,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.07100000000000001,
+          "reference_voltage_v": 0.07100000000000001,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.07825,
+          "reference_voltage_v": 0.078125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.08600000000000001,
+          "reference_voltage_v": 0.085875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.0945,
+          "reference_voltage_v": 0.094375,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.10387500000000001,
+          "reference_voltage_v": 0.10375000000000001,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.113875,
+          "reference_voltage_v": 0.113875,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.124875,
+          "reference_voltage_v": 0.124875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.136875,
+          "reference_voltage_v": 0.136875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.15325,
+          "reference_voltage_v": 0.15325,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.1675,
+          "reference_voltage_v": 0.1675,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.183375,
+          "reference_voltage_v": 0.183375,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.200625,
+          "reference_voltage_v": 0.200625,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.2195,
+          "reference_voltage_v": 0.2195,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.239875,
+          "reference_voltage_v": 0.239875,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.261875,
+          "reference_voltage_v": 0.261875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.28575,
+          "reference_voltage_v": 0.28575,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.3125,
+          "reference_voltage_v": 0.3125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.341125,
+          "reference_voltage_v": 0.341125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.372125,
+          "reference_voltage_v": 0.372125,
+          "steady_sample_count": 173
+        },
+        {
+          "raw_voltage_v": 0.41400000000000003,
+          "reference_voltage_v": 0.41400000000000003,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.4505,
+          "reference_voltage_v": 0.4505,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.490875,
+          "reference_voltage_v": 0.490875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.5347500000000001,
+          "reference_voltage_v": 0.5347500000000001,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.58175,
+          "reference_voltage_v": 0.58175,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.63325,
+          "reference_voltage_v": 0.63325,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.6890000000000001,
+          "reference_voltage_v": 0.6890000000000001,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.7495,
+          "reference_voltage_v": 0.7495,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.81525,
+          "reference_voltage_v": 0.81525,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.886625,
+          "reference_voltage_v": 0.886625,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.98375,
+          "reference_voltage_v": 0.98375,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.068875,
+          "reference_voltage_v": 1.068875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.160875,
+          "reference_voltage_v": 1.160875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.26125,
+          "reference_voltage_v": 1.26125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.36975,
+          "reference_voltage_v": 1.36975,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.488375,
+          "reference_voltage_v": 1.488375,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 1.6165,
+          "reference_voltage_v": 1.6165,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.754875,
+          "reference_voltage_v": 1.754875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.9055,
+          "reference_voltage_v": 1.9055,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.071,
+          "reference_voltage_v": 2.071,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.154875,
+          "reference_voltage_v": 2.154875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.383875,
+          "reference_voltage_v": 2.383875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.588,
+          "reference_voltage_v": 2.588,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.808625,
+          "reference_voltage_v": 2.808625,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.03675,
+          "reference_voltage_v": 3.03675,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.223375,
+          "reference_voltage_v": 3.223375,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 3.3733750000000002,
+          "reference_voltage_v": 3.3733750000000002,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.497375,
+          "reference_voltage_v": 3.497375,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.6048750000000003,
+          "reference_voltage_v": 3.6048750000000003,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.6986250000000003,
+          "reference_voltage_v": 3.6986250000000003,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.783,
+          "reference_voltage_v": 3.7845,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.794875,
+          "reference_voltage_v": 3.7965861111111114,
+          "steady_sample_count": 175,
+          "node_kind": "measured_support_boundary",
+          "reference_estimated": true
+        }
+      ],
+      "input_min_v": 0.017125,
+      "input_max_v": 3.794875,
+      "measured_support": {
+        "input_min_v": 0.017125,
+        "input_max_v": 3.794875,
+        "median_input_min_v": 0.01725,
+        "median_input_max_v": 3.783,
+        "source": "first_and_last_settled_training_plateaus",
+        "boundary_reference": "nearest_two_median_nodes_linear_estimate"
+      }
+    },
+    {
+      "channel": "ADC2",
+      "nodes": [
+        {
+          "raw_voltage_v": 0.017,
+          "reference_voltage_v": 0.017,
+          "steady_sample_count": 274
+        },
+        {
+          "raw_voltage_v": 0.019125,
+          "reference_voltage_v": 0.019125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.021500000000000002,
+          "reference_voltage_v": 0.021500000000000002,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.024,
+          "reference_voltage_v": 0.024125,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.02675,
+          "reference_voltage_v": 0.026875,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.03,
+          "reference_voltage_v": 0.03025,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.034125,
+          "reference_voltage_v": 0.0345,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.038375,
+          "reference_voltage_v": 0.03875,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.04275,
+          "reference_voltage_v": 0.043250000000000004,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.047,
+          "reference_voltage_v": 0.0475,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.050875000000000004,
+          "reference_voltage_v": 0.051625000000000004,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.0575,
+          "reference_voltage_v": 0.05825,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.063375,
+          "reference_voltage_v": 0.06425,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.069875,
+          "reference_voltage_v": 0.07100000000000001,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.076875,
+          "reference_voltage_v": 0.078125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.084625,
+          "reference_voltage_v": 0.085875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.093,
+          "reference_voltage_v": 0.094375,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.10212500000000001,
+          "reference_voltage_v": 0.10375000000000001,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.112125,
+          "reference_voltage_v": 0.113875,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.122875,
+          "reference_voltage_v": 0.124875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.134625,
+          "reference_voltage_v": 0.136875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.15075,
+          "reference_voltage_v": 0.15325,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.164875,
+          "reference_voltage_v": 0.1675,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.180375,
+          "reference_voltage_v": 0.183375,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.197375,
+          "reference_voltage_v": 0.200625,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.215875,
+          "reference_voltage_v": 0.2195,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.23600000000000002,
+          "reference_voltage_v": 0.239875,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.257625,
+          "reference_voltage_v": 0.261875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.28125,
+          "reference_voltage_v": 0.28575,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.307625,
+          "reference_voltage_v": 0.3125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.33587500000000003,
+          "reference_voltage_v": 0.341125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.36625,
+          "reference_voltage_v": 0.372125,
+          "steady_sample_count": 173
+        },
+        {
+          "raw_voltage_v": 0.407875,
+          "reference_voltage_v": 0.41400000000000003,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.44375000000000003,
+          "reference_voltage_v": 0.4505,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.48375,
+          "reference_voltage_v": 0.490875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.527,
+          "reference_voltage_v": 0.5347500000000001,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.573625,
+          "reference_voltage_v": 0.58175,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.6246875000000001,
+          "reference_voltage_v": 0.63325,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 0.68,
+          "reference_voltage_v": 0.6890000000000001,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.7398750000000001,
+          "reference_voltage_v": 0.7495,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.805125,
+          "reference_voltage_v": 0.81525,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.87575,
+          "reference_voltage_v": 0.886625,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 0.972375,
+          "reference_voltage_v": 0.98375,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.05675,
+          "reference_voltage_v": 1.068875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.1485,
+          "reference_voltage_v": 1.160875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.247875,
+          "reference_voltage_v": 1.26125,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.355875,
+          "reference_voltage_v": 1.36975,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.47425,
+          "reference_voltage_v": 1.488375,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 1.602375,
+          "reference_voltage_v": 1.6165,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.739875,
+          "reference_voltage_v": 1.754875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 1.8900000000000001,
+          "reference_voltage_v": 1.9055,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.054375,
+          "reference_voltage_v": 2.071,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.1385,
+          "reference_voltage_v": 2.154875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.367125,
+          "reference_voltage_v": 2.383875,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.57075,
+          "reference_voltage_v": 2.588,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 2.791125,
+          "reference_voltage_v": 2.808625,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.0191250000000003,
+          "reference_voltage_v": 3.03675,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.211,
+          "reference_voltage_v": 3.223375,
+          "steady_sample_count": 174
+        },
+        {
+          "raw_voltage_v": 3.36475,
+          "reference_voltage_v": 3.3733750000000002,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.49175,
+          "reference_voltage_v": 3.497375,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.602,
+          "reference_voltage_v": 3.6048750000000003,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.698375,
+          "reference_voltage_v": 3.6986250000000003,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.7845,
+          "reference_voltage_v": 3.7845,
+          "steady_sample_count": 175
+        },
+        {
+          "raw_voltage_v": 3.79575,
+          "reference_voltage_v": 3.795717343976778,
+          "steady_sample_count": 175,
+          "node_kind": "measured_support_boundary",
+          "reference_estimated": true
+        }
+      ],
+      "input_min_v": 0.017,
+      "input_max_v": 3.79575,
+      "measured_support": {
+        "input_min_v": 0.017,
+        "input_max_v": 3.79575,
+        "median_input_min_v": 0.017,
+        "median_input_max_v": 3.7845,
+        "source": "first_and_last_settled_training_plateaus",
+        "boundary_reference": "nearest_two_median_nodes_linear_estimate"
+      }
+    }
+  ],
+  "source": {
+    "base": {
+      "file": "/home/khadas/calibration_runs/lna_20261119_40khz_5mvpp/train.bag",
+      "sha256": "4162fceae52e1e187175ec85092bbce341efb9b47cee079c567ee21b4aed4574",
+      "adc_cutoff_v": 2.5,
+      "threshold_source": "recorded_gain_control_config",
+      "raw_audit": {
+        "total_groups": 10699,
+        "invalid_feedback_or_data_groups": 0,
+        "nonfinite_raw_groups": 0,
+        "saturated_raw_groups": 0,
+        "peak_adc_raw_v": 2.19275
+      },
+      "excluded_unstable_segments": [],
+      "final_zero_echo_confirmed": true,
+      "included_dac_levels_v": [
+        0.0,
+        0.02,
+        0.04,
+        0.06,
+        0.08,
+        0.1,
+        0.12,
+        0.14,
+        0.16,
+        0.18,
+        0.2,
+        0.22,
+        0.24,
+        0.26,
+        0.28,
+        0.3,
+        0.32,
+        0.34,
+        0.36,
+        0.38,
+        0.4,
+        0.42,
+        0.44,
+        0.46,
+        0.48,
+        0.5,
+        0.52,
+        0.54,
+        0.56,
+        0.58,
+        0.6,
+        0.62,
+        0.64,
+        0.66,
+        0.68,
+        0.7,
+        0.72,
+        0.74,
+        0.76,
+        0.78,
+        0.8,
+        0.82,
+        0.84,
+        0.86,
+        0.88,
+        0.9,
+        0.92,
+        0.94,
+        0.96,
+        0.98,
+        1.0,
+        1.02,
+        1.03
+      ]
+    },
+    "high": {
+      "file": "/home/khadas/calibration_runs/lna_20261119_40khz_5mvpp/high_3p9v/train.bag",
+      "sha256": "89d8a8d689556f47fe0649ac9be7ce049e7d57a553f1c8f17c9e78c943e771df",
+      "adc_cutoff_v": 3.9,
+      "threshold_source": "recorded_gain_control_config",
+      "raw_audit": {
+        "total_groups": 2957,
+        "invalid_feedback_or_data_groups": 0,
+        "nonfinite_raw_groups": 0,
+        "saturated_raw_groups": 0,
+        "peak_adc_raw_v": 3.821375
+      },
+      "excluded_unstable_segments": [
+        {
+          "dac_v": 0.05,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.1,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.15,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.2,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.25,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.3,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.35,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.4,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.45,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.5,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.55,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.6,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.65,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.7,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.75,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.8,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.85,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.9,
+          "reason": "fewer than 16 settled samples"
+        },
+        {
+          "dac_v": 0.95,
+          "reason": "fewer than 16 settled samples"
+        }
+      ],
+      "final_zero_echo_confirmed": true,
+      "included_dac_levels_v": [
+        0.98,
+        1.0,
+        1.02,
+        1.03,
+        1.05,
+        1.07,
+        1.09,
+        1.11,
+        1.13,
+        1.15,
+        1.17,
+        1.19,
+        1.21,
+        1.23
+      ]
+    },
+    "overlap_check": [
+      {
+        "dac_v": 0.98,
+        "base_median_v": [
+          1.761125,
+          1.754875,
+          1.739875
+        ],
+        "high_median_v": [
+          1.7593750000000001,
+          1.7530000000000001,
+          1.7373750000000001
+        ],
+        "relative_drift_percent": [
+          0.09936830151181308,
+          0.1068452168957817,
+          0.14368848336805498
+        ]
+      },
+      {
+        "dac_v": 1.0,
+        "base_median_v": [
+          1.912375,
+          1.9055,
+          1.8900000000000001
+        ],
+        "high_median_v": [
+          1.9096250000000001,
+          1.9025,
+          1.886625
+        ],
+        "relative_drift_percent": [
+          0.14380024838223718,
+          0.157438992390443,
+          0.17857142857143532
+        ]
+      },
+      {
+        "dac_v": 1.02,
+        "base_median_v": [
+          2.078625,
+          2.071,
+          2.054375
+        ],
+        "high_median_v": [
+          2.0735,
+          2.065375,
+          2.049125
+        ],
+        "relative_drift_percent": [
+          0.2465572193156556,
+          0.2716079188797785,
+          0.2555521752357654
+        ]
+      },
+      {
+        "dac_v": 1.03,
+        "base_median_v": [
+          2.163125,
+          2.154875,
+          2.1385
+        ],
+        "high_median_v": [
+          2.1605,
+          2.15175,
+          2.1353750000000002
+        ],
+        "relative_drift_percent": [
+          0.12135221034383586,
+          0.14502001276177348,
+          0.14613046527939313
+        ]
+      }
+    ]
+  },
+  "validation": {
+    "raw": {
+      "count": 5581,
+      "median_spread_v": 0.006000000000000005,
+      "p95_spread_v": 0.026499999999999968,
+      "median_relative_spread_pct": 1.4862804878048779,
+      "p95_relative_spread_pct": 1.8181818181818197
+    },
+    "recorded": {
+      "count": 5581,
+      "median_spread_v": 0.006000000000000005,
+      "p95_spread_v": 0.026499999999999968,
+      "median_relative_spread_pct": 1.4862804878048779,
+      "p95_relative_spread_pct": 1.8181818181818197
+    },
+    "candidate": {
+      "count": 5581,
+      "median_spread_v": 0.00037450066486821587,
+      "p95_spread_v": 0.0030034071550257835,
+      "median_relative_spread_pct": 0.09731377494752395,
+      "p95_relative_spread_pct": 0.5440414507771997
+    },
+    "rejected_holdout_groups": 0,
+    "note": "Temporal holdout within the same sweep; not independent experimental validation"
+  },
+  "independent_validation": {
+    "raw": {
+      "count": 2971,
+      "median_spread_v": 0.012375000000000025,
+      "p95_spread_v": 0.02849999999999997,
+      "median_relative_spread_pct": 1.3616230108820409,
+      "p95_relative_spread_pct": 1.9305019305019322
+    },
+    "calibrated": {
+      "count": 2971,
+      "median_spread_v": 0.0006260907504362923,
+      "p95_spread_v": 0.003721874524331703,
+      "median_relative_spread_pct": 0.08712272147069532,
+      "p95_relative_spread_pct": 0.6896551724137746
+    },
+    "accepted_plateaus": 17,
+    "rejected_stable_groups": 0,
+    "per_plateau": [
+      {
+        "dac_v": 0.01,
+        "raw": {
+          "count": 175,
+          "median_spread_v": 0.0002500000000000002,
+          "p95_spread_v": 0.00037499999999999686,
+          "median_relative_spread_pct": 1.3888888888888706,
+          "p95_relative_spread_pct": 2.0833333333333157
+        },
+        "calibrated": {
+          "count": 175,
+          "median_spread_v": 0.00012499999999999664,
+          "p95_spread_v": 0.0001250000000000001,
+          "median_relative_spread_pct": 0.6896551724137746,
+          "p95_relative_spread_pct": 0.694444444444445
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 175,
+        "sample_start_s": 1795075744.0178883,
+        "sample_end_s": 1795075752.7341745,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 0.11,
+        "raw": {
+          "count": 175,
+          "median_spread_v": 0.0005000000000000004,
+          "p95_spread_v": 0.0006250000000000006,
+          "median_relative_spread_pct": 1.5444015444015458,
+          "p95_relative_spread_pct": 1.9305019305019322
+        },
+        "calibrated": {
+          "count": 175,
+          "median_spread_v": 0.000128787878787881,
+          "p95_spread_v": 0.00025757575757575507,
+          "median_relative_spread_pct": 0.39780039780040466,
+          "p95_relative_spread_pct": 0.7956007956007879
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 175,
+        "sample_start_s": 1795075754.2050354,
+        "sample_end_s": 1795075762.9176068,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 0.21,
+        "raw": {
+          "count": 175,
+          "median_spread_v": 0.0008750000000000008,
+          "p95_spread_v": 0.0012500000000000011,
+          "median_relative_spread_pct": 1.576576576576578,
+          "p95_relative_spread_pct": 2.222222222222224
+        },
+        "calibrated": {
+          "count": 175,
+          "median_spread_v": 0.0001250000000000001,
+          "p95_spread_v": 0.0005000000000000004,
+          "median_relative_spread_pct": 0.2247191011235957,
+          "p95_relative_spread_pct": 0.8908685968819606
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 175,
+        "sample_start_s": 1795075764.3899477,
+        "sample_end_s": 1795075773.105255,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 0.31,
+        "raw": {
+          "count": 175,
+          "median_spread_v": 0.0015000000000000013,
+          "p95_spread_v": 0.0017500000000000016,
+          "median_relative_spread_pct": 1.6597510373443998,
+          "p95_relative_spread_pct": 1.9398649920662687
+        },
+        "calibrated": {
+          "count": 175,
+          "median_spread_v": 0.0001250000000000001,
+          "p95_spread_v": 0.0004779850746268612,
+          "median_relative_spread_pct": 0.1387939427837509,
+          "p95_relative_spread_pct": 0.5303178092937753
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 175,
+        "sample_start_s": 1795075774.5759726,
+        "sample_end_s": 1795075783.2929568,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 0.41,
+        "raw": {
+          "count": 175,
+          "median_spread_v": 0.002375000000000016,
+          "p95_spread_v": 0.0025000000000000022,
+          "median_relative_spread_pct": 1.6564952048822934,
+          "p95_relative_spread_pct": 1.743679163034003
+        },
+        "calibrated": {
+          "count": 175,
+          "median_spread_v": 0.0001472868217054224,
+          "p95_spread_v": 0.00027616279069767047,
+          "median_relative_spread_pct": 0.10254957124833587,
+          "p95_relative_spread_pct": 0.1926157214979393
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 175,
+        "sample_start_s": 1795075784.7655363,
+        "sample_end_s": 1795075793.4802928,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 0.51,
+        "raw": {
+          "count": 175,
+          "median_spread_v": 0.0038749999999999896,
+          "p95_spread_v": 0.0041250000000000175,
+          "median_relative_spread_pct": 1.6856987493202904,
+          "p95_relative_spread_pct": 1.795429815016321
+        },
+        "calibrated": {
+          "count": 175,
+          "median_spread_v": 0.0002492236024844996,
+          "p95_spread_v": 0.0005609093319194097,
+          "median_relative_spread_pct": 0.10838825974212846,
+          "p95_relative_spread_pct": 0.24387238424785818
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 175,
+        "sample_start_s": 1795075794.9513936,
+        "sample_end_s": 1795075803.663463,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 0.61,
+        "raw": {
+          "count": 175,
+          "median_spread_v": 0.005750000000000033,
+          "p95_spread_v": 0.0063750000000000195,
+          "median_relative_spread_pct": 1.6271666077113485,
+          "p95_relative_spread_pct": 1.7978694009230303
+        },
+        "calibrated": {
+          "count": 175,
+          "median_spread_v": 0.00031933198380568184,
+          "p95_spread_v": 0.0010765525815964179,
+          "median_relative_spread_pct": 0.08994498188415548,
+          "p95_relative_spread_pct": 0.3033458310781436
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 175,
+        "sample_start_s": 1795075805.1350224,
+        "sample_end_s": 1795075813.8486392,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 0.71,
+        "raw": {
+          "count": 175,
+          "median_spread_v": 0.008874999999999966,
+          "p95_spread_v": 0.010037499999999986,
+          "median_relative_spread_pct": 1.5912147019274008,
+          "p95_relative_spread_pct": 1.8022243727127405
+        },
+        "calibrated": {
+          "count": 175,
+          "median_spread_v": 0.0005750670241287947,
+          "p95_spread_v": 0.0019007665443770366,
+          "median_relative_spread_pct": 0.10324119205770534,
+          "p95_relative_spread_pct": 0.3412831291556119
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 175,
+        "sample_start_s": 1795075815.321651,
+        "sample_end_s": 1795075824.0356524,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 0.81,
+        "raw": {
+          "count": 175,
+          "median_spread_v": 0.012499999999999956,
+          "p95_spread_v": 0.01578750000000002,
+          "median_relative_spread_pct": 1.4703720041170363,
+          "p95_relative_spread_pct": 1.8478733339413913
+        },
+        "calibrated": {
+          "count": 175,
+          "median_spread_v": 0.0008922288375110554,
+          "p95_spread_v": 0.005241764737679304,
+          "median_relative_spread_pct": 0.10492180949711073,
+          "p95_relative_spread_pct": 0.6164963332679383
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 175,
+        "sample_start_s": 1795075825.5072129,
+        "sample_end_s": 1795075834.222478,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 0.91,
+        "raw": {
+          "count": 175,
+          "median_spread_v": 0.017125000000000057,
+          "p95_spread_v": 0.019625000000000004,
+          "median_relative_spread_pct": 1.304140885292705,
+          "p95_relative_spread_pct": 1.492367167229321
+        },
+        "calibrated": {
+          "count": 175,
+          "median_spread_v": 0.0010823071783123694,
+          "p95_spread_v": 0.003591509163802973,
+          "median_relative_spread_pct": 0.0823830392625971,
+          "p95_relative_spread_pct": 0.27315079225995803
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 175,
+        "sample_start_s": 1795075835.6935241,
+        "sample_end_s": 1795075844.4081461,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 1.01,
+        "raw": {
+          "count": 174,
+          "median_spread_v": 0.0234375,
+          "p95_spread_v": 0.025793750000000136,
+          "median_relative_spread_pct": 1.180728773519213,
+          "p95_relative_spread_pct": 1.3009831439364477
+        },
+        "calibrated": {
+          "count": 174,
+          "median_spread_v": 0.0017380835644242865,
+          "p95_spread_v": 0.004026607142857118,
+          "median_relative_spread_pct": 0.08762635554201695,
+          "p95_relative_spread_pct": 0.20306060169291185
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 174,
+        "sample_start_s": 1795075845.8802378,
+        "sample_end_s": 1795075854.5503383,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 1.04,
+        "raw": {
+          "count": 174,
+          "median_spread_v": 0.026499999999999968,
+          "p95_spread_v": 0.029756249999999797,
+          "median_relative_spread_pct": 1.1595154178736018,
+          "p95_relative_spread_pct": 1.301502092776765
+        },
+        "calibrated": {
+          "count": 174,
+          "median_spread_v": 0.0019110511208311198,
+          "p95_spread_v": 0.00644951388938173,
+          "median_relative_spread_pct": 0.0835874397576868,
+          "p95_relative_spread_pct": 0.2819518030389535
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 174,
+        "sample_start_s": 1795076716.179241,
+        "sample_end_s": 1795076724.8455944,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 1.08,
+        "raw": {
+          "count": 175,
+          "median_spread_v": 0.029749999999999943,
+          "p95_spread_v": 0.03477499999999972,
+          "median_relative_spread_pct": 1.1047672097665113,
+          "p95_relative_spread_pct": 1.2910638679143958
+        },
+        "calibrated": {
+          "count": 175,
+          "median_spread_v": 0.002596551502225264,
+          "p95_spread_v": 0.011182383443869775,
+          "median_relative_spread_pct": 0.09641407295336324,
+          "p95_relative_spread_pct": 0.4133026520322901
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 175,
+        "sample_start_s": 1795076726.2088566,
+        "sample_end_s": 1795076734.9212852,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 1.12,
+        "raw": {
+          "count": 175,
+          "median_spread_v": 0.022499999999999964,
+          "p95_spread_v": 0.02566249999999983,
+          "median_relative_spread_pct": 0.7178464606181445,
+          "p95_relative_spread_pct": 0.8183380813142626
+        },
+        "calibrated": {
+          "count": 175,
+          "median_spread_v": 0.002219055374593104,
+          "p95_spread_v": 0.005064776676382277,
+          "median_relative_spread_pct": 0.07079672302170538,
+          "p95_relative_spread_pct": 0.1615723489491635
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 175,
+        "sample_start_s": 1795076736.2348166,
+        "sample_end_s": 1795076744.950306,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 1.16,
+        "raw": {
+          "count": 174,
+          "median_spread_v": 0.015375000000000139,
+          "p95_spread_v": 0.017624999999999936,
+          "median_relative_spread_pct": 0.44737847260669905,
+          "p95_relative_spread_pct": 0.5126536384106686
+        },
+        "calibrated": {
+          "count": 174,
+          "median_spread_v": 0.001293307086614126,
+          "p95_spread_v": 0.0033789446501865327,
+          "median_relative_spread_pct": 0.03762122721049854,
+          "p95_relative_spread_pct": 0.09829294690625918
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 174,
+        "sample_start_s": 1795076746.26287,
+        "sample_end_s": 1795076754.9269223,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 1.2,
+        "raw": {
+          "count": 174,
+          "median_spread_v": 0.017749999999999932,
+          "p95_spread_v": 0.019374999999999854,
+          "median_relative_spread_pct": 0.4855946481549853,
+          "p95_relative_spread_pct": 0.5292221061623761
+        },
+        "calibrated": {
+          "count": 174,
+          "median_spread_v": 0.001097566115723092,
+          "p95_spread_v": 0.0030449896543540463,
+          "median_relative_spread_pct": 0.03003452217259895,
+          "p95_relative_spread_pct": 0.08335275594969378
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 174,
+        "sample_start_s": 1795076756.2890806,
+        "sample_end_s": 1795076764.9515502,
+        "calibrated_coverage": 1.0
+      },
+      {
+        "dac_v": 1.22,
+        "raw": {
+          "count": 175,
+          "median_spread_v": 0.02112500000000006,
+          "p95_spread_v": 0.02241250000000017,
+          "median_relative_spread_pct": 0.5641419367760473,
+          "p95_relative_spread_pct": 0.5987915933173145
+        },
+        "calibrated": {
+          "count": 175,
+          "median_spread_v": 0.0009285929688762629,
+          "p95_spread_v": 0.002799505674064617,
+          "median_relative_spread_pct": 0.024794409785997576,
+          "p95_relative_spread_pct": 0.07475560979593626
+        },
+        "rejected_stable_groups": 0,
+        "total_stable_groups": 175,
+        "sample_start_s": 1795076766.314702,
+        "sample_end_s": 1795076775.0277166,
+        "calibrated_coverage": 1.0
+      }
+    ],
+    "recommended_for_deployment": true,
+    "status": "passed",
+    "failures": [],
+    "acceptance_criteria": {
+      "minimum_per_plateau_coverage": 0.95,
+      "minimum_overall_coverage": 0.99,
+      "p95_improves_on_each_plateau": true
+    },
+    "metric_scope": "raw and calibrated metrics use only groups accepted by the calibration",
+    "sources": {
+      "base": {
+        "file": "/home/khadas/calibration_runs/lna_20261119_40khz_5mvpp/repeat.bag",
+        "sha256": "8471d374febc9aea20e7e8b912dd379d1acdb6c6d158f32880f00f8be35f61ac",
+        "adc_cutoff_v": 2.5,
+        "threshold_source": "recorded_gain_control_config",
+        "raw_audit": {
+          "total_groups": 2330,
+          "invalid_feedback_or_data_groups": 0,
+          "nonfinite_raw_groups": 0,
+          "saturated_raw_groups": 0,
+          "peak_adc_raw_v": 2.0015
+        },
+        "excluded_unstable_segments": [
+          {
+            "dac_v": 0.06,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.16,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.26,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.36,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.46,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.56,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.66,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.76,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.86,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.96,
+            "reason": "fewer than 16 settled samples"
+          }
+        ],
+        "final_zero_echo_confirmed": true,
+        "included_dac_levels_v": [
+          0.01,
+          0.11,
+          0.21,
+          0.31,
+          0.41,
+          0.51,
+          0.61,
+          0.71,
+          0.81,
+          0.91,
+          1.01
+        ]
+      },
+      "high": {
+        "file": "/home/khadas/calibration_runs/lna_20261119_40khz_5mvpp/high_3p9v/repeat.bag",
+        "sha256": "fc82498dea6e6a8a21cdc3e9f7372816978281966ec8a1d01dac70b0bdf799d8",
+        "adc_cutoff_v": 3.9,
+        "threshold_source": "recorded_gain_control_config",
+        "raw_audit": {
+          "total_groups": 1360,
+          "invalid_feedback_or_data_groups": 0,
+          "nonfinite_raw_groups": 0,
+          "saturated_raw_groups": 0,
+          "peak_adc_raw_v": 3.7767500000000003
+        },
+        "excluded_unstable_segments": [
+          {
+            "dac_v": 0.05,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.1,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.15,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.2,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.25,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.3,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.35,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.4,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.45,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.5,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.55,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.6,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.65,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.7,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.75,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.8,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.85,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.9,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 0.95,
+            "reason": "fewer than 16 settled samples"
+          },
+          {
+            "dac_v": 1.0,
+            "reason": "fewer than 16 settled samples"
+          }
+        ],
+        "final_zero_echo_confirmed": true,
+        "included_dac_levels_v": [
+          1.04,
+          1.08,
+          1.12,
+          1.16,
+          1.2,
+          1.22
+        ]
+      }
+    }
+  }
+}

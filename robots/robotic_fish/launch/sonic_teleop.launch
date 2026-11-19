@@ -3,6 +3,7 @@
   <arg name="enable_joy" default="true"/>
   <arg name="joy_dev" default="/dev/input/js0"/>
   <arg name="motion_config" default="$(find robotic_fish)/config/motion.yaml"/>
+  <arg name="acoustic_config" default="$(find robotic_fish_sonic)/config/acoustic.yaml"/>
   <!-- Empty overrides inherit the selected YAML. Explicit false/zero are valid. -->
   <arg name="auto_frequency" default=""/>
   <arg name="acoustic_steering" default=""/>
@@ -28,8 +29,10 @@
   <arg name="status_local_echo" default=""/>
   <arg name="amplitude_buttons" default=""/>
 
+  <group ns="sonic_teleop_node/hydrophone_channels" clear_params="true"/>
   <node pkg="robotic_fish" type="sonic_teleop.py" name="sonic_teleop_node" output="screen">
     <rosparam command="load" file="$(arg motion_config)"/>
+    <rosparam command="load" file="$(arg acoustic_config)"/>
     <param name="motion_config_file" type="str" value="$(arg motion_config)"/>
     <param if="$(eval arg('auto_frequency') != '')" name="auto_frequency" type="double" value="$(arg auto_frequency)"/>
     <param if="$(eval arg('acoustic_steering') != '')" name="acoustic_steering/enabled" type="bool" value="$(arg acoustic_steering)"/>

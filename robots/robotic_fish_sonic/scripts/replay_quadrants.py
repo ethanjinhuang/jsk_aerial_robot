@@ -70,8 +70,8 @@ def main():
     parser.add_argument('--calibration', type=Path, help='Recalibrate raw ADC values in memory before comparing')
     parser.add_argument('--window-s', type=float, default=.5)
     parser.add_argument('--channel-layout', required=True, choices=CHANNEL_LAYOUTS,
-                        help='Physical ADC0/1/2 directions: left_right_head (current) or '
-                             'head_left_right (legacy). Never inferred from message schema or date.')
+                        help='Hydrophone directions in physical ADC0/1/2 order, e.g. '
+                             'left_right_head for the default wiring.')
     args = parser.parse_args()
     paths = sorted(p for p in args.input.glob('*.bag') if not p.name.startswith('._')) if args.input.is_dir() else [args.input]
     if not paths:

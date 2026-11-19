@@ -5,7 +5,7 @@ import re
 import sys
 import textwrap
 
-from robotic_fish_sonic.channel_mapping import channel_mapping
+from robotic_fish_sonic.channel_mapping import DEFAULT_CHANNEL_LAYOUT, channel_mapping
 
 
 WIDTH = 78
@@ -24,7 +24,7 @@ def percent(value, signed=False):
     return result if result == '--' else result + '%'
 
 
-def format_status(data):
+def format_status(data, channel_layout=DEFAULT_CHANNEL_LAYOUT):
     """Expand arithmetic from captured means; display the recorded decision result."""
     border = '+' + '-' * (WIDTH - 2) + '+'
     lines = [border, '| ' + TITLE.center(WIDTH - 4) + ' |', border]
@@ -54,7 +54,7 @@ def format_status(data):
     if data['mode'] == 'stopped':
         row('Reason', data['reason'])
     lines.append(border)
-    channels = channel_mapping()
+    channels = channel_mapping(channel_layout)
     lines.append('| %-22s | %15s | %15s | %13s |' %
                  ('Voltage [V]', 'Head (ADC%d)' % channels['head'],
                   'Left (ADC%d)' % channels['left'], 'Right (ADC%d)' % channels['right']))

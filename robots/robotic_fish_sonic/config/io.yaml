@@ -1,7 +1,7 @@
 adc:
   bus: 0
   address: 0x48
-  # Physical acquisition/calibration order. Hydrophones: ADC0=left, ADC1=right, ADC2=head.
+  # Physical acquisition/calibration order. Configure directions in acoustic.yaml.
   channels: [0, 1, 2]
   data_rate: 128
   channel_rate: 20.0
@@ -54,7 +54,7 @@ gain_control:
   safety_interval_s: 0.10
   recovery_settle_s: 0.20
   # Explicit opt-in; high fraction must be chosen before enabling.
-  # Uses mapped left/right raw voltages (ADC0/ADC1); safety still checks all three.
+  # Uses mapped left/right raw voltages. Safety checks all three channels.
   window_control: false
   window_s: 2.0
   window_mean_min_v: 2.0

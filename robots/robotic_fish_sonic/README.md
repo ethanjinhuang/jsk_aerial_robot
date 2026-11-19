@@ -129,14 +129,15 @@ VIM4 已单独运行传感器和桥时，可仅启动运动：`sonic_teleop.laun
 ## 配置与声学输出
 
 - `config/io.yaml`：ADC、校准表、DAC、增益及保护参数。
-- `config/acoustic.yaml`：声学节点私有参数，默认历史窗口 0.5 秒、
+- `config/acoustic.yaml`：共享的水听器映射和声学比较参数。默认历史窗口 0.5 秒、
   最大间隔 0.2 秒、低电压数值阈值 0.001 V，以及未来时间戳容差 0.05 秒。
-- `config/calibration/`：新电路默认校准及历史独立通道校准表。
+- `config/calibration/`：各电路及供电条件对应的独立通道校准表。
 - `config/udev/`：DAC 设备规则；spinal 当前路径为
   `/dev/robotic_fish_spinal`，现场需核实对应规则。
 
-IO 配置由 `config:=...` 选择，声学配置由 `acoustic_config:=...` 选择。
-`quadrant.launch` 单独使用 `config:=...`。`window_s`、`gap_s`、
+`sonic.launch` 和 `sensor_io.launch` 的 IO 配置由 `config:=...` 选择。
+声学配置由 `acoustic_config:=...` 选择，单独运行 `quadrant.launch` 时使用 `config:=...`。
+`window_s`、`gap_s`、
 `low_signal_v` 的非空启动参数覆盖所选声学 YAML；`model` 通过启动参数选择。
 IO 中已有的启动参数覆盖 YAML 的优先级保持不变。
 
@@ -145,13 +146,24 @@ roslaunch robotic_fish_sonic quadrant.launch window_s:=0.2
 rostopic echo /robotic_fish/acoustic/channel_comparison
 ```
 
-当前接线为 ADC0=左侧、ADC1=右侧、ADC2=前向（代码字段 `head`）。
-方向映射集中在 `src/robotic_fish_sonic/channel_mapping.py`；采样消息、原始值和校准曲线
-始终按物理 ADC0/1/2 编号处理，`io.yaml` 的 `channels: [0, 1, 2]` 不重排。
+前、左、右水听器的 ADC 通道在 `hydrophone_channels` 中配置。默认值沿用当前接线，
+代码和录包中的前向字段名为 `head`。见 [acoustic.yaml](config/acoustic.yaml)。
+
+```yaml
+hydrophone_channels:
+  FrontPZT: 2
+  LeftPZT: 0
+  RightPZT: 1
+```
+
+`LeftPZT: 0` 表示左侧水听器读取 ADC0。三项必须各使用一个不同的整数通道号（0、1、2）。
+修改后重启相关 launch 生效。`sonic_vim4.launch` 和 `sonic_teleop.launch` 也通过
+`acoustic_config:=/path/to/acoustic.yaml` 选择文件。独立启动各节点时可指向同一份文件。
+采样消息、原始值和校准曲线始终按物理 ADC0/1/2 编号处理，`io.yaml` 中的通道列表采用 `[0, 1, 2]`。
 只交换水听器方向、不改变各 ADC 对应电子链路时保留通道校准表；若同时交换模拟前端，应重新验证或标定。
 可选闭环 `window_control` 同样使用共享方向映射：窗口均值、峰值及超限组比例
-均取左／右原始电压（ADC0／ADC1）；前向 ADC2 不设定正常窗口目标，但仍参与
-三通道有效性检查与过压保护。增益配置记录 `window_channel_ids: [0, 1]` 及完整映射。
+均取所配置的左／右通道原始电压。三通道均参与有效性检查与过压保护。
+增益配置的 `window_channel_ids` 记录当前左／右通道号，并同时记录完整映射。
 窗口控制仍默认关闭；启用需选择 `closed_loop`、显式设置 `window_control: true`
 和经过确认的 `window_high_fraction`。本次只修正通道选择，不改阈值、步长或开启状态。
 输出左右差值
@@ -224,8 +236,8 @@ VIM4 运动节点按 Share 发布纯文本快照，整机入口默认启动 `sta
 `enable_status_console:=false` 可关闭显示。独立显示可运行
 `roslaunch robotic_fish_sonic status_console.launch color:=auto`。
 具体见 [Share 查看系统状态](../robotic_fish/README.md#66-share-查看系统状态)。
-三通道映射要求 ADC0=左、ADC1=右、ADC2=前，并要求有效校准和已确认增益。
-Share 三行电压统一按前／左／右显示，对应 ADC2／ADC0／ADC1。
+周期趋声使用 `acoustic.yaml` 中的方向映射，要求有效校准和已确认增益。
+Share 三行电压统一按前／左／右显示，表头标出实际 ADC 通道号。
 
 新增接口：
 
@@ -250,8 +262,8 @@ source 并重启节点。新版本仍接受省略符号的三字段 YAML 调用�
 调用后直接返回当前模式、数据质量、方向、控制偏置、正在使用及待生效参数；
 真正生效时 VIM4 运动终端打印请求编号、周期和参数。服务成功表示接受请求，仍等待有效周期。
 旧无量纲 `lr_offset` 及其启动参数已移除，新补偿名称同时用于配置、事件和服务响应。
-锁存运动配置的 `schema_version` 为 5，新增 `settings.channel_layout=left_right_head`
-和 `settings.hydrophone_channels={head: 2, left: 0, right: 1}`，无跟踪时也记录映射。
+锁存运动配置的 `schema_version` 为 5，`settings.channel_layout` 按 ADC0/1/2 顺序记录方向，
+`settings.hydrophone_channels` 记录每个方向对应的通道号，无跟踪时也记录映射。
 保留版本 4 引入的 `difference_reference=channel_mean`、
 `voltage_offset_reference=left_minus_right` 和包含等号的判定规则；旧版本 3 的同名补偿字段是单侧调整量。
 状态、参数事件和服务反馈也标记差值基准，避免与旧 bag 的总和归一化含义混淆。消息及服务定义已改变，
@@ -282,8 +294,8 @@ rosrun robotic_fish_sonic calibrate_from_bag.py sweep.bag --output /tmp/fish-cal
 且校准后绝对差异 P95 不得变差。通过这些检查仍需要独立复测后才能部署。
 
 新电路的公共输入校准流程见[校准实验说明](docs/calibration_procedure.md)。
-当前 5 mVpp 信号源实验使用 `--dac-max-v 1.30`，该值仅筛选本次实验平台，
-不修改实际运行的 0–5 V 控制范围。离线 ADC 阈值优先采用 bag 中记录的
+2026-11-14 的 5 mVpp 实验使用 `--dac-max-v 1.30` 筛选 DAC 平台。该参数只用于离线筛选。
+离线 ADC 阈值优先采用 bag 中记录的
 `safety_limit_v`；无记录时采用显式 `--adc-safety-limit-v` 或本包 IO 配置，
 与线上在达到阈值时即触发保护的判定一致。当前默认触发值为 4.00 V，
 恢复值 3.30 V 仍单独保留用于滞回。
@@ -297,6 +309,20 @@ rosrun robotic_fish_sonic calibrate_from_bag.py sweep.bag --output /tmp/fish-cal
 完整边界、夹紧统计、原始数据与重建命令见[电池校准报告](docs/calibration_20261114_battery.md)。
 11 月 12 日的[稳压电源校准表](docs/calibration_20261112_measured_support.md)保持原样；切回该供电条件应选择并验证对应配置。
 初次 0–1.24 V 扫描记录保留在[原始校准报告](docs/calibration_20261112_new_circuit.md)。
+
+2026-11-19 对更换后的 LNA 以 40 kHz、5 mVpp 公共电输入进行校准。
+前、左、右水听器在台架校准时由信号源代替，结果描述三条电子链路的相对响应。
+
+| 校准表 | DAC 扫描范围 | ADC0／ADC1／ADC2 上界 | 独立复测 |
+| --- | --- | --- | --- |
+| [初次扫描](config/calibration/adc_independent_transfer_20261119_lna_40khz_5mvpp.json) | 0–1.03 V | 2.192750／2.180125／2.176500 V | 1,924 组覆盖率 100%，通道差 P95 从 23.13 mV 降到 2.38 mV |
+| [扩展扫描](config/calibration/adc_independent_transfer_20261119_lna_40khz_5mvpp_extended.json) | 0–1.23 V | 3.821375／3.794875／3.795750 V | 2,971 组覆盖率 100%，通道差 P95 从 28.50 mV 降到 3.72 mV |
+
+扩展表合并 63 个训练平台，4 个重叠档的最大中位电压漂移约为 0.272%。
+文件记录了各通道实测边界、原始 bag 的路径和校验和，以及独立复测结果。
+在新 LNA 上使用扩展表时，将 `io.yaml` 的 `adc.calibration.file` 设为
+`calibration/adc_independent_transfer_20261119_lna_40khz_5mvpp_extended.json` 后重启 ADC 节点。
+
 本机 DAC 当前使用已确认的 CH340 稳定路径
 `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`；原物理端口规则下的
 `/dev/robotic_fish_dac` 别名在当前接线中不存在。

@@ -82,11 +82,11 @@ appropriate to the recorded version. No ROS message definition has changed.
   All three ADC channels share this gain. Failed serial commands publish an invalid
   (NaN) DAC state; consumers clear their stored validity instead of retaining it.
 
-### Optional left/right window control (ADC0/ADC1)
+### Optional left/right window control
 
-Window statistics select the left/right inputs through the shared `channel_mapping.py`
-layout: ADC0=left, ADC1=right, ADC2=head. Raw acquisition and calibration stay in
-physical ADC0/1/2 order.
+Window statistics select the left/right inputs from `config/acoustic.yaml`.
+The shipped mapping is ADC0=left, ADC1=right, ADC2=head. Raw acquisition and
+calibration use physical ADC0/1/2 order.
 
 This is a separate **closed_loop-only opt-in**. The shipped `window_control: false` remains unchanged.
 To enable later, select `gain_mode:=closed_loop`, set `window_control: true`, and
@@ -96,23 +96,23 @@ when enabling. No allowable fraction has yet been established by bench validatio
 | Parameter under `gain_control` | Default | Definition |
 | --- | --- | --- |
 | `window_s` | 2.0 s | Continuous same-DAC observation window |
-| `window_mean_min_v` | 2.0 V | Lower target for max(mean ADC0, mean ADC1) |
+| `window_mean_min_v` | 2.0 V | Lower target for max(mean left, mean right) |
 | `window_peak_upper_v` | 3.0 V | Lateral peak regulation boundary, not safety trigger |
-| `window_high_fraction` | null | Allowed fraction of groups with either ADC0 or ADC1 > boundary; explicitly required |
+| `window_high_fraction` | null | Allowed fraction of groups with either side above the boundary. Required when enabling window control |
 | `window_cooldown_s` | 5.0 s | Minimum elapsed time since observed overrange/start of window monitoring before increases |
 
 Decision order: three-channel fast safety first; then, for a complete window,
 decrease if the high-group fraction exceeds the configured allowance; otherwise
 hold if any lateral peak exceeds 3 V; otherwise increase if the stronger lateral
-mean is below 2 V and cooldown has elapsed. ADC2 (head) does not set the normal target,
-but still triggers safety. Normal steps use `step_v` and `interval_s`.
+mean is below 2 V and cooldown has elapsed. Fast safety covers all three inputs.
+Normal steps use `step_v` and `interval_s`.
 
 Each adjustment, invalid sample, gap over `recovery_sample_timeout_s`, or DAC
 change requires a fresh window. Nested DAC metadata must match the current DAC
 for window control. Means and fractions are sample-weighted;
 one sample at/before the window's left edge is retained for full time coverage.
 The gain-control configuration snapshot records `channel_layout`,
-`hydrophone_channels`, and `window_channel_ids: [0, 1]` on the existing
+`hydrophone_channels`, and the active `window_channel_ids` on the existing
 `/robotic_fish/gain_control/config` topic. All three physical channels still
 participate in validity checks and fast overrange protection.
 Both startup values and peak allowances require real acoustic bench validation.
@@ -183,15 +183,16 @@ control is disabled. Mode service changes republish the gain snapshot; plain
 rosparam edits do not reconfigure running nodes and do not change the snapshot.
 There is no dynamic parameter-update API beyond the existing mode service.
 
-Current hydrophone wiring is ADC0=left, ADC1=right, ADC2=head/front. Direction
-consumers share `channel_mapping.py`; physical ADC IDs, acquisition order and
-per-channel calibration curves retain ADC0/1/2 order. The acoustic snapshot
-records `channel_layout=left_right_head` and `hydrophone_channels` with
-`head: 2, left: 0, right: 1`. Motion records the same mapping on
+The `FrontPZT`, `LeftPZT`, and `RightPZT` entries under `hydrophone_channels` in `config/acoustic.yaml`
+define the effective wiring at startup. Direction consumers share this mapping.
+Acquisition and per-channel calibration curves use physical ADC0/1/2 order.
+The acoustic snapshot records the active `channel_layout` and `hydrophone_channels`.
+Motion records the same mapping on
 `/robotic_fish/sonic/config` (JSON schema version 5), including when tracking is
 disabled. Share displays all three voltage rows in head/left/right order, with
-ADC2/ADC0/ADC1 labels. Offline replay requires an explicit `--channel-layout`;
-use `head_left_right` for the previous wiring, regardless of message schema.
+ADC labels from the effective mapping. Offline replay takes the recorded layout
+name as `--channel-layout`. For example, `head_left_right` specifies the legacy
+wiring with forward on ADC0, left on ADC1, and right on ADC2.
 
 This changes the ROS definitions for AdcSampleArray, GainControlState and the DAC
 state topic. Rebuild and source all consumers; old bags need schema adapters.

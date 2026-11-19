@@ -283,6 +283,7 @@ IO 覆盖写入节点优先读取的规范名称，因此规范/旧名称的自�
 | --- | --- | --- |
 | `io_config` | 声学包 `config/io.yaml` | IO 配置；兼容旧 `config`，同时提供时 `io_config` 优先 |
 | `motion_config` | 运动包 `config/motion.yaml` | 运动节点私有配置 |
+| `acoustic_config` | 声学包 `config/acoustic.yaml` | 运动和增益节点共用的水听器映射 |
 | `enable_motion` / `enable_bridge` | true / true | 分别启动运动或 spinal 桥 |
 | `enable_status_console` / `status_color` | true / auto | Share 显示及颜色 |
 | `record` / `record_diagnostics` | false / true | 是否录包、是否包含诊断 |
@@ -705,9 +706,11 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 `compensated_voltage_difference` 保存补偿后的电压差，
 `compensated_difference` 为最近决策使用的补偿后相对差值，两个差值均以两侧平均值为分母。
 消息和服务反馈通过 `difference_reference=channel_mean` 标明基准；数值仍为比例，`0.15` 表示 15%。
-锁存配置 `schema_version=5`，记录 `settings.channel_layout=left_right_head` 和
-`settings.hydrophone_channels={head: 2, left: 0, right: 1}`，并保存相同基准和 `threshold_inclusive=true`，
-并以 `voltage_offset_reference=left_minus_right` 标明补偿直接作用于电压差。
+前、左、右水听器对应的 ADC 通道在 `hydrophone_channels` 中配置，修改后重启 launch 生效。
+见 [acoustic.yaml](../robotic_fish_sonic/config/acoustic.yaml)。
+锁存配置 `schema_version=5` 通过 `settings.channel_layout` 和
+`settings.hydrophone_channels` 记录实际映射，并保存相同基准和 `threshold_inclusive=true`。
+`voltage_offset_reference=left_minus_right` 标明补偿直接作用于电压差。
 旧版配置版本 3 的同名补偿字段表示每个通道的调整量，分析旧 bag 时应区分。
 `decision_updated` 仅在新决策时为真。停止后可保留上一决策的数值和窗口时间，
 必须结合 `motion_mode`、`status` 和 `sample_stamp` 解读。
@@ -725,7 +728,7 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 
 - 当前运动模式、声学状态和判断方向；方向行同时显示 `bias=(当前输出偏置/修改上限)`。
 - `Sound mode` 显示当前生效的 FOLLOW／AVOID 和 `left_bias_sign`；待生效符号不同时额外显示 `Pending mode`，不会把请求值误当作已生效值。
-- ADC 数据质量，以及前／左／右（ADC2／ADC0／ADC1）的最新原始电压。
+- ADC 数据质量，以及前／左／右的最新原始电压。表头标出实际 ADC 通道号。
 - `Raw cycle mean` 为上一完整摆尾周期内三个通道的原始电压均值。
 - `Calibrated cycle mean` 为同一批采样经校准文件处理后的电压均值，先校准每次采样再平均。
 - `LR offset [V]` 为最近决策使用的电压补偿；有待生效补偿时才增加 `Pending LR [V]`。

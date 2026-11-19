@@ -16,7 +16,7 @@ from robotic_fish_sonic.manual_gain import ManualGainInput
 from robotic_fish_sonic.agc_controller import GainController
 from robotic_fish_sonic import dac_driver
 from robotic_fish_sonic.adc_limits import MAX_RAW, MAX_VOLTAGE_V
-from robotic_fish_sonic.channel_mapping import DEFAULT_CHANNEL_LAYOUT, channel_mapping
+from robotic_fish_sonic.channel_mapping import channel_mapping
 
 
 class Stamp(float):
@@ -32,7 +32,7 @@ def node_class(filename, name):
     tree = ast.parse((ROOT/'scripts'/filename).read_text())
     ns = dict(math=math, threading=threading, time=time, dac_driver=dac_driver,
               MAX_RAW=MAX_RAW, MAX_VOLTAGE_V=MAX_VOLTAGE_V,
-              DEFAULT_CHANNEL_LAYOUT=DEFAULT_CHANNEL_LAYOUT, channel_mapping=channel_mapping,
+              channel_mapping=channel_mapping,
               rospy=SimpleNamespace(Time=Stamp, loginfo=lambda *a: None,
                                     logwarn=lambda *a: None,
                                     logerr_throttle=lambda *a: None,
@@ -94,12 +94,16 @@ class NodeSafetyTests(unittest.TestCase):
         self.assertTrue(n._adc_is_valid())
 
     def test_window_callback_uses_physical_left_right_ids_and_raw_voltages(self):
-        for values, expected in [((3.2, .1, .1), .99), ((.1, 3.2, .1), .99),
-                                 ((1., .2, 3.8), 1.01)]:
-            with self.subTest(values=values):
+        for layout, values, expected in [
+                ('left_right_head', (3.2, .1, .1), .99),
+                ('left_right_head', (.1, 3.2, .1), .99),
+                ('left_right_head', (1., .2, 3.8), 1.01),
+                ('head_right_left', (.1, .1, 3.2), .99),
+                ('head_right_left', (3.8, .2, 1.), 1.01)]:
+            with self.subTest(layout=layout, values=values):
                 n = self.make_node('closed_loop')
                 n.controller = GainController(mode='closed_loop', window_control=True,
-                    window_high_fraction=.05, window_cooldown_s=2.)
+                    window_high_fraction=.05, window_cooldown_s=2., channel_layout=layout)
                 clock = [0.]
                 with patch.object(time, 'monotonic', side_effect=lambda: clock[0]), \
                         patch.object(Stamp, 'now', side_effect=lambda: Stamp(100. + clock[0])):

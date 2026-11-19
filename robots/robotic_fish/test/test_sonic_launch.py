@@ -96,6 +96,29 @@ class SonicLaunchTests(unittest.TestCase):
         self.assertEqual(config.params['/sonic_teleop_node/acoustic_steering/future_tolerance_s'].value, .1)
         self.assertEqual(config.params['/sonic_teleop_node/acoustic_steering/left_bias_sign'].value, -1)
 
+    def test_acoustic_yaml_reaches_all_direction_consumers(self):
+        mapping = {'FrontPZT': 0, 'LeftPZT': 2, 'RightPZT': 1}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'acoustic.yaml'
+            path.write_text(yaml.safe_dump(dict(hydrophone_channels=mapping, window_s=.7)))
+            for entry, package, arg, nodes in (
+                    ('sonic_vim4.launch', 'robotic_fish', 'acoustic_config', ('sonic_teleop_node', 'gain_control')),
+                    ('sonic_teleop.launch', 'robotic_fish', 'acoustic_config', ('sonic_teleop_node',)),
+                    ('sonic.launch', 'robotic_fish_sonic', 'acoustic_config', ('acoustic_quadrants', 'gain_control')),
+                    ('sensor_io.launch', 'robotic_fish_sonic', 'acoustic_config', ('gain_control',)),
+                    ('quadrant.launch', 'robotic_fish_sonic', 'config', ('acoustic_quadrants',))):
+                config = self.load(entry, arg+':='+str(path), package=package)
+                for node in nodes:
+                    prefix = '/'+node+'/hydrophone_channels/'
+                    self.assertIn(prefix.rstrip('/'), [name.rstrip('/') for name in config.clear_params])
+                    self.assertEqual({key: config.params[prefix+key].value for key in mapping}, mapping)
+                if 'acoustic_quadrants' in nodes:
+                    self.assertEqual(config.params['/acoustic_quadrants/window_s'].value, .7)
+
+            overridden = self.load('sonic.launch', 'acoustic_config:='+str(path), 'window_s:=0.3',
+                                   package='robotic_fish_sonic')
+            self.assertEqual(overridden.params['/acoustic_quadrants/window_s'].value, .3)
+
     def test_vim4_entry_has_one_motion_bridge_and_sensor_stack(self):
         config = self.load('sonic_vim4.launch')
         self.assertCountEqual([node.type for node in config.nodes],

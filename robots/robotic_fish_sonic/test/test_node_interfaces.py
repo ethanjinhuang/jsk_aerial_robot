@@ -137,6 +137,17 @@ class NodeInterfaceTests(unittest.TestCase):
         self.assertEqual(node.adc_timeout_s, .8)
         self.assertEqual(self.config('gain_control')['settings']['manual_target_v'], 0.)
 
+    def test_custom_hydrophone_layout_is_recorded_by_gain_and_quadrant_nodes(self):
+        self.parameters['~hydrophone_channels'] = {'FrontPZT': 0, 'LeftPZT': 2, 'RightPZT': 1}
+        gain = self.gain()
+        acoustic = load_node('quadrant_node').Node()
+        self.assertEqual(gain.controller.channel_layout, acoustic.engine.channel_layout)
+        for device in ('gain_control', 'acoustic_quadrants'):
+            settings = self.config(device)['settings']
+            self.assertEqual(settings['channel_layout'], 'head_right_left')
+            self.assertEqual(settings['hydrophone_channels'], {'head': 0, 'left': 2, 'right': 1})
+        self.assertEqual(self.config('gain_control')['settings']['window_channel_ids'], [2, 1])
+
     def test_adc_run_publishes_one_complete_group_and_keeps_wire_fields(self):
         self.parameters['~adc/publish_array'] = False  # Obsolete flag cannot silence the only output.
         node = self.adc()

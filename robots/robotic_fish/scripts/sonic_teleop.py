@@ -13,7 +13,7 @@ from std_msgs.msg import String
 
 from robotic_fish.sonic_motion import SonicController
 from robotic_fish_sonic.acoustic_core import adapt, Status
-from robotic_fish_sonic.channel_mapping import DEFAULT_CHANNEL_LAYOUT, channel_mapping, head_left_right
+from robotic_fish_sonic.channel_mapping import channel_mapping, head_left_right, layout_from_pzt_channels
 from robotic_fish_sonic.cycle_steering import DIFFERENCE_REFERENCE, SteeringSettings, steering_direction
 from robotic_fish_sonic.msg import AdcSampleArray, SonicMotionState, RuntimeConfig, AcousticSteeringEvent
 from robotic_fish_sonic.status_display import format_status, write_snapshot
@@ -21,6 +21,7 @@ from robotic_fish_sonic.status_display import format_status, write_snapshot
 
 class Teleop:
     def __init__(self):
+        self.channel_layout = layout_from_pzt_channels(rospy.get_param('~hydrophone_channels', None))
         parameters = {
             'center': rospy.get_param('~servo_center', 2048.),
             'servo_range': rospy.get_param('~servo_range', 1024.),
@@ -119,7 +120,8 @@ class Teleop:
                 gap_s=rospy.get_param('~acoustic_steering/gap_s', .2),
                 max_age_s=self._status_max_age,
                 future_tolerance_s=self._status_future_tolerance,
-                low_signal_v=rospy.get_param('~acoustic_steering/low_signal_v', .001))
+                low_signal_v=rospy.get_param('~acoustic_steering/low_signal_v', .001),
+                channel_layout=self.channel_layout)
             self.acoustic_pub = rospy.Publisher('/robotic_fish/acoustic/steering_state',
                                                AcousticSteeringState, queue_size=1)
         self.motion_pub = rospy.Publisher('/robotic_fish/sonic/motion_state', SonicMotionState, queue_size=10)
@@ -165,7 +167,7 @@ class Teleop:
     def _publishConfig(self):
         """Latched effective values, including pending settings for late recorders."""
         c = self.controller
-        settings = dict(channel_layout=DEFAULT_CHANNEL_LAYOUT, hydrophone_channels=channel_mapping(),
+        settings = dict(channel_layout=self.channel_layout, hydrophone_channels=channel_mapping(self.channel_layout),
                         servo_center=c.motion.center, servo_range=c.motion.servo_range,
                         servo_index=0, auto_frequency=c.frequency,
                         auto_default_amplitude=c.default_amplitude, auto_amplitude=self._initial_amplitude,
@@ -386,7 +388,8 @@ class Teleop:
         data['quality'] = self._adcStatus(now, rospy.Time.now().to_sec())['quality']
         if self._latest_adc_group is not None:
             samples = sorted(self._latest_adc.samples, key=lambda s: s.channel_id)
-            data['raw'] = head_left_right([getattr(sample, 'volt_raw', float('nan')) for sample in samples])
+            raw_volts = [getattr(sample, 'volt_raw', float('nan')) for sample in samples]
+            data['raw'] = head_left_right(raw_volts, self.channel_layout)
         decision = None if self.acoustic is None else self.acoustic.last_decision
         active, _, direction = self._directions(state)
         if self.acoustic is not None:
@@ -397,14 +400,14 @@ class Teleop:
                 data['pending_left_bias_sign'] = self.acoustic.pending.left_bias_sign
                 data['pending_lr_voltage_offset_v'] = self.acoustic.pending.lr_voltage_offset_v
         if decision is not None:
-            data.update(raw_means=head_left_right(decision.raw_means),
+            data.update(raw_means=head_left_right(decision.raw_means, self.channel_layout),
                         means=(decision.head_mean, decision.left_mean, decision.right_mean),
                         historical=not active,
                         lr_voltage_offset_v=decision.lr_voltage_offset_v,
                         difference=decision.difference,
                         compensated_difference=decision.compensated_difference)
         data['direction'] = direction
-        return format_status(data)
+        return format_status(data, self.channel_layout)
 
     def publish_cmd(self, state):
         self.servo_cmd[0] = state.target

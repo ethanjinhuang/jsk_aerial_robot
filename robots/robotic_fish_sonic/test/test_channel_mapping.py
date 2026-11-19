@@ -1,12 +1,13 @@
 """Independent physical-channel cases for steering, features and calibration."""
 import importlib.util
+from itertools import permutations
 from pathlib import Path
 from types import SimpleNamespace as NS
 import unittest
 
 from robotic_fish_sonic.acoustic_core import adapt, Estimator
 from robotic_fish_sonic.adc_calibration import AdcCalibration
-from robotic_fish_sonic.channel_mapping import channel_mapping, head_left_right
+from robotic_fish_sonic.channel_mapping import channel_mapping, head_left_right, layout_from_pzt_channels
 from robotic_fish_sonic.cycle_steering import CycleSteering
 
 
@@ -29,6 +30,18 @@ def physical_batch(t, adc_volts, raw_volts=None, legacy_schema=False):
 
 
 class ChannelMappingTests(unittest.TestCase):
+    def test_pzt_configuration_accepts_every_permutation_and_rejects_invalid_ids(self):
+        keys = ('FrontPZT', 'LeftPZT', 'RightPZT')
+        for ids in permutations(range(3)):
+            with self.subTest(ids=ids):
+                layout = layout_from_pzt_channels(dict(zip(keys, ids)))
+                self.assertEqual(head_left_right(range(3), layout), ids)
+        for invalid in ({}, dict(zip(keys, (0, 1, 1))), dict(zip(keys, (0, 1, 3))),
+                        dict(zip(keys, (False, 1, 2))), dict(zip(keys, ('0', 1, 2))),
+                        dict(zip(keys, (0., 1, 2)))):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                layout_from_pzt_channels(invalid)
+
     def test_current_and_legacy_layouts_are_explicit(self):
         self.assertEqual(channel_mapping(), {'head': 2, 'left': 0, 'right': 1})
         self.assertEqual(head_left_right((3., 1., 2.)), (2., 3., 1.))
@@ -65,11 +78,14 @@ class ChannelMappingTests(unittest.TestCase):
                     self.assertTrue(result['comparison']['reliable'])
 
     def test_front_signal_cannot_rescue_missing_side_signals(self):
-        engine = CycleSteering(2.)
-        self.assertFalse(engine.push(physical_batch(0., (0., 0., 3.)), 100., 0.))
-        self.assertEqual(engine.latest_error, 'low_signal')
-        # Left alone is sufficient even when both old side-channel indices are zero.
-        self.assertTrue(engine.push(physical_batch(.05, (3., 0., 0.)), 100.05, .05))
+        for layout, front_only, left_only in (
+                ('left_right_head', (0., 0., 3.), (3., 0., 0.)),
+                ('head_right_left', (3., 0., 0.), (0., 0., 3.))):
+            with self.subTest(layout=layout):
+                engine = CycleSteering(2., channel_layout=layout)
+                self.assertFalse(engine.push(physical_batch(0., front_only), 100., 0.))
+                self.assertEqual(engine.latest_error, 'low_signal')
+                self.assertTrue(engine.push(physical_batch(.05, left_only), 100.05, .05))
 
     def test_raw_cycle_means_keep_adc_order_without_affecting_direction(self):
         engine = CycleSteering(2.)
