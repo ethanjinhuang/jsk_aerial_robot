@@ -137,7 +137,7 @@ communication with the embedded controller belongs to `spinal`.
 
 ## Compact recording interfaces
 
-AdcSample has 14 fields, including `volt_raw_mean_1s` and `mean_1s_ready`.
+AdcSample has 16 fields, including the raw and calibrated one-second means.
 AdcSampleArray contains only
 `AdcSample[] samples`. Freshness and ordering are checked independently per
 channel timestamp; incomplete/invalid groups cannot advance the accepted clocks.
@@ -374,6 +374,8 @@ commands are archived locally with the source bag at
 | `adc_code` | int32 | Signed ADS1115 conversion count |
 | `volt_raw` | float64 | Uncalibrated voltage in V |
 | `volt_raw_mean_1s` | float64 | Per-channel trailing 1-second arithmetic mean of raw voltage in V; partial mean during warmup |
+| `volt_cali_mean_1s` | float64 | Per-channel trailing 1-second arithmetic mean of `volt_cali` in V, including raw fallback |
+| `mean_1s_has_calibration_fallback` | bool | At least one sample in the calibrated mean used raw fallback |
 | `mean_1s_ready` | bool | A full second accumulated with known, unchanged DAC state and uninterrupted sampling |
 | `volt_cali` | float64 | Calibrated voltage in V; falls back to `volt_raw` |
 | `diff_cali` | float64 | `volt_cali - volt_raw` in V; NaN when calibration is inactive |
@@ -382,16 +384,18 @@ commands are archived locally with the source bag at
 | `dac_volt` | float64 | Last confirmed DAC voltage in V captured at conversion start; NaN if invalid |
 | `status_dac_feedback` | bool | Captured DAC state is valid; no independent analog measurement or freshness timeout |
 
-The raw-voltage mean is updated for every complete sampling group and included
-in both individual samples and arrays. Each channel uses its own read-completion
-timestamps; samples older than 1 second are dropped. Startup, observed DAC value
-or validity changes, non-increasing timestamps, I2C reconnects, or a per-channel
-gap exceeding `max(0.2 s, 3 / channel_rate)` restart accumulation. Unknown DAC
-state keeps readiness false. This is a sample-weighted voltage-level mean, not
-waveform RMS. Use it for display/manual gain tuning; instantaneous raw-voltage
-protection and the acoustic 0.5-second calibrated comparison remain unchanged.
-The added fields change both message MD5s: rebuild and restart all publishers
-and subscribers together; old bags keep their embedded definitions.
+Both means are updated after the calibration step for every complete sampling
+group. Each channel uses its own read-completion timestamps and drops samples
+older than 1 second. Startup, observed DAC value or validity changes,
+non-increasing timestamps, I2C reconnects, or a per-channel gap exceeding
+`max(0.2 s, 3 / channel_rate)` restart accumulation. Unknown DAC state keeps
+readiness false. The means are sample-weighted and available during warmup.
+Use `volt_cali_mean_1s` for display and manual gain tuning. ADC protection uses
+instantaneous raw voltage.
+
+The new fields change the message MD5s for `AdcSample`, `AdcSampleArray`, and
+`SonicMotionState`. Rebuild and restart publishers and subscribers together.
+Old bags retain their embedded definitions.
 
 `dac_volt` is a control voltage, not an LNA gain ratio. DAC metadata is captured
 at conversion start, while `timestamp` is recorded at result-read completion.

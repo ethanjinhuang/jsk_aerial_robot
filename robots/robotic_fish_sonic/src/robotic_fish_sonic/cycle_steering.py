@@ -66,6 +66,75 @@ class CycleDecision:
     raw_means: tuple  # Physical ADC0, ADC1, ADC2 order, not directional order.
 
 
+class CycleVoltageWindow:
+    """Trailing one-period voltage statistics, independent of gait phase."""
+
+    def __init__(self, frequency, gap_s, max_age_s, future_tolerance_s, low_signal_v,
+                 channel_layout=DEFAULT_CHANNEL_LAYOUT):
+        self.period = 1. / frequency
+        if not math.isfinite(self.period):
+            raise ValueError('auto_frequency must have a finite period')
+        self.gap_s = number(gap_s, 'gap_s')
+        self.low_signal_v = number(low_signal_v, 'low_signal_v')
+        if min(self.gap_s, self.low_signal_v) <= 0:
+            raise ValueError('gap_s and low_signal_v must be positive')
+        self.max_age_s = max_age_s
+        self.future_tolerance_s = future_tolerance_s
+        self.channel_layout = channel_layout
+        self.rows = deque()
+        self.reset()
+
+    def reset(self):
+        self.rows.clear()
+        self.start = self.latest = None
+
+    def push(self, group, ros_now):
+        if group is None or not -self.future_tolerance_s <= ros_now - group['t'] <= self.max_age_s:
+            self.reset()
+            return
+        stamp = group['t']
+        if self.rows:
+            previous = self.rows[-1]
+            if (not 0 < stamp - previous['t'] <= self.gap_s
+                    or group['signature'][1] != previous['signature'][1]):
+                self.reset()
+        if self.start is None:
+            self.start = stamp
+        self.rows.append(group)
+        while stamp - self.rows[0]['t'] > self.period + 1e-9:
+            self.rows.popleft()
+        count = len(self.rows)
+        if count < 2 or stamp - self.start < self.period - 1e-9:
+            self.latest = None
+            return
+
+        def means(key):
+            physical = [math.fsum(row[key][i] / count for row in self.rows) for i in range(3)]
+            return head_left_right(physical, self.channel_layout)
+
+        raw_means, voltage_means = means('raw_volts'), means('volts')
+        _, left, right = voltage_means
+        flags = Status(0)
+        for row in self.rows:
+            flags |= row['status']
+        if left + right < self.low_signal_v:
+            flags |= Status.LOW_SIGNAL
+        self.latest = dict(raw_means=raw_means, means=voltage_means, sample_count=count,
+                           flags=flags, side_mean=left / 2. + right / 2.)
+
+    def snapshot(self, offset_v):
+        if self.latest is None:
+            return None
+        stats = self.latest
+        _, left, right = stats['means']
+        side_mean = stats['side_mean']
+        difference = compensated = float('nan')
+        if not stats['flags'] & Status.LOW_SIGNAL:
+            difference = (left - right) / side_mean
+            compensated = (left - right + offset_v) / side_mean
+        return dict(stats, difference=difference, compensated_difference=compensated)
+
+
 class CycleSteering:
     """Compare calibrated voltage means from [cycle start, cycle end).
 
@@ -227,16 +296,7 @@ class CycleSteering:
         self.latest_time = acquired_monotonic_s
         self.latest_error = ''
         if not waiting_quality_flags:
-            # Raw voltages are diagnostics only. Missing values in older input
-            # schemas must remain unavailable, without changing steering health.
-            raw_voltage_by_channel_v = {}
-            for sample in message.samples:
-                channel_id = int(sample.channel if hasattr(sample, 'calibrated_voltage') else sample.channel_id)
-                try:
-                    raw_voltage_by_channel_v[channel_id] = number(getattr(sample, 'volt_raw', None), 'raw voltage')
-                except ValueError:
-                    raw_voltage_by_channel_v[channel_id] = float('nan')
-            self.rows.append((acquired_monotonic_s, *sample_group['volts'], *(raw_voltage_by_channel_v[i] for i in range(3))))
+            self.rows.append((acquired_monotonic_s, *sample_group['volts'], *sample_group['raw_volts']))
         while self.rows and acquired_monotonic_s - self.rows[0][0] > self.period + 2. * self.gap_s:
             self.rows.popleft()
         if len(self.rows) > 10000:

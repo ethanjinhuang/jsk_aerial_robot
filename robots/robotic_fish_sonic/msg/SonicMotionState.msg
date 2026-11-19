@@ -36,3 +36,18 @@ float64 adc_receipt_interval_s
 uint32 adc_quality_flags
 string adc_quality
 string acoustic_input_error
+# Trailing one-period ADC voltage statistics, in every motion mode.
+# The window ends at adc_sample_stamp when adc_cycle_ready is true.
+bool adc_cycle_ready
+float64 adc_cycle_window_s
+uint32 adc_cycle_sample_count
+uint32 adc_cycle_quality_flags
+# Head, left, right order. Effective means use raw values on calibration fallback.
+float64[3] adc_cycle_raw_means
+float64[3] adc_cycle_means
+float64 adc_cycle_side_mean
+# (left-right)/side_mean, with voltage offset added to the numerator for compensation.
+float64 adc_cycle_difference
+float64 adc_cycle_compensated_difference
+float64 adc_cycle_threshold
+float64 adc_cycle_lr_voltage_offset_v

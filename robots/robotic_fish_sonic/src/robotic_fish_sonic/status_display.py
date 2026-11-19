@@ -25,7 +25,7 @@ def percent(value, signed=False):
 
 
 def format_status(data, channel_layout=DEFAULT_CHANNEL_LAYOUT):
-    """Expand arithmetic from captured means; display the recorded decision result."""
+    """Display the voltage window and current motion state."""
     border = '+' + '-' * (WIDTH - 2) + '+'
     lines = [border, '| ' + TITLE.center(WIDTH - 4) + ' |', border]
 
@@ -61,11 +61,15 @@ def format_status(data, channel_layout=DEFAULT_CHANNEL_LAYOUT):
     voltages('Raw instant', data['raw'])
     voltages('Raw cycle mean', data['raw_means'])
     voltages('Calibrated cycle mean', data['means'])
+    if data.get('mean_1s') is not None:
+        voltages('Calibrated 1 s mean', data['mean_1s'])
     lines.append(border)
     if data['means'] is None:
-        row('Cycle', 'UNAVAILABLE (no completed tracking cycle)')
-    elif data['historical']:
-        row('Cycle', 'HISTORICAL (held means and difference)')
+        row('Cycle', 'UNAVAILABLE (no complete voltage window)')
+    elif data.get('cycle_quality'):
+        row('Cycle quality', data['cycle_quality'])
+    if data.get('mean_1s_status'):
+        row('1 s mean quality', data['mean_1s_status'])
     before = percent(data['difference'], True)
     after = '%s / %s' % (percent(data['compensated_difference'], True), percent(data['threshold']))
     average = '--'

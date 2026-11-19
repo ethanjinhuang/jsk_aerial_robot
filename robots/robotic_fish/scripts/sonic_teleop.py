@@ -14,7 +14,9 @@ from std_msgs.msg import String
 from robotic_fish.sonic_motion import SonicController
 from robotic_fish_sonic.acoustic_core import adapt, Status
 from robotic_fish_sonic.channel_mapping import channel_mapping, head_left_right, layout_from_pzt_channels
-from robotic_fish_sonic.cycle_steering import DIFFERENCE_REFERENCE, SteeringSettings, steering_direction
+from robotic_fish_sonic.cycle_steering import (
+    DIFFERENCE_REFERENCE, CycleVoltageWindow, SteeringSettings, number, steering_direction,
+)
 from robotic_fish_sonic.msg import AdcSampleArray, SonicMotionState, RuntimeConfig, AcousticSteeringEvent
 from robotic_fish_sonic.status_display import format_status, write_snapshot
 
@@ -68,6 +70,15 @@ class Teleop:
         if (not math.isfinite(self._status_max_age) or self._status_max_age <= 0
                 or not math.isfinite(self._status_future_tolerance) or self._status_future_tolerance < 0):
             raise ValueError('ADC age limit must be positive and future tolerance nonnegative')
+        gap_s = rospy.get_param('~acoustic_steering/gap_s', .2)
+        low_signal_v = rospy.get_param('~acoustic_steering/low_signal_v', .001)
+        self._status_window = CycleVoltageWindow(
+            self.controller.frequency, gap_s, self._status_max_age, self._status_future_tolerance,
+            low_signal_v, self.channel_layout)
+        self._status_threshold = number(rospy.get_param('~acoustic_steering/threshold', .1), 'threshold')
+        self._status_offset = number(rospy.get_param('~acoustic_steering/lr_voltage_offset_v', 0.), 'lr_voltage_offset_v')
+        if not 0 <= self._status_threshold <= 2:
+            raise ValueError('threshold must be in [0,2]')
         self.update_rate = rospy.get_param('~update_rate', 50.)
         if isinstance(self.update_rate, bool):
             raise ValueError('update_rate must be a positive finite number')
@@ -113,14 +124,14 @@ class Teleop:
             self._SteeringResponse = SetAcousticSteeringResponse
             self.acoustic = CycleSteering(
                 frequency=self.controller.frequency, max_bias=self.controller.motion.servo_range,
-                threshold=rospy.get_param('~acoustic_steering/threshold', .1),
+                threshold=self._status_threshold,
                 bias=rospy.get_param('~acoustic_steering/bias', 256.),
-                lr_voltage_offset_v=rospy.get_param('~acoustic_steering/lr_voltage_offset_v', 0.),
+                lr_voltage_offset_v=self._status_offset,
                 left_bias_sign=rospy.get_param('~acoustic_steering/left_bias_sign', -1),
-                gap_s=rospy.get_param('~acoustic_steering/gap_s', .2),
+                gap_s=gap_s,
                 max_age_s=self._status_max_age,
                 future_tolerance_s=self._status_future_tolerance,
-                low_signal_v=rospy.get_param('~acoustic_steering/low_signal_v', .001),
+                low_signal_v=low_signal_v,
                 channel_layout=self.channel_layout)
             self.acoustic_pub = rospy.Publisher('/robotic_fish/acoustic/steering_state',
                                                AcousticSteeringState, queue_size=1)
@@ -132,7 +143,7 @@ class Teleop:
         if self.acoustic is not None:
             self.settings_service = rospy.Service('~set_acoustic_steering', SetAcousticSteering,
                                                    self._setAcousticSteering)
-        # Keep instant readings available to Share even when tracking is disabled.
+        # ADC telemetry is collected in every motion mode.
         self.adc_sub = rospy.Subscriber('/robotic_fish/adc/samples', AdcSampleArray,
                                         self._adcCallback, queue_size=100)
         self.status_pub = rospy.Publisher('/robotic_fish/sonic/status_snapshot', String,
@@ -161,8 +172,10 @@ class Teleop:
                 except (ValueError, TypeError, AttributeError, OverflowError) as exc:
                     self._latest_adc_group = None
                     self._adc_error = 'invalid_input (%s)' % exc
+                ros_now = self._latest_adc_ros.to_sec()
+                self._status_window.push(self._latest_adc_group, ros_now)
                 if self.acoustic is not None:
-                    self.acoustic.push(msg, self._latest_adc_receipt, self._latest_adc_ros.to_sec())
+                    self.acoustic.push(msg, self._latest_adc_receipt, ros_now)
 
     def _publishConfig(self):
         """Latched effective values, including pending settings for late recorders."""
@@ -338,6 +351,15 @@ class Teleop:
                      'disabled' if self.acoustic is None else 'not_tracking')
         return current, judged, direction
 
+    def _cycleStatus(self, adc):
+        settings = None if self.acoustic is None else self.acoustic.settings
+        threshold = self._status_threshold if settings is None else settings.threshold
+        offset = self._status_offset if settings is None else settings.lr_voltage_offset_v
+        stats = None
+        if adc['quality'] not in ('stale_sample', 'future_sample'):
+            stats = self._status_window.snapshot(offset)
+        return stats, threshold, offset
+
     def _publishMotionState(self, state, now, stamp):
         msg = SonicMotionState()
         msg.header.stamp, msg.header.frame_id = stamp, 'fish_base_link'
@@ -374,39 +396,60 @@ class Teleop:
         msg.adc_receipt_age_s, msg.adc_receipt_interval_s = adc['receipt_age'], self._adc_receipt_interval
         msg.adc_quality_flags, msg.adc_quality = adc['flags'], adc['quality']
         msg.acoustic_input_error = '' if self.acoustic is None else self.acoustic.fault or self.acoustic.latest_error
+        cycle, msg.adc_cycle_threshold, msg.adc_cycle_lr_voltage_offset_v = self._cycleStatus(adc)
+        msg.adc_cycle_window_s = self._status_window.period
+        msg.adc_cycle_ready = cycle is not None
+        msg.adc_cycle_sample_count = 0
+        msg.adc_cycle_quality_flags = int(Status.WARMUP) | adc['flags']
+        if adc['quality'] == 'stale_sample':
+            msg.adc_cycle_quality_flags |= int(Status.STALE)
+        elif adc['quality'] == 'future_sample':
+            msg.adc_cycle_quality_flags |= int(Status.INVALID_INPUT)
+        missing = float('nan')
+        msg.adc_cycle_means = msg.adc_cycle_raw_means = (missing,) * 3
+        msg.adc_cycle_side_mean = msg.adc_cycle_difference = msg.adc_cycle_compensated_difference = missing
+        if cycle is not None:
+            msg.adc_cycle_sample_count = cycle['sample_count']
+            msg.adc_cycle_quality_flags = int(cycle['flags'])
+            msg.adc_cycle_means, msg.adc_cycle_raw_means = cycle['means'], cycle['raw_means']
+            msg.adc_cycle_side_mean = cycle['side_mean']
+            msg.adc_cycle_difference = cycle['difference']
+            msg.adc_cycle_compensated_difference = cycle['compensated_difference']
         self.motion_pub.publish(msg)
 
     def _formatStatus(self, state, now):
-        """Describe the actual held decision; never run a new steering decision."""
+        """Report the latest voltage window alongside the current motion state."""
+        adc = self._adcStatus(now, rospy.Time.now().to_sec())
+        cycle, threshold, offset = self._cycleStatus(adc)
         data = dict(mode=state.mode, status=self._acoustic_status, reason=state.reason,
-                    raw=None, raw_means=None, means=None, historical=False,
-                    difference=None, compensated_difference=None,
-                    lr_voltage_offset_v=0., pending_lr_voltage_offset_v=None,
+                    raw=None, raw_means=None, means=None, mean_1s=None, mean_1s_status=None,
+                    difference=None, compensated_difference=None, cycle_quality=None,
+                    lr_voltage_offset_v=offset, pending_lr_voltage_offset_v=None,
                     left_bias_sign=None, pending_left_bias_sign=None,
-                    threshold=None,
+                    threshold=threshold, quality=adc['quality'],
                     bias=state.applied_bias, bias_limit=self.controller.motion.servo_range)
-        data['quality'] = self._adcStatus(now, rospy.Time.now().to_sec())['quality']
         if self._latest_adc_group is not None:
-            samples = sorted(self._latest_adc.samples, key=lambda s: s.channel_id)
-            raw_volts = [getattr(sample, 'volt_raw', float('nan')) for sample in samples]
-            data['raw'] = head_left_right(raw_volts, self.channel_layout)
-        decision = None if self.acoustic is None else self.acoustic.last_decision
-        active, _, direction = self._directions(state)
+            data['raw'] = head_left_right(self._latest_adc_group['raw_volts'], self.channel_layout)
+            samples = self._latest_adc.samples
+            if (adc['quality'] not in ('stale_sample', 'future_sample')
+                    and all(hasattr(s, 'volt_cali_mean_1s') for s in samples)):
+                by_channel = {s.channel_id: s.volt_cali_mean_1s for s in samples}
+                data['mean_1s'] = head_left_right([by_channel[i] for i in range(3)], self.channel_layout)
+                mean_status = []
+                if not all(s.mean_1s_ready for s in samples):
+                    mean_status.append('warmup')
+                if any(s.mean_1s_has_calibration_fallback for s in samples):
+                    mean_status.append('calibration_fallback')
+                data['mean_1s_status'] = '|'.join(mean_status)
         if self.acoustic is not None:
             data['left_bias_sign'] = self.acoustic.left_bias_sign
-            data['threshold'] = self.acoustic.settings.threshold
-            data['lr_voltage_offset_v'] = self.acoustic.settings.lr_voltage_offset_v
             if self.acoustic.pending is not None:
                 data['pending_left_bias_sign'] = self.acoustic.pending.left_bias_sign
                 data['pending_lr_voltage_offset_v'] = self.acoustic.pending.lr_voltage_offset_v
-        if decision is not None:
-            data.update(raw_means=head_left_right(decision.raw_means, self.channel_layout),
-                        means=(decision.head_mean, decision.left_mean, decision.right_mean),
-                        historical=not active,
-                        lr_voltage_offset_v=decision.lr_voltage_offset_v,
-                        difference=decision.difference,
-                        compensated_difference=decision.compensated_difference)
-        data['direction'] = direction
+        if cycle is not None:
+            data.update(cycle)
+            data['cycle_quality'] = '|'.join(flag.name.lower() for flag in Status if flag & cycle['flags'])
+        data['direction'] = self._directions(state)[2]
         return format_status(data, self.channel_layout)
 
     def publish_cmd(self, state):

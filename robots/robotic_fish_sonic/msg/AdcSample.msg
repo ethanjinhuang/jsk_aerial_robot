@@ -20,3 +20,7 @@ bool status_dac_feedback
 float64 volt_raw_mean_1s
 # Full second accumulated with known, unchanged DAC state and no sampling gap.
 bool mean_1s_ready
+# Per-channel trailing 1-second mean of volt_cali (including raw fallback).
+float64 volt_cali_mean_1s
+# At least one sample in volt_cali_mean_1s used raw fallback.
+bool mean_1s_has_calibration_fallback

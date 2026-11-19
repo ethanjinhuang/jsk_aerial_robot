@@ -46,8 +46,17 @@ def adapt(message):
         channel_id = int(sample.channel if uses_legacy_schema else sample.channel_id)
         sample_time_s = stamp_seconds(sample.header.stamp if uses_legacy_schema else sample.timestamp)
         calibrated_voltage_v = float(sample.calibrated_voltage if uses_legacy_schema else sample.volt_cali)
+        raw_value = getattr(sample, 'volt_raw', None)
+        try:
+            raw_voltage_v = float(raw_value) if not isinstance(raw_value, bool) else float('nan')
+        except (ValueError, TypeError, OverflowError):
+            raw_voltage_v = float('nan')
+        if not math.isfinite(raw_voltage_v):
+            raw_voltage_v = float('nan')
         if not bool(sample.calibration_applied if uses_legacy_schema else sample.status_cali):
             flags |= Status.CALIBRATION_FALLBACK
+            if not uses_legacy_schema and hasattr(sample, 'volt_raw'):
+                calibrated_voltage_v = raw_voltage_v
         calibration_ids.append(sample.calibration_id if uses_legacy_schema else sample.cali_id)
         dac_voltage_valid = bool(sample.gain_control_voltage_valid if uses_legacy_schema else sample.status_dac_feedback)
         dac_voltage_v = float(sample.gain_control_voltage if uses_legacy_schema else sample.dac_volt)
@@ -58,11 +67,11 @@ def adapt(message):
         if abs(int(sample.raw if uses_legacy_schema else sample.adc_code)) >= 32767:
             flags |= Status.SATURATED
         timestamp_semantics.add('conversion_midpoint' if uses_legacy_schema else 'read_completion')
-        rows.append((channel_id, sample_time_s, calibrated_voltage_v))
+        rows.append((channel_id, sample_time_s, calibrated_voltage_v, raw_voltage_v))
     rows.sort()
     if [row[0] for row in rows] != [0, 1, 2] or len(timestamp_semantics) != 1:
         raise ValueError('expected one channel each and one timestamp schema')
-    if not all(math.isfinite(sample_time_s) and sample_time_s >= 0 and math.isfinite(v) and v >= 0 for _, sample_time_s, v in rows):
+    if not all(math.isfinite(t) and t >= 0 and math.isfinite(v) and v >= 0 for _, t, v, _ in rows):
         raise ValueError('nonfinite/negative sample')
     if max(row[1] for row in rows) - min(row[1] for row in rows) > .05:
         raise ValueError('ADC group spans more than 50 ms')
@@ -70,6 +79,7 @@ def adapt(message):
         flags |= Status.GAIN_TRANSITION
     # Preserve a deterministic reference time without pretending simultaneous sampling.
     return dict(t=max(row[1] for row in rows), volts=[row[2] for row in rows],
+                raw_volts=[row[3] for row in rows],
                 status=flags, signature=(tuple(calibration_ids), tuple(dac_voltages_v), int(flags & Status.CALIBRATION_FALLBACK)),
                 semantics=next(iter(timestamp_semantics)))
 

@@ -12,7 +12,7 @@ from robotic_fish_sonic.msg import DacState
 from robotic_fish_sonic.runtime_config import ConfigRecorder
 from robotic_fish_sonic.parameters import get_compatible_param
 
-from robotic_fish_sonic.adc_mean import RawVoltageMean
+from robotic_fish_sonic.adc_mean import VoltageMean
 from robotic_fish_sonic.adc_calibration import AdcCalibration
 from robotic_fish_sonic import adc_driver
 from robotic_fish_sonic.msg import AdcSample, AdcSampleArray
@@ -68,8 +68,9 @@ class AdcNode:
             "~adc/dac_state_topic", "/robotic_fish/dac/state", "~adc/gain_control_topic")
 
         self._validate_parameters()
-        self.raw_voltage_means = {channel: RawVoltageMean(max(.2, 3.0 / self.sample_group_rate_hz))
-                          for channel in self.channel_ids}
+        max_gap_s = max(.2, 3.0 / self.sample_group_rate_hz)
+        self.raw_voltage_means = {channel: VoltageMean(max_gap_s) for channel in self.channel_ids}
+        self.calibrated_voltage_means = {channel: VoltageMean(max_gap_s) for channel in self.channel_ids}
         self.calibration = None
         self.calibration_path = None
         self.calibration_status = "disabled"
@@ -216,8 +217,9 @@ class AdcNode:
         )
 
     def _close_bus(self):
-        for mean in self.raw_voltage_means.values():
-            mean.reset()
+        for channel in self.channel_ids:
+            self.raw_voltage_means[channel].reset()
+            self.calibrated_voltage_means[channel].reset()
         if self.bus is not None:
             try:
                 self.bus.close()
@@ -266,15 +268,20 @@ class AdcNode:
 
     def _update_means(self, samples):
         for sample in samples:
-            sample.volt_raw_mean_1s, sample.mean_1s_ready = self.raw_voltage_means[sample.channel_id].update(
-                sample.timestamp.to_sec(), sample.volt_raw,
-                sample.status_dac_feedback, sample.dac_volt)
+            stamp = sample.timestamp.to_sec()
+            gain = (sample.status_dac_feedback, sample.dac_volt)
+            sample.volt_raw_mean_1s, _ = self.raw_voltage_means[sample.channel_id].update(
+                stamp, sample.volt_raw, *gain)
+            mean = self.calibrated_voltage_means[sample.channel_id]
+            sample.volt_cali_mean_1s, sample.mean_1s_ready = mean.update(
+                stamp, sample.volt_cali, *gain, fallback=not sample.status_cali)
+            sample.mean_1s_has_calibration_fallback = mean.has_calibration_fallback
 
     def _read_sample_group(self):
-        """Only a complete, calibrated group reaches the publication boundary."""
+        """Apply calibration or raw fallback before updating the means."""
         samples = [self._sample_channel(channel_id) for channel_id in self.channel_ids]
-        self._update_means(samples)
         self._apply_calibration(samples)
+        self._update_means(samples)
         sample_group = AdcSampleArray()
         sample_group.samples = samples
         return sample_group

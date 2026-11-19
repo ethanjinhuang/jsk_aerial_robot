@@ -13,7 +13,7 @@ from robotic_fish_sonic.status_display import format_status, write_snapshot
 def snapshot(**changes):
     data = dict(mode='tracking', status='active', reason='tracking_button',
                 direction='left', bias=128., bias_limit=1024., raw=(.5, .7, .4),
-                raw_means=(.49, .68, .38), means=(.5, .7, .4), quality='valid', historical=False,
+                raw_means=(.49, .68, .38), means=(.5, .7, .4), quality='valid',
                 lr_voltage_offset_v=0., pending_lr_voltage_offset_v=None,
                 difference=6/11, compensated_difference=6/11, threshold=.1)
     data.update(changes)
@@ -75,20 +75,22 @@ class DisplayTests(unittest.TestCase):
         applied = format_status(snapshot(left_bias_sign=1, pending_left_bias_sign=1))
         self.assertNotIn('Pending mode', applied)
 
-    def test_unavailable_values_and_historical_direction_are_explicit(self):
+    def test_unavailable_values_and_window_fallback_are_explicit(self):
         plain = format_status(snapshot(raw=None, raw_means=None, means=None, quality='no_data', direction='warmup',
                                        difference=None, compensated_difference=None))
-        self.assertIn('no completed tracking cycle', plain)
+        self.assertIn('no complete voltage window', plain)
         self.assertRegex(plain, r'Diff before \[%\]\s*:\s*--')
         self.assertRegex(plain, r'Diff after/T \[%\]\s*:\s*-- / 10.00%')
         self.assertRegex(plain, r'AVG \[V\]\s*:\s*--')
         self.assertRegex(plain, r'Calibrated cycle mean\s*\|\s*--\s*\|\s*--\s*\|\s*--')
-        held = format_status(snapshot(mode='stopped', direction='stopped', reason='acoustic_adc_timeout',
-                                      historical=True, bias=0.))
-        self.assertIn('HISTORICAL', held)
-        self.assertRegex(held, r'Direction\s*:\s*STOPPED')
-        self.assertRegex(held, r'Reason\s*:\s*acoustic_adc_timeout')
-        self.assertNotIn('Last decision', held)
+        stopped = format_status(snapshot(mode='stopped', direction='stopped', reason='stop_button',
+                                         cycle_quality='calibration_fallback', bias=0.,
+                                         mean_1s=(.6, .8, .4), mean_1s_status='warmup|calibration_fallback'))
+        self.assertRegex(stopped, r'Direction\s*:\s*STOPPED')
+        self.assertRegex(stopped, r'Reason\s*:\s*stop_button')
+        self.assertRegex(stopped, r'Cycle quality\s*:\s*calibration_fallback')
+        self.assertRegex(stopped, r'Calibrated 1 s mean\s*\|\s*0.60000\s*\|\s*0.80000\s*\|\s*0.40000')
+        self.assertRegex(stopped, r'1 s mean quality\s*:\s*warmup\|calibration_fallback')
 
     def test_color_changes_no_visible_text_or_alignment(self):
         for direction in ('left', 'right', 'straight', 'warmup', 'holding', 'stopped'):

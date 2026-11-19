@@ -31,10 +31,13 @@ class BagCompatibilityTests(unittest.TestCase):
 
     def check_schema(self, package, field_count):
         sample_definition = (ROOT / 'msg/AdcSample.msg').read_text()
-        if field_count == 12:
+        if field_count < 16:
+            removed = ['float64 volt_cali_mean_1s', 'bool mean_1s_has_calibration_fallback']
+            if field_count == 12:
+                removed.extend(('float64 volt_raw_mean_1s', 'bool mean_1s_ready'))
             sample_definition = '\n'.join(
                 line for line in sample_definition.splitlines()
-                if not line.startswith(('float64 volt_raw_mean_1s', 'bool mean_1s_ready')))
+                if not line.startswith(tuple(removed)))
         definition = ('{0}/AdcSample[] samples\n\n'.format(package) + '=' * 80 +
                       '\nMSG: {0}/AdcSample\n'.format(package) + sample_definition + '\n')
         types = genpy.dynamic.generate_dynamic(package + '/AdcSampleArray', definition)
@@ -118,6 +121,9 @@ class BagCompatibilityTests(unittest.TestCase):
 
     def test_merged_package_14_fields(self):
         self.check_schema('robotic_fish_sonic', 14)
+
+    def test_merged_package_16_fields(self):
+        self.check_schema('robotic_fish_sonic', 16)
 
     def test_candidate_rejected_for_hidden_overrange_and_failed_holdout(self):
         definition = ('robotic_fish_sonic/AdcSample[] samples\n\n' + '=' * 80 +

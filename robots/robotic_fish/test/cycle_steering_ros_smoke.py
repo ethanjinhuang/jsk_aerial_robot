@@ -17,6 +17,8 @@ import time
 import xmlrpc.client
 from xml.etree import ElementTree
 
+from robotic_fish_sonic.adc_mean import VoltageMean
+
 
 RECORD_TOPICS = {'/robotic_fish/adc/samples': 'adc',
                  '/robotic_fish/acoustic/steering_state': 'state',
@@ -59,6 +61,8 @@ def verify_recording(directory):
     assert any(not m.command_published and math.isnan(m.target_position) for m in motions)
     assert {'valid', 'calibration_fallback', 'gain_unknown', 'stale_sample'} <= {m.adc_quality for m in motions}
     assert any(m.reason == 'acoustic_adc_timeout' for m in motions)
+    assert any(m.adc_cycle_ready and m.motion_mode == 'stopped' for m in motions)
+    assert any(m.adc_cycle_ready and m.adc_cycle_quality_flags & 4 for m in motions)
     for m in motions:
         if not m.command_published:
             continue
@@ -193,6 +197,7 @@ def main():
             finish = threading.Event()
 
             def drive():
+                means = [VoltageMean(.2) for _ in range(3)]
                 while not finish.is_set() and not rospy.is_shutdown():
                     with lock:
                         values = dict(driving)
@@ -206,12 +211,18 @@ def main():
                         stamp = rospy.Time.now()
                         samples = [AdcSample(channel_id=i, timestamp=stamp,
                                              adc_code=32767 if values['saturated'] else 100,
-                                             volt_raw=v * .5, volt_cali=v, status_cali=values['valid'],
+                                             volt_raw=v * .5, volt_cali=v if values['valid'] else v * .5,
+                                             status_cali=values['valid'],
                                              cali_id='synthetic' if values['valid'] else '',
                                              status_dac_feedback=values['gain_known'],
                                              dac_volt=(values['gain'] + (.05 if values['mixed_gain'] and i == 0 else 0.)
                                                        if values['gain_known'] else float('nan')))
                                    for i, v in enumerate((values['left'], values['right'], 1.))]
+                        for sample, mean in zip(samples, means):
+                            sample.volt_cali_mean_1s, sample.mean_1s_ready = mean.update(
+                                stamp.to_sec(), sample.volt_cali, sample.status_dac_feedback,
+                                sample.dac_volt, fallback=not sample.status_cali)
+                            sample.mean_1s_has_calibration_fallback = mean.has_calibration_fallback
                         adc_pub.publish(AdcSampleArray(samples=samples))
                     finish.wait(.025)
 
@@ -332,10 +343,10 @@ def main():
                 assert re.search(r'Raw instant\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000', report)
                 assert re.search(r'Raw cycle mean\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000', report)
                 assert re.search(r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
+                assert re.search(r'Calibrated 1 s mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000', report)
                 assert re.search(r'Diff after/T \[%\]\s*:\s*\(2.00000-1.00000\+\(\+0.00000\)\)/AVG = \+66.67% / 10.00%', report)
                 assert re.search(r'Direction\s*:\s*LEFT', report)
                 assert set(map(len, report.splitlines())) == {78}
-                assert len(report.splitlines()) == 18
                 assert re.search(r'Sound mode\s*:\s*' + ('FOLLOW' if polarity == -1 else 'AVOID'), report)
                 # Re-press Circle: keep tracking and the existing phase/window.
                 set_input(button=2)
@@ -422,7 +433,8 @@ def main():
                 assert state.left_bias_sign == polarity
                 assert state.parameters_pending and state.turn_bias == 64. and state.lr_voltage_offset_v == 0.
                 report = share_report()
-                assert 'HISTORICAL' in report and re.search(r'Direction\s*:\s*HOLDING', report)
+                assert re.search(r'Direction\s*:\s*HOLDING', report)
+                assert 'no complete voltage window' not in report
                 assert re.search(r'Pending LR \[V\]\s*:\s*-10.00000', report)
                 assert configure(.1, 64., 0.).success
                 state = wait_state(lambda s: s.status == 'active' and not s.parameters_pending)
@@ -474,7 +486,7 @@ def main():
                 wait_state(lambda s: s.motion_mode == 'tracking' and s.status == 'gain_warmup')
                 report = share_report()
                 assert re.search(r'Direction\s*:\s*HOLDING', report)
-                assert 'HISTORICAL' in report
+                assert 'no complete voltage window' in report or 'gain_transition' in report
                 with lock:
                     assert states[-1][1].command_bias == held_bias
                     assert len(set(targets[target_start:])) > 2, 'gait stopped during gain adjustment'
@@ -495,7 +507,8 @@ def main():
                 wait_state(lambda s: s.motion_mode == 'stopped' and s.status == 'stop_button')
                 wait_target(2048)
                 report = share_report()
-                assert 'HISTORICAL' in report and re.search(r'Direction\s*:\s*STOPPED', report)
+                assert re.search(r'Direction\s*:\s*STOPPED', report)
+                assert 'no complete voltage window' not in report
                 set_input(button=None)
                 time.sleep(.1)
                 set_input(button=2)
@@ -583,10 +596,10 @@ def main():
                 if recorder is not None:
                     recorder.send_signal(signal.SIGINT)
                     assert recorder.wait(timeout=10) == 0
-                node_output = (output / (name + '.log')).read_text()
-                assert 'SONIC STATUS / SHARE' not in node_output
-                assert 'Sonic manual: bias' not in node_output
-                assert 'threshold=0.1500 bias=96.0 lr_voltage_offset_v=-1.500000 V' in node_output
+            node_output = (output / (name + '.log')).read_text()
+            assert 'SONIC STATUS / SHARE' not in node_output
+            assert 'Sonic manual: bias' not in node_output
+            assert 'threshold=0.1500 bias=96.0 lr_voltage_offset_v=-1.500000 V' in node_output
             if recorder is not None:
                 verify_recording(output)
         rospy.signal_shutdown('cycle steering smoke complete')

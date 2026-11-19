@@ -7,6 +7,7 @@ deterministic in-memory bus. No DAC node, serial bridge or actuator is started.
 import argparse
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -136,6 +137,8 @@ def main():
                 assert [s.volt_raw for s in group.samples] == [1., 2., 3.]
                 assert all(s.status_cali and s.status_dac_feedback and s.dac_volt == .8
                            for s in group.samples)
+                assert all(math.isclose(s.volt_cali_mean_1s, s.volt_cali)
+                           and not s.mean_1s_has_calibration_fallback for s in group.samples)
             assert any(all(s.mean_1s_ready for s in group.samples) for group in groups)
         print('PASS: ADC real ROS transport, record-all contains groups only, legacy message fields, '
               'calibration, DAC tagging, one-second means and late latched config; ' + str(bag_path), flush=True)

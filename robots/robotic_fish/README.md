@@ -219,7 +219,7 @@ roslaunch robotic_fish record.launch
 
 | 话题 | 内容 | 发布时机 |
 | --- | --- | --- |
-| `/robotic_fish/sonic/motion_state` | 模式、原因、输入错误、目标位置及整数命令、请求／实际偏置与摆幅、摆频、相位、Joy 年龄、ADC 时序与质量 | 每个控制周期，默认 50 Hz，首次 Joy 前也发布空闲状态 |
+| `/robotic_fish/sonic/motion_state` | 运动模式和输出、相位、Joy 年龄、ADC 时序与质量，以及各模式下的 `adc_cycle_*` 周期电压统计 | 每个控制周期，默认 50 Hz，首次 Joy 前也发布空闲状态 |
 | `/robotic_fish/acoustic/steering_state` | 三通道周期均值、L-R 电压差、归一化／补偿后判据、窗口、参数、偏置、当前方向及历史决策标记 | 声学功能启用时，每个控制周期 |
 | `/robotic_fish/sonic/config` | 舵机范围、初始摆幅、键位、控制频率、Joy／ADC 时间限制、阈值／偏置／补偿、待生效请求及主机信息 | 启动与配置变更时，锁存，支持中途开始录包 |
 | `/robotic_fish/acoustic/steering_events` | 调参请求的接受、拒绝、被替换、实际生效及关机取消；含请求编号、数值、生效周期 | 对应事件发生时 |
@@ -729,20 +729,20 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 - 当前运动模式、声学状态和判断方向；方向行同时显示 `bias=(当前输出偏置/修改上限)`。
 - `Sound mode` 显示当前生效的 FOLLOW／AVOID 和 `left_bias_sign`；待生效符号不同时额外显示 `Pending mode`，不会把请求值误当作已生效值。
 - ADC 数据质量，以及前／左／右的最新原始电压。表头标出实际 ADC 通道号。
-- `Raw cycle mean` 为上一完整摆尾周期内三个通道的原始电压均值。
-- `Calibrated cycle mean` 为同一批采样经校准文件处理后的电压均值，先校准每次采样再平均。
-- `LR offset [V]` 为最近决策使用的电压补偿；有待生效补偿时才增加 `Pending LR [V]`。
-- `AVG [V]` 展开显示 `(L+R)/2` 及计算出的平均电压；L、R 来自上一完整周期的文件校准均值。
+- `Raw cycle mean` 为最近一个摆尾周期时长内三个通道的原始电压均值。
+- `Calibrated cycle mean` 使用同一窗口内的 `volt_cali`。校准越界时整组使用原始电压，窗口中的回退由 `Cycle quality` 标为 `calibration_fallback`。
+- `Calibrated 1 s mean` 使用 ADC 节点发布的 `volt_cali_mean_1s`，窗口预热或含原始回退时由 `1 s mean quality` 标出。
+- `LR offset [V]` 为当前生效的补偿；有待生效补偿时增加 `Pending LR [V]`。
+- `AVG [V]` 展开显示 `(L+R)/2` 及计算出的平均电压，L、R 来自 `Calibrated cycle mean`。
 - `Diff before [%]` 展开显示 `(L-R)/AVG = 补偿前百分比`。
 - `Diff after/T [%]` 展开显示 `(L-R+offset)/AVG = 补偿后百分比 / 阈值百分比`。
-  补偿只加一次；表达式代入 L、R 和本次判据使用的补偿值。
+  补偿只加一次，表达式代入 L、R 和当前生效的补偿值。
 
-校准文件修正通道测量值；`lr_voltage_offset_v` 仅调整左右差异判据，不写回 ADC 数据，
-也不改变电压表里的三行数据。原始与校准周期均值使用同一窗口、同一批有效采样；
-若历史消息没有原始电压，原始均值显示 `--`，不会用校准值冒充原始值。
-正常跟踪输出 18 行（包含 Sound mode）。停止时额外显示 `Reason`；无完整周期或保留历史结果时显示 `Cycle` 提示。
-时间戳、数据年龄、周期编号／窗口／样本数和上次方向移出终端显示，
-原有 ADC、周期状态、连续运动状态、配置与事件话题仍完整录包。
+原始和校准周期均值使用同一批采样。缺少原始电压时，对应原始均值显示 `--`。
+停止时显示 `Reason`，无完整电压窗口时显示 `Cycle` 提示。
+`/robotic_fish/sonic/motion_state` 每个控制周期发布 `adc_cycle_*`，
+包括前／左／右均值、左右平均、补偿前后差值、有效阈值和窗口质量。
+`adc_cycle_ready` 为真时，窗口终点为 `adc_sample_stamp`，时长为 `1 / auto_frequency`。
 
 例如，进入跟踪并完成一个周期后：
 
@@ -759,6 +759,7 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 | Raw instant            |         0.50000 |         0.70000 |       0.40000 |
 | Raw cycle mean         |         0.49000 |         0.68000 |       0.38000 |
 | Calibrated cycle mean  |         0.50000 |         0.70000 |       0.40000 |
+| Calibrated 1 s mean    |         0.50000 |         0.70000 |       0.40000 |
 +----------------------------------------------------------------------------+
 | AVG [V]         : (0.70000+0.40000)/2 = 0.55000                            |
 | Diff before [%] : (0.70000-0.40000)/AVG = +54.55%                          |
@@ -768,7 +769,7 @@ Cross、Joy 超时和 ADC 时间检查在上述等待状态下仍生效。
 ```
 
 表格宽 78 列，电压统一保留 5 位小数。
-公式右侧使用控制器记录的未舍入判据结果，代入数值仅按显示精度舍入。
+公式右侧使用滚动窗口的未舍入计算结果，代入数值按显示精度舍入。
 颜色用于辅助识别：数值青色，
 `LEFT` 黄色、`RIGHT` 洋红色、`STRAIGHT` 绿色，异常／停止红色，预热／历史结果黄色。
 `sonic_vim4.launch` 默认 `enable_status_console:=true status_color:=auto`：
@@ -785,17 +786,13 @@ roslaunch robotic_fish sonic_vim4.launch acoustic_bias:=128 status_color:=always
 
 周期均值与控制判断使用同一批数据，不是 ADC 的 `volt_raw_mean_1s`，也不会因查看而重算或重置相位。
 偏置分子为当前实际输出偏置；分母为允许设置的偏置绝对值上限 `servo_range`（当前 YAML 为 512），
-各模式使用同一上限。在线调整声学 `bias` 不会改变分母。
+各模式使用同一上限。
 停止时当前 YAML 显示 `(+0.0/512.0)`。上方示例表格来自旧范围 1024 配置。
-首次进入跟踪尚未完成周期时显示 `UNAVAILABLE` 和 `WARMUP`，均值单元格为 `--`。
-停止后保留的周期结果标为 `HISTORICAL`，当前方向为 `STOPPED`；
-增益调整期间同样标为 `HISTORICAL`，当前方向为 `HOLDING`，表示继续摆尾并保持旧偏置；
-增益重建状态为 `gain_warmup`，校准回退／未知增益时显示具体原因；
-数据恢复后状态为 `data_warmup`，恢复有效判断后回到 `active`。
-`HOLDING` 及预热状态为黄色，校准回退和未知增益的质量标记仍为红色。
-手动／普通自动时为 `NOT_TRACKING`。`HISTORICAL` 表示均值、差异及其补偿来自历史决策，不能作为当前判断。
-声学功能未启用时，Share 仍可查看瞬时电压，方向为 `DISABLED`，不产生周期判断。
-无 ADC、校准回退、数据过期等情况会明确标出；瞬时回退电压不作为有效校准均值使用。
+空闲、手动、普通自动、跟踪和停止都会持续更新电压窗口，关闭跟踪功能时也会计算。
+采样中断、时间倒退或 DAC 状态变化后重新积累一个完整窗口。
+`Direction` 和偏置显示当前运动输出，跟踪控制的相位对齐窗口及其判定见
+`/robotic_fish/acoustic/steering_state`。跟踪过程中校准回退或增益预热时，
+舵机保持之前的偏置，方向显示 `HOLDING`。
 数据年龄及源时间戳保存在连续状态话题；推荐部署下来自 VIM4。
 若仍在 PC 录包，PC 的录制时间与 VIM4 采样时间之差仍受跨机时钟偏差影响，
 不能直接将该差值解释为控制节点的样本年龄；两端校时或在 VIM4 录包可方便后续分析。

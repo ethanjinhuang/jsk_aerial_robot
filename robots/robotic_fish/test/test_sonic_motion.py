@@ -588,7 +588,7 @@ class RosAdapterTests(unittest.TestCase):
         node._controlLoop()
         self.assertEqual(node.controller.mode,'stopped')
 
-    def test_gain_warmup_keeps_motion_and_share_marks_held_decision(self):
+    def test_gain_warmup_keeps_motion_while_share_rebuilds_voltage_window(self):
         module, ros, clock, published = self.make_node({'~acoustic_steering/enabled': True})
         with patch.dict(sys.modules, module._mock_modules):
             node = module.Teleop()
@@ -618,7 +618,7 @@ class RosAdapterTests(unittest.TestCase):
         report = self.status_reports(ros)[-1]
         self.assertIn('tracking / gain_warmup', report)
         self.assertRegex(report, r'Direction\s*:\s*HOLDING')
-        self.assertIn('HISTORICAL', report)
+        self.assertIn('no complete voltage window', report)
         self.assertIn('(-256.0/1024.0)', report)
         self.assertEqual((node._acoustic_status, node.controller.applied_bias), ('active', 256.))
         self.assertEqual(node.acoustic.last_decision.cycle, 3)
@@ -676,7 +676,10 @@ class RosAdapterTests(unittest.TestCase):
                         self.assertEqual(node.controller.applied_bias, -256.)
                 for report in self.status_reports(ros):
                     self.assertRegex(report, r'Direction\s*:\s*HOLDING')
-                    self.assertIn('HISTORICAL', report)
+                    if quality == 'calibration':
+                        self.assertRegex(report, r'Cycle quality\s*:\s*calibration_fallback')
+                    else:
+                        self.assertIn('no complete voltage window', report)
                 self.assertIn('data_warmup', self.status_reports(ros)[-1])
                 self.assertEqual((node._acoustic_status, node.controller.applied_bias), ('active', 256.))
 
@@ -693,7 +696,7 @@ class RosAdapterTests(unittest.TestCase):
             self.send_status_joy(node, (2, 8))
             self.assertEqual((node.controller.mode, node.controller.applied_bias), ('tracking', 0.))
             self.assertRegex(self.status_reports(ros)[-1], r'Direction\s*:\s*HOLDING')
-            self.assertIn('no completed tracking cycle', self.status_reports(ros)[-1])
+            self.assertIn('no complete voltage window', self.status_reports(ros)[-1])
 
     def test_triangle_ordinary_auto_ignores_acoustic_faults_and_uses_joystick(self):
         module,_,clock,_=self.make_node({'~acoustic_steering/enabled':True})
@@ -715,7 +718,7 @@ class RosAdapterTests(unittest.TestCase):
     def status_reports(self, ros):
         return [message.data for message in ros.published if hasattr(message, 'data')]
 
-    def test_share_reports_actual_cycle_means_once_per_press_without_changing_gait(self):
+    def test_share_reports_rolling_means_once_per_press_without_changing_gait(self):
         module, ros, clock, published = self.make_node({'~acoustic_steering/enabled': True})
         with patch.dict(sys.modules, module._mock_modules):
             node = module.Teleop()
@@ -733,7 +736,7 @@ class RosAdapterTests(unittest.TestCase):
         node._adcCallback(newest)
         self.send_status_joy(node, (8,))
         report = self.status_reports(ros)[-1]
-        self.assertRegex(report, r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000')
+        self.assertRegex(report, r'Calibrated cycle mean\s*\|\s*1.27273\s*\|\s*2.00000\s*\|\s*1.00000')
         self.assertRegex(report, r'Diff after/T \[%\]\s*:\s*\(2.00000-1.00000\+\(\+0.00000\)\)/AVG = \+66.67% / 10.00%')
         self.assertRegex(report, r'Direction\s*:\s*LEFT')
         self.assertIn('(-256.0/1024.0)', report)
@@ -748,7 +751,7 @@ class RosAdapterTests(unittest.TestCase):
         self.send_status_joy(node)
         self.send_status_joy(node, (1, 8))
         report = self.status_reports(ros)[-1]
-        self.assertIn('HISTORICAL', report)
+        self.assertRegex(report, r'Calibrated cycle mean\s*\|\s*1.27273\s*\|\s*2.00000\s*\|\s*1.00000')
         self.assertRegex(report, r'Direction\s*:\s*STOPPED')
         self.assertRegex(report, r'Reason\s*:\s*stop_button')
         self.assertIn('(+0.0/1024.0)', report)
@@ -817,7 +820,7 @@ class RosAdapterTests(unittest.TestCase):
         report = self.status_reports(ros)[-1]
         self.assertRegex(report, r'Raw instant\s*\|\s*0.50000\s*\|\s*1.00000\s*\|\s*0.50000')
         self.assertRegex(report, r'ADC quality\s*:\s*valid')
-        self.assertIn('no completed tracking cycle', report)
+        self.assertIn('no complete voltage window', report)
         clock[0] = .4
         self.send_status_joy(node)
         self.send_status_joy(node, (8,))
@@ -833,7 +836,7 @@ class RosAdapterTests(unittest.TestCase):
         node._adcCallback(self.adc(0.))
         self.send_status_joy(node, (2, 8))
         self.assertRegex(self.status_reports(ros)[-1], r'Direction\s*:\s*WARMUP')
-        self.assertIn('no completed tracking cycle', self.status_reports(ros)[-1])
+        self.assertIn('no complete voltage window', self.status_reports(ros)[-1])
         clock[0] = .05
         bad = self.adc(.05)
         bad.samples[1].status_cali = False
@@ -843,6 +846,50 @@ class RosAdapterTests(unittest.TestCase):
         report = self.status_reports(ros)[-1]
         self.assertRegex(report, r'ADC quality\s*:\s*calibration_fallback')
         self.assertRegex(report, r'Direction\s*:\s*HOLDING')
+
+    def test_cycle_telemetry_updates_without_tracking_and_marks_fallback_until_evicted(self):
+        module, ros, clock, published = self.make_node({
+            '~acoustic_steering/threshold': .15, '~acoustic_steering/lr_voltage_offset_v': .3})
+        node = module.Teleop()
+        for tick in range(24):
+            clock[0] = tick * .05
+            frame = self.adc(clock[0])
+            for sample in frame.samples:
+                sample.volt_cali_mean_1s = (2., 1., 1.)[sample.channel_id]
+                sample.mean_1s_ready = tick >= 20
+                sample.mean_1s_has_calibration_fallback = tick >= 11
+                if tick == 11:
+                    sample.status_cali = False
+                    sample.volt_raw = (1., 3., 2.)[sample.channel_id]
+            node._adcCallback(frame)
+            if tick < 11:
+                node._controlLoop()
+            else:
+                self.send_status_joy(node, {11: (0, 8), 12: (3,), 13: (1, 8)}.get(tick, ()))
+        motion = [m for m in published if hasattr(m, 'adc_cycle_ready')]
+        self.assertFalse(motion[9].adc_cycle_ready)
+        self.assertTrue(motion[10].adc_cycle_ready)
+        self.assertEqual([m.motion_mode for m in motion[10:14]], ['idle', 'manual', 'auto', 'stopped'])
+        self.assertTrue(all(m.adc_cycle_ready for m in motion[10:]))
+        self.assertEqual(motion[11].adc_cycle_quality_flags, 4)
+        self.assertEqual(motion[12].adc_quality_flags, 0)
+        self.assertEqual(motion[12].adc_cycle_quality_flags, 4)
+        self.assertAlmostEqual(motion[11].adc_cycle_means[0], 12. / 11)
+        self.assertAlmostEqual(motion[11].adc_cycle_means[1], 21. / 11)
+        self.assertAlmostEqual(motion[11].adc_cycle_means[2], 13. / 11)
+        self.assertAlmostEqual(motion[11].adc_cycle_side_mean, 17. / 11)
+        self.assertAlmostEqual(motion[11].adc_cycle_difference, 8. / 17)
+        self.assertAlmostEqual(motion[11].adc_cycle_compensated_difference, 11.3 / 17)
+        self.assertEqual(motion[11].adc_cycle_threshold, .15)
+        self.assertEqual(motion[-1].adc_cycle_quality_flags, 0)
+        report = self.status_reports(ros)[-1]
+        self.assertRegex(report, r'Cycle quality\s*:\s*calibration_fallback')
+        self.assertRegex(report, r'1 s mean quality\s*:\s*warmup\|calibration_fallback')
+        self.assertIn('Calibrated 1 s mean', report)
+        clock[0] += .3
+        node._controlLoop()
+        self.assertFalse(published[-1].adc_cycle_ready)
+        self.assertTrue(math.isnan(published[-1].adc_cycle_side_mean))
 
     def test_share_can_be_remapped_and_handles_incomplete_adc_groups(self):
         module, ros, _, _ = self.make_node({'~status_button': 10, '~status_local_echo': True})
@@ -1261,7 +1308,7 @@ class RosAdapterTests(unittest.TestCase):
                 self.assertIs(node.acoustic.last_decision, previous)
         report = self.status_reports(ros)[-1]
         self.assertIn('voltage_compensation_out_of_range', report)
-        self.assertIn('HISTORICAL', report)
+        self.assertRegex(report, r'Calibrated cycle mean\s*\|\s*1.00000\s*\|\s*2.00000\s*\|\s*1.00000')
         self.assertRegex(report, r'Pending LR \[V\]\s*:\s*-6.00000')
         self.assertFalse(any(m.event == 'applied' for m in published if hasattr(m, 'event')))
         replacement = node._setAcousticSteering(NS(left_bias_sign=0, threshold=.1, bias=128., lr_voltage_offset_v=-1.5))
